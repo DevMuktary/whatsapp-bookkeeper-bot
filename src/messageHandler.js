@@ -1,7 +1,4 @@
-import { downloadMediaMessage } from '@whiskeysockets/baileys';
-
-// We've removed the audio processing for now as requested.
-// We will add it back here later, along with image processing.
+import { generateMonthlyReportPDF } from './reportGenerator.js';
 
 export async function handleMessage(sock, msg, collections) {
     const { usersCollection, transactionsCollection } = collections;
@@ -11,19 +8,22 @@ export async function handleMessage(sock, msg, collections) {
     if (msg.message?.conversation) {
         messageText = msg.message.conversation.trim();
     } else {
-        // For now, we ignore non-text messages
         return;
     }
-
+    
     let user = await usersCollection.findOne({ userId: senderId });
     if (!user) {
         await usersCollection.insertOne({ userId: senderId, createdAt: new Date() });
-        const welcomeMessage = `👋 Welcome to your AI Bookkeeping Assistant!\n\nI'm here to help you track your finances effortlessly.\n\n*To log income:* \nStart your message with a plus sign (+).\nExample: \`+ 15000 Payment from client\`\n\n*To log an expense:* \nStart your message with a minus sign (-).\nExample: \`- 500 Fuel for generator\`\n\nTo see your monthly summary, just send: \`/summary\``;
+        const welcomeMessage = `👋 Welcome to your AI Bookkeeping Assistant!\n\nI'm here to help you track your finances effortlessly.\n\n*To log income:* \nStart your message with a plus sign (+).\nExample: \`+ 15000 Payment from client\`\n\n*To log an expense:* \nStart your message with a minus sign (-).\nExample: \`- 500 Fuel for generator\`\n\n*To see your monthly summary:* \`/summary\`\n*To export a PDF report:* \`/export\``;
         await sock.sendMessage(senderId, { text: welcomeMessage });
         return;
     }
+    
+    // --- COMMAND HANDLING ---
+    const command = messageText.toLowerCase();
 
-    if (messageText.toLowerCase() === '/summary') {
+    if (command === '/summary') {
+        // ... (summary logic remains the same)
         const now = new Date();
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
         const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
@@ -43,11 +43,41 @@ export async function handleMessage(sock, msg, collections) {
         return;
     }
 
+    if (command === '/export') {
+        await sock.sendMessage(senderId, { text: 'Generating your monthly report... 📄' });
+        const now = new Date();
+        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+        
+        const transactions = await transactionsCollection.find({ 
+            userId: senderId, 
+            createdAt: { $gte: startOfMonth, $lte: endOfMonth } 
+        }).sort({ createdAt: 1 }).toArray();
+
+        if (transactions.length === 0) {
+            await sock.sendMessage(senderId, { text: "You have no transactions this month to export." });
+            return;
+        }
+
+        const monthName = startOfMonth.toLocaleString('default', { month: 'long', year: 'numeric' });
+        const pdfBuffer = await generateMonthlyReportPDF(transactions, monthName);
+
+        const messageOptions = {
+            document: pdfBuffer,
+            mimetype: 'application/pdf',
+            fileName: `Financial_Report_${monthName.replace(' ', '_')}.pdf`,
+            caption: `Here is your financial report for ${monthName}.`
+        };
+        await sock.sendMessage(senderId, messageOptions);
+        return;
+    }
+    
     let type = '';
     if (messageText.trim().startsWith('+')) type = 'income';
     if (messageText.trim().startsWith('-')) type = 'expense';
-
+    
     if (type !== '') {
+        // ... (transaction logic remains the same)
         const parts = messageText.substring(1).trim().split(' ');
         const amount = parseFloat(parts[0].replace(/,/g, ''));
         if (isNaN(amount)) {

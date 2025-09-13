@@ -19,11 +19,11 @@ async function connectToWhatsApp() {
     // --- DATABASE CONNECTION ---
     try {
         await mongoClient.connect();
-        db = mongoClient.db("bookkeeperDB"); // You can name your database here
+        db = mongoClient.db("bookkeeperDB");
         console.log("✅ Successfully connected to MongoDB.");
     } catch (error) {
         console.error("❌ Failed to connect to MongoDB:", error);
-        process.exit(1); // Exit if we can't connect to the DB
+        process.exit(1);
     }
 
     // --- BAILEYS AUTHENTICATION ---
@@ -32,7 +32,7 @@ async function connectToWhatsApp() {
     // --- SOCKET CONNECTION ---
     const sock = makeWASocket({
         logger: pino({ level: 'silent' }),
-        printQRInTerminal: false, // We set this to false
+        printQRInTerminal: false,
         auth: state,
     });
 
@@ -41,7 +41,6 @@ async function connectToWhatsApp() {
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
-            // THIS IS THE NEW PART FOR EASY SCANNING
             console.log("--------------------------------------------------");
             console.log("COPY THE TEXT BELOW and paste it into a QR code generator app/website:");
             console.log(qr);
@@ -63,10 +62,58 @@ async function connectToWhatsApp() {
     // --- SAVE CREDENTIALS LISTENER ---
     sock.ev.on('creds.update', saveCreds);
 
-    // --- MESSAGE LISTENER (Phase 1 Logic will go here) ---
+    // --- NEW: MESSAGE HANDLING LOGIC ---
     sock.ev.on('messages.upsert', async (m) => {
-        // This is where we will process incoming messages
-        console.log(JSON.stringify(m, undefined, 2)); // Log incoming messages for now
+        const msg = m.messages[0];
+
+        // Ensure the message is not from the bot itself and has content
+        if (!msg.key.fromMe && msg.message && msg.message.conversation) {
+            const senderId = msg.key.remoteJid;
+            const messageText = msg.message.conversation.trim();
+
+            let type = '';
+            if (messageText.startsWith('+')) type = 'income';
+            if (messageText.startsWith('-')) type = 'expense';
+
+            // If it's not a command, do nothing
+            if (type === '') return;
+
+            // Parse the command: e.g., "+ 5000 from client"
+            const parts = messageText.substring(1).trim().split(' ');
+            const amount = parseFloat(parts[0]);
+            
+            // Validate the amount
+            if (isNaN(amount)) {
+                await sock.sendMessage(senderId, { text: "❌ Invalid amount. Please use a number. \nExample: `+ 5000 rent`" });
+                return;
+            }
+
+            const description = parts.slice(1).join(' ');
+            if (!description) {
+                 await sock.sendMessage(senderId, { text: "❌ Please provide a description. \nExample: `+ 5000 rent`" });
+                return;
+            }
+
+            // Prepare data for the database
+            const transactionData = {
+                userId: senderId,
+                type: type,
+                amount: amount,
+                description: description,
+                createdAt: new Date(),
+            };
+
+            // Save to database and send confirmation
+            try {
+                const transactions = db.collection('transactions');
+                await transactions.insertOne(transactionData);
+                await sock.sendMessage(senderId, { text: '✅ Transaction logged successfully!' });
+                console.log('Logged transaction for', senderId);
+            } catch (error) {
+                console.error("Failed to log transaction:", error);
+                await sock.sendMessage(senderId, { text: 'Sorry, there was an error saving your transaction.' });
+            }
+        }
     });
 }
 

@@ -4,22 +4,13 @@ import pino from 'pino';
 import 'dotenv/config';
 import { MongoClient } from 'mongodb';
 import OpenAI from 'openai';
-import ffmpeg from 'fluent-ffmpeg';
-import ffmpegPath from '@ffmpeg-installer/ffmpeg';
-import { Writable } from 'stream';
-import fs from 'fs';
-import { promises as fsPromises } from 'fs';
-import { tmpdir } from 'os';
-import { join } from 'path';
-
+import { File } from 'buffer'; // Import File from buffer
 
 // --- CONFIGURATION ---
-ffmpeg.setFfmpegPath(ffmpegPath.path);
-// --- THIS IS THE FIX ---
 const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
-    maxRetries: 2,      // Automatically retry a failed request up to 2 times
-    timeout: 60 * 1000, // Wait for 60 seconds before giving up on a request
+    maxRetries: 2,
+    timeout: 60 * 1000,
 });
 const mongoUri = process.env.MONGODB_URI;
 if (!mongoUri) throw new Error("MONGODB_URI environment variable is not set.");
@@ -29,24 +20,14 @@ if (!process.env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY environment var
 const mongoClient = new MongoClient(mongoUri);
 let db, usersCollection, transactionsCollection;
 
-// --- AUDIO PROCESSING FUNCTION ---
+// --- NEW, FASTER AUDIO PROCESSING FUNCTION ---
 async function processAudio(audioBuffer) {
-    const tempInputPath = join(tmpdir(), `input-${Date.now()}.ogg`);
-    const tempOutputPath = join(tmpdir(), `output-${Date.now()}.mp3`);
-
     try {
-        await fsPromises.writeFile(tempInputPath, audioBuffer);
-
-        await new Promise((resolve, reject) => {
-            ffmpeg(tempInputPath)
-                .toFormat('mp3')
-                .on('error', reject)
-                .on('end', resolve)
-                .save(tempOutputPath);
-        });
+        // Create a File-like object in memory without writing to disk
+        const audioFile = new File([audioBuffer], "audio.ogg");
 
         const transcription = await openai.audio.transcriptions.create({
-            file: fs.createReadStream(tempOutputPath),
+            file: audioFile,
             model: 'whisper-1',
         });
         
@@ -54,12 +35,8 @@ async function processAudio(audioBuffer) {
     } catch (error) {
         console.error("Error in audio processing:", error);
         return null;
-    } finally {
-        await fsPromises.unlink(tempInputPath).catch(() => {});
-        await fsPromises.unlink(tempOutputPath).catch(() => {});
     }
 }
-
 
 // --- MAIN BOT LOGIC ---
 async function handleMessage(sock, msg) {

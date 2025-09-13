@@ -1,12 +1,14 @@
 import { generateMonthlyReportPDF, generateInventoryReportPDF } from './reportGenerator.js';
 import { ObjectId } from 'mongodb';
+// --- FIX 1: REMOVED the old 'openai' import ---
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
-// --- NEW: Initialize Google AI Client ---
+// --- Initialize Google AI Client ---
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+// --- FIX 2: UPDATED the model name ---
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
 
-// --- NEW: Function to process natural language with Google Gemini ---
+// --- Function to process natural language with Google Gemini ---
 async function processNaturalLanguage(text) {
     console.log(`Sending to Gemini for analysis: "${text}"`);
 
@@ -21,7 +23,6 @@ async function processNaturalLanguage(text) {
         const aiResponse = await result.response.text();
 
         try {
-            // Clean the response by removing markdown backticks for JSON
             const cleanResponse = aiResponse.replace(/```json|```/g, '').trim();
             const transaction = JSON.parse(cleanResponse);
             if (transaction.type && transaction.amount && transaction.description) {

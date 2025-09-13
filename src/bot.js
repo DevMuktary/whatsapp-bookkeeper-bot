@@ -6,7 +6,8 @@ import { handleMessage } from './messageHandler.js';
 
 export async function startBot() {
     console.log("Starting Bot...");
-    const { usersCollection, transactionsCollection } = await connectToDB();
+    // --- UPDATE THIS LINE ---
+    const { usersCollection, transactionsCollection, productsCollection } = await connectToDB();
 
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     const sock = makeWASocket({
@@ -31,13 +32,14 @@ export async function startBot() {
             console.log('✅ WhatsApp connection opened!');
         }
     });
-
+    
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('messages.upsert', async (m) => {
         const msg = m.messages[0];
         if (!msg.key.fromMe && msg.message) {
-            await handleMessage(sock, msg, { usersCollection, transactionsCollection });
+            // --- AND UPDATE THIS LINE ---
+            await handleMessage(sock, msg, { usersCollection, transactionsCollection, productsCollection });
         }
     });
 }

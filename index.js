@@ -7,15 +7,20 @@ import OpenAI from 'openai';
 import ffmpeg from 'fluent-ffmpeg';
 import ffmpegPath from '@ffmpeg-installer/ffmpeg';
 import { Writable } from 'stream';
-import fs from 'fs'; // Use the core fs module
-import { promises as fsPromises } from 'fs'; // Keep promise version for unlink/writeFile
+import fs from 'fs';
+import { promises as fsPromises } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
 
 // --- CONFIGURATION ---
 ffmpeg.setFfmpegPath(ffmpegPath.path);
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// --- THIS IS THE FIX ---
+const openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+    maxRetries: 2,      // Automatically retry a failed request up to 2 times
+    timeout: 60 * 1000, // Wait for 60 seconds before giving up on a request
+});
 const mongoUri = process.env.MONGODB_URI;
 if (!mongoUri) throw new Error("MONGODB_URI environment variable is not set.");
 if (!process.env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY environment variable is not set.");
@@ -41,8 +46,6 @@ async function processAudio(audioBuffer) {
         });
 
         const transcription = await openai.audio.transcriptions.create({
-            // --- THIS IS THE FIX ---
-            // We now create a readable stream instead of reading the whole file into memory
             file: fs.createReadStream(tempOutputPath),
             model: 'whisper-1',
         });
@@ -52,7 +55,6 @@ async function processAudio(audioBuffer) {
         console.error("Error in audio processing:", error);
         return null;
     } finally {
-        // Clean up temporary files
         await fsPromises.unlink(tempInputPath).catch(() => {});
         await fsPromises.unlink(tempOutputPath).catch(() => {});
     }
@@ -64,7 +66,6 @@ async function handleMessage(sock, msg) {
     let messageText = '';
     const senderId = msg.key.remoteJid;
 
-    // Check for audio message first
     if (msg.message?.audioMessage) {
         await sock.sendMessage(senderId, { text: "Processing your voice note... 🎙️" });
         const buffer = await downloadMediaMessage(msg, 'buffer', {});
@@ -79,10 +80,9 @@ async function handleMessage(sock, msg) {
     } else if (msg.message?.conversation) {
         messageText = msg.message.conversation.trim();
     } else {
-        return; // Not a text or audio message we can process
+        return;
     }
     
-    // --- USER ONBOARDING ---
     let user = await usersCollection.findOne({ userId: senderId });
     if (!user) {
         await usersCollection.insertOne({ userId: senderId, createdAt: new Date() });
@@ -91,7 +91,6 @@ async function handleMessage(sock, msg) {
         return;
     }
 
-    // --- COMMAND HANDLING ---
     if (messageText.toLowerCase() === '/summary') {
         const now = new Date();
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -118,7 +117,7 @@ async function handleMessage(sock, msg) {
     
     if (type !== '') {
         const parts = messageText.substring(1).trim().split(' ');
-        const amount = parseFloat(parts[0].replace(/,/g, '')); // Handle numbers with commas
+        const amount = parseFloat(parts[0].replace(/,/g, ''));
         if (isNaN(amount)) {
             await sock.sendMessage(senderId, { text: "❌ Invalid amount. Please use a number. \nExample: `+ 5000 rent`" });
             return;

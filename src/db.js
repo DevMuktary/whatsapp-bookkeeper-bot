@@ -16,9 +16,10 @@ export async function connectToDB() {
         console.log("✅ Successfully connected to MongoDB.");
         const usersCollection = db.collection('users');
         const transactionsCollection = db.collection('transactions');
-        // --- ADD THIS LINE ---
         const productsCollection = db.collection('products');
-        return { db, usersCollection, transactionsCollection, productsCollection };
+        // --- ADD THIS LINE ---
+        const inventoryLogsCollection = db.collection('inventory_logs');
+        return { db, usersCollection, transactionsCollection, productsCollection, inventoryLogsCollection };
     } catch (error) {
         console.error("❌ Failed to connect to MongoDB:", error);
         process.exit(1);

@@ -4,7 +4,10 @@ import pino from 'pino';
 import 'dotenv/config';
 import { MongoClient } from 'mongodb';
 import OpenAI from 'openai';
-import { File } from 'buffer'; // Import File from buffer
+import fs from 'fs';
+import { promises as fsPromises } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 
 // --- CONFIGURATION ---
 const openai = new OpenAI({
@@ -20,14 +23,15 @@ if (!process.env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY environment var
 const mongoClient = new MongoClient(mongoUri);
 let db, usersCollection, transactionsCollection;
 
-// --- NEW, FASTER AUDIO PROCESSING FUNCTION ---
+// --- ROBUST AUDIO PROCESSING FUNCTION ---
 async function processAudio(audioBuffer) {
+    const tempPath = join(tmpdir(), `audio-${Date.now()}.ogg`);
     try {
-        // Create a File-like object in memory without writing to disk
-        const audioFile = new File([audioBuffer], "audio.ogg");
+        // Write the original audio buffer to a temporary file
+        await fsPromises.writeFile(tempPath, audioBuffer);
 
         const transcription = await openai.audio.transcriptions.create({
-            file: audioFile,
+            file: fs.createReadStream(tempPath),
             model: 'whisper-1',
         });
         
@@ -35,8 +39,12 @@ async function processAudio(audioBuffer) {
     } catch (error) {
         console.error("Error in audio processing:", error);
         return null;
+    } finally {
+        // Clean up the temporary file
+        await fsPromises.unlink(tempPath).catch(err => console.error("Failed to delete temp audio file:", err));
     }
 }
+
 
 // --- MAIN BOT LOGIC ---
 async function handleMessage(sock, msg) {

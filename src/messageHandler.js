@@ -1,29 +1,70 @@
 import { generateMonthlyReportPDF, generateInventoryReportPDF } from './reportGenerator.js';
 import { ObjectId } from 'mongodb';
+import OpenAI from 'openai';
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+// --- NEW: Function to process natural language with GPT ---
+async function processNaturalLanguage(text) {
+    console.log(`Sending to GPT for analysis: "${text}"`);
+
+    const systemPrompt = `You are an expert bookkeeping assistant for a WhatsApp bot. Your task is to analyze a user's message and extract transaction details.
+    - If the message clearly states an income or expense, respond ONLY with a JSON object with "type", "amount", and "description".
+    - "amount" must be a number.
+    - If the message is ambiguous (e.g., missing if it's an income or expense), your ONLY response should be a clarifying question to the user. Do not respond in JSON.
+    - Assume the currency is NGN (Naira), but do not include it in the JSON.
+    - Today's date is ${new Date().toLocaleDateString('en-GB')}.`;
+
+    const userPrompt = `Analyze the following message: "${text}"`;
+
+    try {
+        const response = await openai.chat.completions.create({
+            model: "gpt-3.5-turbo",
+            messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: userPrompt }
+            ],
+            temperature: 0,
+        });
+
+        const aiResponse = response.choices[0].message.content;
+
+        try {
+            const transaction = JSON.parse(aiResponse);
+            if (transaction.type && transaction.amount && transaction.description) {
+                console.log("GPT returned structured JSON:", transaction);
+                return { isTransaction: true, data: transaction };
+            }
+        } catch (e) {
+            console.log("GPT returned a clarification question:", aiResponse);
+            return { isTransaction: false, data: aiResponse };
+        }
+    } catch (error) {
+        console.error("Error calling OpenAI GPT:", error);
+        return null;
+    }
+    return { isTransaction: false, data: "I'm not sure how to handle that. Can you try rephrasing?" };
+}
+
 
 // --- Helper function for Smarter Stock Updates ---
 async function updateStockAfterSale(description, collections, senderId) {
     const { productsCollection, inventoryLogsCollection } = collections;
-    // Looks for patterns like "sale of 2x product name" or "sold 2 product name"
     const saleRegex = /(?:sale of|sold)\s*(\d+)x?\s*(.+)/i;
     const match = description.match(saleRegex);
 
     if (match) {
         const quantitySold = parseInt(match[1], 10);
         const productNameQuery = match[2].trim();
-
-        // Split search query into words and create a case-insensitive regex for each
         const searchWords = productNameQuery.split(' ').map(word => new RegExp(word, 'i'));
 
-        // Find a product where the name contains all search words
         const product = await productsCollection.findOne({ 
             userId: senderId, 
             productName: { $all: searchWords } 
         });
 
-        if (!product) return null; // Product not found
+        if (!product) return null;
 
-        // Update stock and log the inventory movement
         await productsCollection.updateOne({ _id: product._id }, { $inc: { stock: -quantitySold } });
         await inventoryLogsCollection.insertOne({
             userId: senderId,
@@ -47,11 +88,9 @@ export async function handleMessage(sock, msg, collections) {
     if (msg.message?.conversation) {
         messageText = msg.message.conversation.trim();
     } else { 
-        // We currently only process text messages, so ignore others
         return; 
     }
     
-    // Check if user exists, if not, onboard them
     let user = await usersCollection.findOne({ userId: senderId });
     if (!user) {
         await usersCollection.insertOne({ userId: senderId, createdAt: new Date() });
@@ -63,180 +102,180 @@ export async function handleMessage(sock, msg, collections) {
     const commandParts = messageText.split(' ');
     const command = commandParts[0].toLowerCase();
     
-    // --- INVENTORY COMMANDS ---
-    if (command === '/addproduct') {
-        const content = messageText.substring(command.length).trim();
-        const lines = content.split('\n').filter(line => line.trim() !== '');
+    // --- PRIORITY 1: Handle explicit commands first ---
+    if (command.startsWith('/')) {
+        if (command === '/addproduct') {
+            const content = messageText.substring(command.length).trim();
+            const lines = content.split('\n').filter(line => line.trim() !== '');
 
-        if (lines.length === 0) {
-            await sock.sendMessage(senderId, { text: "❌ Invalid format. Use: \n`/addproduct <Name> <Cost> <Price> <Stock>`" });
-            return;
-        }
-
-        let addedProducts = [];
-        let errors = [];
-
-        for (const line of lines) {
-            const parts = line.trim().split(' ');
-            if (parts.length < 4) {
-                errors.push(`- Invalid format for line: "${line}"`);
-                continue;
-            }
-            const stock = parseInt(parts.pop(), 10);
-            const price = parseFloat(parts.pop());
-            const cost = parseFloat(parts.pop());
-            const productName = parts.join(' ');
-
-            if (isNaN(cost) || isNaN(price) || isNaN(stock)) {
-                errors.push(`- Invalid numbers for line: "${line}"`);
-                continue;
+            if (lines.length === 0) {
+                await sock.sendMessage(senderId, { text: "❌ Invalid format. Use: \n`/addproduct <Name> <Cost> <Price> <Stock>`" });
+                return;
             }
 
-            const newProduct = await productsCollection.insertOne({ userId: senderId, productName, cost, price, stock, createdAt: new Date() });
-            await inventoryLogsCollection.insertOne({
-                userId: senderId,
-                productId: newProduct.insertedId,
-                type: 'initial_stock',
-                quantityChange: stock,
-                notes: 'Product Added',
-                createdAt: new Date()
-            });
-            addedProducts.push(productName);
-        }
+            let addedProducts = [];
+            let errors = [];
 
-        let reply = '';
-        if (addedProducts.length > 0) {
-            reply += `✅ Successfully added ${addedProducts.length} product(s): ${addedProducts.join(', ')}\n`;
-        }
-        if (errors.length > 0) {
-            reply += `❌ Encountered errors:\n${errors.join('\n')}`;
-        }
-        await sock.sendMessage(senderId, { text: reply });
-        return;
-    }
+            for (const line of lines) {
+                const parts = line.trim().split(' ');
+                if (parts.length < 4) {
+                    errors.push(`- Invalid format for line: "${line}"`);
+                    continue;
+                }
+                const stock = parseInt(parts.pop(), 10);
+                const price = parseFloat(parts.pop());
+                const cost = parseFloat(parts.pop());
+                const productName = parts.join(' ');
 
-    if (command === '/inventory') {
-        const products = await productsCollection.find({ userId: senderId }).sort({ productName: 1 }).toArray();
-        if (products.length === 0) {
-            await sock.sendMessage(senderId, { text: "You have no products in your inventory. Add one with `/addproduct`." });
+                if (isNaN(cost) || isNaN(price) || isNaN(stock)) {
+                    errors.push(`- Invalid numbers for line: "${line}"`);
+                    continue;
+                }
+
+                const newProduct = await productsCollection.insertOne({ userId: senderId, productName, cost, price, stock, createdAt: new Date() });
+                await inventoryLogsCollection.insertOne({
+                    userId: senderId,
+                    productId: newProduct.insertedId,
+                    type: 'initial_stock',
+                    quantityChange: stock,
+                    notes: 'Product Added',
+                    createdAt: new Date()
+                });
+                addedProducts.push(productName);
+            }
+
+            let reply = '';
+            if (addedProducts.length > 0) {
+                reply += `✅ Successfully added ${addedProducts.length} product(s): ${addedProducts.join(', ')}\n`;
+            }
+            if (errors.length > 0) {
+                reply += `❌ Encountered errors:\n${errors.join('\n')}`;
+            }
+            await sock.sendMessage(senderId, { text: reply });
             return;
         }
-        let inventoryList = "📦 *Your Inventory*\n\n*Name | Price | Stock*\n---------------------\n";
-        products.forEach(p => {
-            inventoryList += `${p.productName} | ₦${p.price.toLocaleString()} | ${p.stock}\n`;
-        });
-        await sock.sendMessage(senderId, { text: inventoryList });
-        return;
-    }
-    
-    if (command === '/removeproduct') {
-        const productName = commandParts.slice(1).join(' ');
-        if (!productName) {
-            await sock.sendMessage(senderId, { text: "❌ Please specify a product name to remove.\nExample: `/removeproduct Soap`"});
+
+        if (command === '/inventory') {
+            const products = await productsCollection.find({ userId: senderId }).sort({ productName: 1 }).toArray();
+            if (products.length === 0) {
+                await sock.sendMessage(senderId, { text: "You have no products in your inventory. Add one with `/addproduct`." });
+                return;
+            }
+            let inventoryList = "📦 *Your Inventory*\n\n*Name | Price | Stock*\n---------------------\n";
+            products.forEach(p => {
+                inventoryList += `${p.productName} | ₦${p.price.toLocaleString()} | ${p.stock}\n`;
+            });
+            await sock.sendMessage(senderId, { text: inventoryList });
             return;
         }
-        // Case-insensitive find
-        const productToRemove = await productsCollection.findOne({ userId: senderId, productName: new RegExp(`^${productName}$`, 'i') });
-
-        if (productToRemove) {
-            await productsCollection.deleteOne({ _id: productToRemove._id });
-            await inventoryLogsCollection.insertOne({
-                userId: senderId,
-                productId: productToRemove._id,
-                type: 'removed',
-                quantityChange: 0,
-                notes: 'Product removed from inventory',
-                createdAt: new Date()
-            });
-            await sock.sendMessage(senderId, { text: `✅ Product "${productToRemove.productName}" has been removed.`});
-        } else {
-            await sock.sendMessage(senderId, { text: `❌ Product "${productName}" not found.`});
-        }
-        return;
-    }
-
-    // --- REPORTING COMMANDS ---
-    if (command === '/summary') {
-        const now = new Date();
-        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-        const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
-        const summary = await transactionsCollection.aggregate([
-            { $match: { userId: senderId, createdAt: { $gte: startOfMonth, $lte: endOfMonth } } },
-            { $group: { _id: "$type", totalAmount: { $sum: "$amount" } } }
-        ]).toArray();
-        let totalIncome = 0;
-        let totalExpense = 0;
-        summary.forEach(item => {
-            if (item._id === 'income') totalIncome = item.totalAmount;
-            if (item._id === 'expense') totalExpense = item.totalAmount;
-        });
-        const net = totalIncome - totalExpense;
-        const monthName = startOfMonth.toLocaleString('default', { month: 'long' });
-        const summaryMessage = `📊 *Financial Summary for ${monthName}*\n\n*Total Income:* ₦${totalIncome.toLocaleString()}\n*Total Expense:* ₦${totalExpense.toLocaleString()}\n---------------------\n*Net Balance:* *₦${net.toLocaleString()}*`;
-        await sock.sendMessage(senderId, { text: summaryMessage });
-        return;
-    }
-
-    if (command === '/export') {
-        await sock.sendMessage(senderId, { text: 'Generating your monthly transaction report... 📄' });
-        const now = new Date();
-        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-        const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
         
-        const transactions = await transactionsCollection.find({ 
-            userId: senderId, 
-            createdAt: { $gte: startOfMonth, $lte: endOfMonth } 
-        }).sort({ createdAt: 1 }).toArray();
+        if (command === '/removeproduct') {
+            const productName = commandParts.slice(1).join(' ');
+            if (!productName) {
+                await sock.sendMessage(senderId, { text: "❌ Please specify a product name to remove.\nExample: `/removeproduct Soap`"});
+                return;
+            }
+            const productToRemove = await productsCollection.findOne({ userId: senderId, productName: new RegExp(`^${productName}$`, 'i') });
 
-        if (transactions.length === 0) {
-            await sock.sendMessage(senderId, { text: "You have no transactions this month to export." });
+            if (productToRemove) {
+                await productsCollection.deleteOne({ _id: productToRemove._id });
+                await inventoryLogsCollection.insertOne({
+                    userId: senderId,
+                    productId: productToRemove._id,
+                    type: 'removed',
+                    quantityChange: 0,
+                    notes: 'Product removed from inventory',
+                    createdAt: new Date()
+                });
+                await sock.sendMessage(senderId, { text: `✅ Product "${productToRemove.productName}" has been removed.`});
+            } else {
+                await sock.sendMessage(senderId, { text: `❌ Product "${productName}" not found.`});
+            }
             return;
         }
 
-        const monthName = startOfMonth.toLocaleString('default', { month: 'long', year: 'numeric' });
-        const pdfBuffer = await generateMonthlyReportPDF(transactions, monthName);
-
-        const messageOptions = {
-            document: pdfBuffer,
-            mimetype: 'application/pdf',
-            fileName: `Financial_Report_${monthName.replace(' ', '_')}.pdf`,
-            caption: `Here is your financial report for ${monthName}.`
-        };
-        await sock.sendMessage(senderId, messageOptions);
-        return;
-    }
-
-    if (command === '/exportinventory') {
-        await sock.sendMessage(senderId, { text: 'Generating your inventory & profit report... 📦' });
-        const now = new Date();
-        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-        const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
-
-        const products = await productsCollection.find({ userId: senderId }).toArray();
-        const logs = await inventoryLogsCollection.find({
-            userId: senderId,
-            createdAt: { $gte: startOfMonth, $lte: endOfMonth }
-        }).sort({ createdAt: 1 }).toArray();
-
-        if (products.length === 0) {
-            await sock.sendMessage(senderId, { text: "You have no products to report on." });
+        if (command === '/summary') {
+            const now = new Date();
+            const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+            const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+            const summary = await transactionsCollection.aggregate([
+                { $match: { userId: senderId, createdAt: { $gte: startOfMonth, $lte: endOfMonth } } },
+                { $group: { _id: "$type", totalAmount: { $sum: "$amount" } } }
+            ]).toArray();
+            let totalIncome = 0, totalExpense = 0;
+            summary.forEach(item => {
+                if (item._id === 'income') totalIncome = item.totalAmount;
+                if (item._id === 'expense') totalExpense = item.totalAmount;
+            });
+            const net = totalIncome - totalExpense;
+            const monthName = startOfMonth.toLocaleString('default', { month: 'long' });
+            const summaryMessage = `📊 *Financial Summary for ${monthName}*\n\n*Total Income:* ₦${totalIncome.toLocaleString()}\n*Total Expense:* ₦${totalExpense.toLocaleString()}\n---------------------\n*Net Balance:* *₦${net.toLocaleString()}*`;
+            await sock.sendMessage(senderId, { text: summaryMessage });
             return;
         }
 
-        const monthName = startOfMonth.toLocaleString('default', { month: 'long', year: 'numeric' });
-        const pdfBuffer = await generateInventoryReportPDF(products, logs, monthName);
+        if (command === '/export') {
+            await sock.sendMessage(senderId, { text: 'Generating your monthly transaction report... 📄' });
+            const now = new Date();
+            const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+            const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+            
+            const transactions = await transactionsCollection.find({ 
+                userId: senderId, 
+                createdAt: { $gte: startOfMonth, $lte: endOfMonth } 
+            }).sort({ createdAt: 1 }).toArray();
 
-        const messageOptions = {
-            document: pdfBuffer,
-            mimetype: 'application/pdf',
-            fileName: `Inventory_Report_${monthName.replace(' ', '_')}.pdf`,
-            caption: `Here is your inventory and profit report for ${monthName}.`
-        };
-        await sock.sendMessage(senderId, messageOptions);
+            if (transactions.length === 0) {
+                await sock.sendMessage(senderId, { text: "You have no transactions this month to export." });
+                return;
+            }
+
+            const monthName = startOfMonth.toLocaleString('default', { month: 'long', year: 'numeric' });
+            const pdfBuffer = await generateMonthlyReportPDF(transactions, monthName);
+
+            const messageOptions = {
+                document: pdfBuffer,
+                mimetype: 'application/pdf',
+                fileName: `Financial_Report_${monthName.replace(' ', '_')}.pdf`,
+                caption: `Here is your financial report for ${monthName}.`
+            };
+            await sock.sendMessage(senderId, messageOptions);
+            return;
+        }
+
+        if (command === '/exportinventory') {
+            await sock.sendMessage(senderId, { text: 'Generating your inventory & profit report... 📦' });
+            const now = new Date();
+            const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+            const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+
+            const products = await productsCollection.find({ userId: senderId }).toArray();
+            const logs = await inventoryLogsCollection.find({
+                userId: senderId,
+                createdAt: { $gte: startOfMonth, $lte: endOfMonth }
+            }).sort({ createdAt: 1 }).toArray();
+
+            if (products.length === 0) {
+                await sock.sendMessage(senderId, { text: "You have no products to report on." });
+                return;
+            }
+
+            const monthName = startOfMonth.toLocaleString('default', { month: 'long', year: 'numeric' });
+            const pdfBuffer = await generateInventoryReportPDF(products, logs, monthName);
+
+            const messageOptions = {
+                document: pdfBuffer,
+                mimetype: 'application/pdf',
+                fileName: `Inventory_Report_${monthName.replace(' ', '_')}.pdf`,
+                caption: `Here is your inventory and profit report for ${monthName}.`
+            };
+            await sock.sendMessage(senderId, messageOptions);
+            return;
+        }
         return;
     }
 
-    // --- TRANSACTION LOGIC (+/-) ---
+    // --- PRIORITY 2: Handle structured transactions (+/-) ---
     if (messageText.trim().startsWith('+') || messageText.trim().startsWith('-')) {
         const type = messageText.trim().startsWith('+') ? 'income' : 'expense';
         const parts = messageText.substring(1).trim().split(' ');
@@ -260,5 +299,29 @@ export async function handleMessage(sock, msg, collections) {
         await transactionsCollection.insertOne({ userId: senderId, type, amount, description, createdAt: new Date() });
         await sock.sendMessage(senderId, { text: replyMessage });
         return;
+    }
+
+    // --- PRIORITY 3: Handle with Natural Language AI ---
+    const aiResult = await processNaturalLanguage(messageText);
+
+    if (aiResult) {
+        if (aiResult.isTransaction) {
+            const { type, amount, description } = aiResult.data;
+            let replyMessage = '✅ Transaction logged successfully!';
+            if (type === 'income') {
+                const productSold = await updateStockAfterSale(description, collections, senderId);
+                if (productSold) {
+                    replyMessage += `\n_Stock for "${productSold}" has been updated._`;
+                }
+            }
+            
+            await transactionsCollection.insertOne({ userId: senderId, type, amount, description, createdAt: new Date() });
+            await sock.sendMessage(senderId, { text: replyMessage });
+
+        } else {
+            await sock.sendMessage(senderId, { text: aiResult.data });
+        }
+    } else {
+        await sock.sendMessage(senderId, { text: "Sorry, I had a problem analyzing that message. Please try a simpler format like `+ 5000 rent`." });
     }
 }

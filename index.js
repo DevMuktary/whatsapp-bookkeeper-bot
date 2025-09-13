@@ -7,9 +7,11 @@ import OpenAI from 'openai';
 import ffmpeg from 'fluent-ffmpeg';
 import ffmpegPath from '@ffmpeg-installer/ffmpeg';
 import { Writable } from 'stream';
-import { promises as fs } from 'fs';
+import fs from 'fs'; // Use the core fs module
+import { promises as fsPromises } from 'fs'; // Keep promise version for unlink/writeFile
 import { tmpdir } from 'os';
 import { join } from 'path';
+
 
 // --- CONFIGURATION ---
 ffmpeg.setFfmpegPath(ffmpegPath.path);
@@ -28,7 +30,7 @@ async function processAudio(audioBuffer) {
     const tempOutputPath = join(tmpdir(), `output-${Date.now()}.mp3`);
 
     try {
-        await fs.writeFile(tempInputPath, audioBuffer);
+        await fsPromises.writeFile(tempInputPath, audioBuffer);
 
         await new Promise((resolve, reject) => {
             ffmpeg(tempInputPath)
@@ -39,7 +41,9 @@ async function processAudio(audioBuffer) {
         });
 
         const transcription = await openai.audio.transcriptions.create({
-            file: await fs.readFile(tempOutputPath),
+            // --- THIS IS THE FIX ---
+            // We now create a readable stream instead of reading the whole file into memory
+            file: fs.createReadStream(tempOutputPath),
             model: 'whisper-1',
         });
         
@@ -48,8 +52,9 @@ async function processAudio(audioBuffer) {
         console.error("Error in audio processing:", error);
         return null;
     } finally {
-        await fs.unlink(tempInputPath).catch(() => {});
-        await fs.unlink(tempOutputPath).catch(() => {});
+        // Clean up temporary files
+        await fsPromises.unlink(tempInputPath).catch(() => {});
+        await fsPromises.unlink(tempOutputPath).catch(() => {});
     }
 }
 

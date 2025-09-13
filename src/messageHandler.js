@@ -1,46 +1,39 @@
 import { generateMonthlyReportPDF, generateInventoryReportPDF } from './reportGenerator.js';
 import { ObjectId } from 'mongodb';
-import OpenAI from 'openai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// --- NEW: Initialize Google AI Client ---
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const model = genAI.getGenerativeModel({ model: "gemini-pro" });
 
-// --- NEW: Function to process natural language with GPT ---
+// --- NEW: Function to process natural language with Google Gemini ---
 async function processNaturalLanguage(text) {
-    console.log(`Sending to GPT for analysis: "${text}"`);
+    console.log(`Sending to Gemini for analysis: "${text}"`);
 
-    const systemPrompt = `You are an expert bookkeeping assistant for a WhatsApp bot. Your task is to analyze a user's message and extract transaction details.
+    const prompt = `You are an expert bookkeeping assistant for a WhatsApp bot. Analyze the user's message and extract transaction details.
     - If the message clearly states an income or expense, respond ONLY with a JSON object with "type", "amount", and "description".
     - "amount" must be a number.
     - If the message is ambiguous (e.g., missing if it's an income or expense), your ONLY response should be a clarifying question to the user. Do not respond in JSON.
-    - Assume the currency is NGN (Naira), but do not include it in the JSON.
-    - Today's date is ${new Date().toLocaleDateString('en-GB')}.`;
-
-    const userPrompt = `Analyze the following message: "${text}"`;
+    - User message: "${text}"`;
 
     try {
-        const response = await openai.chat.completions.create({
-            model: "gpt-3.5-turbo",
-            messages: [
-                { role: "system", content: systemPrompt },
-                { role: "user", content: userPrompt }
-            ],
-            temperature: 0,
-        });
-
-        const aiResponse = response.choices[0].message.content;
+        const result = await model.generateContent(prompt);
+        const aiResponse = await result.response.text();
 
         try {
-            const transaction = JSON.parse(aiResponse);
+            // Clean the response by removing markdown backticks for JSON
+            const cleanResponse = aiResponse.replace(/```json|```/g, '').trim();
+            const transaction = JSON.parse(cleanResponse);
             if (transaction.type && transaction.amount && transaction.description) {
-                console.log("GPT returned structured JSON:", transaction);
+                console.log("Gemini returned structured JSON:", transaction);
                 return { isTransaction: true, data: transaction };
             }
         } catch (e) {
-            console.log("GPT returned a clarification question:", aiResponse);
+            console.log("Gemini returned a clarification question:", aiResponse);
             return { isTransaction: false, data: aiResponse };
         }
     } catch (error) {
-        console.error("Error calling OpenAI GPT:", error);
+        console.error("Error calling Google Gemini API:", error);
         return null;
     }
     return { isTransaction: false, data: "I'm not sure how to handle that. Can you try rephrasing?" };
@@ -102,7 +95,6 @@ export async function handleMessage(sock, msg, collections) {
     const commandParts = messageText.split(' ');
     const command = commandParts[0].toLowerCase();
     
-    // --- PRIORITY 1: Handle explicit commands first ---
     if (command.startsWith('/')) {
         if (command === '/addproduct') {
             const content = messageText.substring(command.length).trim();
@@ -275,7 +267,6 @@ export async function handleMessage(sock, msg, collections) {
         return;
     }
 
-    // --- PRIORITY 2: Handle structured transactions (+/-) ---
     if (messageText.trim().startsWith('+') || messageText.trim().startsWith('-')) {
         const type = messageText.trim().startsWith('+') ? 'income' : 'expense';
         const parts = messageText.substring(1).trim().split(' ');
@@ -301,7 +292,6 @@ export async function handleMessage(sock, msg, collections) {
         return;
     }
 
-    // --- PRIORITY 3: Handle with Natural Language AI ---
     const aiResult = await processNaturalLanguage(messageText);
 
     if (aiResult) {

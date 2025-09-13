@@ -6,8 +6,8 @@ import { handleMessage } from './messageHandler.js';
 
 export async function startBot() {
     console.log("Starting Bot...");
-    // --- UPDATE THIS LINE ---
-    const { usersCollection, transactionsCollection, productsCollection } = await connectToDB();
+    // Connect to DB and get all collections
+    const collections = await connectToDB();
 
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     const sock = makeWASocket({
@@ -27,7 +27,10 @@ export async function startBot() {
         if (connection === 'close') {
             const shouldReconnect = (lastDisconnect.error instanceof Boom) &&
                 lastDisconnect.error.output.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) startBot();
+            console.log('Connection closed due to:', lastDisconnect.error, ', reconnecting:', shouldReconnect);
+            if (shouldReconnect) {
+                startBot();
+            }
         } else if (connection === 'open') {
             console.log('✅ WhatsApp connection opened!');
         }
@@ -38,8 +41,8 @@ export async function startBot() {
     sock.ev.on('messages.upsert', async (m) => {
         const msg = m.messages[0];
         if (!msg.key.fromMe && msg.message) {
-            // --- AND UPDATE THIS LINE ---
-            await handleMessage(sock, msg, { usersCollection, transactionsCollection, productsCollection });
+            // Pass the socket and all database collections to the handler
+            await handleMessage(sock, msg, collections);
         }
     });
 }

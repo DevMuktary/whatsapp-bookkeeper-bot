@@ -1,9 +1,8 @@
 import { Boom } from '@hapi/boom';
 import makeWASocket, { DisconnectReason, useMultiFileAuthState } from '@whiskeysockets/baileys';
 import pino from 'pino';
-import qrcode from 'qrcode-terminal';
-import { MongoClient } from 'mongodb';
 import 'dotenv/config';
+import { MongoClient } from 'mongodb';
 
 // --- DATABASE SETUP ---
 const mongoUri = process.env.MONGODB_URI;
@@ -33,7 +32,7 @@ async function connectToWhatsApp() {
     // --- SOCKET CONNECTION ---
     const sock = makeWASocket({
         logger: pino({ level: 'silent' }),
-        printQRInTerminal: true, // We'll use Railway logs as our terminal
+        printQRInTerminal: false, // We set this to false
         auth: state,
     });
 
@@ -42,8 +41,11 @@ async function connectToWhatsApp() {
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
-            console.log("QR Code received, scan with your phone:");
-            // qrcode.generate(qr, { small: true }); // Alternative if printQRInTerminal doesn't work well
+            // THIS IS THE NEW PART FOR EASY SCANNING
+            console.log("--------------------------------------------------");
+            console.log("COPY THE TEXT BELOW and paste it into a QR code generator app/website:");
+            console.log(qr);
+            console.log("--------------------------------------------------");
         }
 
         if (connection === 'close') {

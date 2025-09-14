@@ -47,7 +47,7 @@ async function getInventory(args, collections, senderId) {
     const { productsCollection, usersCollection } = collections;
     const user = await usersCollection.findOne({ userId: senderId });
     const products = await productsCollection.find({ userId: senderId }).sort({ productName: 1 }).toArray();
-    if (products.length === 0) return { success: false, message: "No products found." };
+    if (products.length === 0) return { success: false, message: "No products found in inventory." };
     return { success: true, currency: user.currency || 'NGN', products: products.map(p => ({ name: p.productName, price: p.price, stock: p.stock })) };
 }
 async function getMonthlySummary(args, collections, senderId) {
@@ -72,11 +72,11 @@ async function generateTransactionReport(args, collections, senderId, sock) {
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
     const transactions = await transactionsCollection.find({ userId: senderId, createdAt: { $gte: startOfMonth, $lte: endOfMonth } }).sort({ createdAt: 1 }).toArray();
-    if (transactions.length === 0) return { success: false, message: "No transactions found this month." };
+    if (transactions.length === 0) return { success: false, message: "No transactions found for this month." };
     const monthName = startOfMonth.toLocaleString('default', { month: 'long', year: 'numeric' });
     const pdfBuffer = await ReportGenerators.createMonthlyReportPDF(transactions, monthName, user);
-    await sock.sendMessage(senderId, { document: pdfBuffer, mimetype: 'application/pdf', fileName: `Financial_Report_${monthName.replace(/ /g, '_')}.pdf`, caption: `Here is your financial report.` });
-    return { success: true, message: "Transaction report sent." };
+    await sock.sendMessage(senderId, { document: pdfBuffer, mimetype: 'application/pdf', fileName: `Financial_Report_${monthName.replace(/ /g, '_')}.pdf`, caption: `Here is your financial report for ${monthName}.` });
+    return { success: true, message: "Transaction report has been sent." };
 }
 async function generateInventoryReport(args, collections, senderId, sock) {
     const { productsCollection, inventoryLogsCollection, usersCollection } = collections;
@@ -86,11 +86,11 @@ async function generateInventoryReport(args, collections, senderId, sock) {
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
     const products = await productsCollection.find({ userId: senderId }).toArray();
     const logs = await inventoryLogsCollection.find({ userId: senderId, createdAt: { $gte: startOfMonth, $lte: endOfMonth } }).sort({ createdAt: 1 }).toArray();
-    if (products.length === 0) return { success: false, message: "No products found." };
+    if (products.length === 0) return { success: false, message: "No products to report on." };
     const monthName = startOfMonth.toLocaleString('default', { month: 'long', year: 'numeric' });
     const pdfBuffer = await ReportGenerators.createInventoryReportPDF(products, logs, monthName, user);
-    await sock.sendMessage(senderId, { document: pdfBuffer, mimetype: 'application/pdf', fileName: `Inventory_Report_${monthName.replace(/ /g, '_')}.pdf`, caption: `Here is your inventory report.` });
-    return { success: true, message: "Inventory report sent." };
+    await sock.sendMessage(senderId, { document: pdfBuffer, mimetype: 'application/pdf', fileName: `Inventory_Report_${monthName.replace(/ /g, '_')}.pdf`, caption: `Here is your inventory and profit report.` });
+    return { success: true, message: "Inventory report has been sent." };
 }
 async function generatePnLReport(args, collections, senderId, sock) {
     const { transactionsCollection, inventoryLogsCollection, usersCollection } = collections;
@@ -101,7 +101,7 @@ async function generatePnLReport(args, collections, senderId, sock) {
     const income = await transactionsCollection.aggregate([{ $match: { userId: senderId, type: 'income', createdAt: { $gte: startOfMonth, $lte: endOfMonth } } }, { $group: { _id: null, total: { $sum: '$amount' } } }]).toArray();
     const totalRevenue = income[0]?.total || 0;
     const expensesResult = await transactionsCollection.find({ userId: senderId, type: 'expense', createdAt: { $gte: startOfMonth, $lte: endOfMonth } }).toArray();
-    if (totalRevenue === 0 && expensesResult.length === 0) return { success: false, message: "No financial activity found." };
+    if (totalRevenue === 0 && expensesResult.length === 0) return { success: false, message: "No financial activity found for this month." };
     const cogsLogs = await inventoryLogsCollection.aggregate([{ $match: { userId: senderId, type: 'sale', createdAt: { $gte: startOfMonth, $lte: endOfMonth } } }, { $lookup: { from: 'products', localField: 'productId', foreignField: '_id', as: 'productInfo' } }, { $unwind: '$productInfo' }, { $group: { _id: null, total: { $sum: { $multiply: [{ $abs: '$quantityChange' }, '$productInfo.cost'] } } } }]).toArray();
     const cogs = cogsLogs[0]?.total || 0;
     const expensesByCategory = {};
@@ -113,7 +113,7 @@ async function generatePnLReport(args, collections, senderId, sock) {
     const monthName = startOfMonth.toLocaleString('default', { month: 'long', year: 'numeric' });
     const pdfBuffer = await ReportGenerators.createPnLReportPDF({ totalRevenue, cogs, expensesByCategory }, monthName, user);
     await sock.sendMessage(senderId, { document: pdfBuffer, mimetype: 'application/pdf', fileName: `P&L_Report_${monthName.replace(/ /g, '_')}.pdf`, caption: `Here is your Profit & Loss Statement.` });
-    return { success: true, message: "P&L report sent." };
+    return { success: true, message: "P&L report has been sent." };
 }
 
 const availableTools = { logTransaction, addProduct, setOpeningBalance, getInventory, getMonthlySummary, generateTransactionReport, generateInventoryReport, generatePnLReport };
@@ -127,32 +127,37 @@ async function processMessageWithAI(text, collections, senderId, sock) {
     
     const messages = [ { role: "system", content: systemInstruction }, ...savedHistory, { role: "user", content: text } ];
 
-    let response = await deepseek.chat.completions.create({ model: "deepseek-chat", messages: messages, tools: tools, tool_choice: "auto" });
-    let responseMessage = response.choices[0].message;
+    const response = await deepseek.chat.completions.create({ model: "deepseek-chat", messages: messages, tools: tools, tool_choice: "auto" });
+    const responseMessage = response.choices[0].message;
+    messages.push(responseMessage);
 
-    while (responseMessage.tool_calls) {
-        messages.push(responseMessage);
-        for (const toolCall of responseMessage.tool_calls) {
+    if (responseMessage.tool_calls) {
+        const toolExecutionPromises = responseMessage.tool_calls.map(async (toolCall) => {
             const functionName = toolCall.function.name;
             const functionArgs = JSON.parse(toolCall.function.arguments);
             const selectedTool = availableTools[functionName];
             if (selectedTool) {
                 const functionResult = await selectedTool(functionArgs, collections, senderId, sock);
-                messages.push({ tool_call_id: toolCall.id, role: "tool", name: functionName, content: JSON.stringify(functionResult) });
+                return { tool_call_id: toolCall.id, role: "tool", name: functionName, content: JSON.stringify(functionResult) };
             }
+        });
+
+        const toolResponses = await Promise.all(toolExecutionPromises);
+        messages.push(...toolResponses.filter(Boolean));
+        
+        const secondResponse = await deepseek.chat.completions.create({ model: "deepseek-chat", messages: messages });
+        const finalResponse = secondResponse.choices[0].message.content;
+        if (finalResponse) {
+            await sock.sendMessage(senderId, { text: finalResponse });
         }
-        response = await deepseek.chat.completions.create({ model: "deepseek-chat", messages: messages, tools: tools, tool_choice: "auto" });
-        responseMessage = response.choices[0].message;
+    } else {
+        if (responseMessage.content) {
+            await sock.sendMessage(senderId, { text: responseMessage.content });
+        }
     }
 
-    if (responseMessage.content) {
-        await sock.sendMessage(senderId, { text: responseMessage.content });
-    }
-
-    messages.push(responseMessage);
-    const finalHistoryToSave = messages.filter(msg => msg.role !== 'system' && msg.role !== 'tool');
-    const prunedHistory = finalHistoryToSave.slice(-10);
-    await conversationsCollection.updateOne({ userId: senderId }, { $set: { history: prunedHistory, updatedAt: new Date() } }, { upsert: true });
+    const finalHistoryToSave = messages.filter(msg => msg.role !== 'system' && msg.role !== 'tool').slice(-10);
+    await conversationsCollection.updateOne({ userId: senderId }, { $set: { history: finalHistoryToSave, updatedAt: new Date() } }, { upsert: true });
 }
 
 function parseProductLines(text) {
@@ -177,12 +182,14 @@ export async function handleMessage(sock, msg, collections) {
     if (!messageText) return;
     let user = await usersCollection.findOne({ userId: senderId });
     let conversation = await conversationsCollection.findOne({ userId: senderId });
+
     if (!user) {
         await usersCollection.insertOne({ userId: senderId, createdAt: new Date() });
         await conversationsCollection.updateOne({ userId: senderId }, { $set: { state: 'awaiting_store_name', history: [] } }, { upsert: true });
         await sock.sendMessage(senderId, { text: `👋 Welcome to your new AI Bookkeeping Assistant!\n\nTo get started, please tell me the name of your business or store.` });
         return;
     }
+    
     if (conversation?.state) {
         switch (conversation.state) {
             case 'awaiting_store_name':
@@ -194,29 +201,25 @@ export async function handleMessage(sock, msg, collections) {
                 const currency = messageText.toUpperCase();
                 await usersCollection.updateOne({ userId: senderId }, { $set: { currency: currency } });
                 await conversationsCollection.updateOne({ userId: senderId }, { $set: { state: 'awaiting_balance_confirmation' } });
-                await sock.sendMessage(senderId, { text: `Perfect. Currency set to *${currency}*.\n\nFinally, let's record your current inventory (Opening Balance).\n\nAre you ready to add your products now? (Yes/No)` });
+                await sock.sendMessage(senderId, { text: `Perfect. Currency set to *${currency}*.\n\nNow, you can tell me about your starting inventory. For example:\n\n"My opening balance is 20 phone chargers that cost me 3000 and I sell for 5000"` });
                 return;
             case 'awaiting_balance_confirmation':
                 if (messageText.toLowerCase().includes('yes')) {
                     await conversationsCollection.updateOne({ userId: senderId }, { $set: { state: 'awaiting_opening_balance' } });
-                    await sock.sendMessage(senderId, { text: `Excellent! Please send your product list in the format:\n\n*<Name> <Cost> <Price> <Stock>*` });
+                    await sock.sendMessage(senderId, { text: `Excellent! Please send your product list now.` });
                 } else {
                     await conversationsCollection.updateOne({ userId: senderId }, { $unset: { state: "" } });
                     await sock.sendMessage(senderId, { text: `No problem. Setup is complete! You can set your opening balance later by telling me "set my opening balance".\n\nI'm ready to help you manage your business!` });
                 }
                 return;
             case 'awaiting_opening_balance':
-                const parsedProducts = parseProductLines(messageText);
-                if (parsedProducts.length > 0) {
-                    await setOpeningBalance({ products: parsedProducts }, collections, senderId);
-                    await sock.sendMessage(senderId, { text: "Your opening balance has been set successfully!" });
-                    await conversationsCollection.updateOne({ userId: senderId }, { $unset: { state: "" } });
-                } else {
-                    await sock.sendMessage(senderId, { text: "I couldn't understand that format. Please try again in the format: `<Name> <Cost> <Price> <Stock>`" });
-                }
+                // Hand over to the AI to parse the opening balance text
+                await processMessageWithAI(`set opening balance with: ${messageText}`, collections, senderId, sock);
+                await conversationsCollection.updateOne({ userId: senderId }, { $unset: { state: "" } });
                 return;
         }
     }
+    
     try {
         await processMessageWithAI(messageText, collections, senderId, sock);
     } catch (error) {

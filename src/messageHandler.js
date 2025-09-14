@@ -74,12 +74,12 @@ const tools = [
   },
   {
     name: 'getMonthlySummary',
-    description: 'Gets a quick text summary of total income, expenses, and net balance for the current month. Use for simple questions about totals.',
+    description: 'Gets a quick text summary of total income, expenses, and net balance for the current month. Use for simple questions about totals, like "what are my expenses?" or "how much did I make?"',
     parameters: { type: 'object', properties: {} },
   },
   {
     name: 'generateTransactionReport',
-    description: 'Generates and sends a detailed PDF FILE of all financial transactions for the current month. Use this only when the user explicitly asks to "export", "download", or receive a "report file".',
+    description: 'Generates and sends a detailed PDF FILE of all financial transactions for the current month. Use this only when the user explicitly asks to "export", "download", "send the file", or receive a "PDF report" of their transactions.',
     parameters: { type: 'object', properties: {} },
   },
   {
@@ -183,8 +183,9 @@ async function getMonthlySummary(args, collections, senderId) {
     return `📊 *Financial Summary for ${monthName}*\n\n*Total Income:* ₦${totalIncome.toLocaleString()}\n*Total Expense:* ₦${totalExpense.toLocaleString()}\n---------------------\n*Net Balance:* *₦${net.toLocaleString()}*`;
 }
 
-async function generateTransactionReport(args, collections, senderId, sock) {
-    const { transactionsCollection } = collections;
+async function generateTransactionReport(args, collections, senderId) {
+    const { transactionsCollection, usersCollection } = collections;
+    const user = await usersCollection.findOne({ userId: senderId });
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
@@ -199,19 +200,19 @@ async function generateTransactionReport(args, collections, senderId, sock) {
     }
 
     const monthName = startOfMonth.toLocaleString('default', { month: 'long', year: 'numeric' });
-    const pdfBuffer = await generateMonthlyReportPDF(transactions, monthName);
+    const pdfBuffer = await generateMonthlyReportPDF(transactions, monthName, user);
 
-    await sock.sendMessage(senderId, {
+    return {
         document: pdfBuffer,
         mimetype: 'application/pdf',
         fileName: `Financial_Report_${monthName.replace(' ', '_')}.pdf`,
         caption: `Here is your complete financial report for ${monthName}.`
-    });
-    return null;
+    };
 }
 
-async function generateInventoryReport(args, collections, senderId, sock) {
-    const { productsCollection, inventoryLogsCollection } = collections;
+async function generateInventoryReport(args, collections, senderId) {
+    const { productsCollection, inventoryLogsCollection, usersCollection } = collections;
+    const user = await usersCollection.findOne({ userId: senderId });
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
@@ -227,22 +228,20 @@ async function generateInventoryReport(args, collections, senderId, sock) {
     }
 
     const monthName = startOfMonth.toLocaleString('default', { month: 'long', year: 'numeric' });
-    const pdfBuffer = await generateInventoryReportPDF(products, logs, monthName);
+    const pdfBuffer = await generateInventoryReportPDF(products, logs, monthName, user);
     
-    await sock.sendMessage(senderId, {
+    return {
         document: pdfBuffer,
         mimetype: 'application/pdf',
         fileName: `Inventory_Report_${monthName.replace(' ', '_')}.pdf`,
         caption: `Here is your complete inventory and profit report for ${monthName}.`
-    });
-    return null;
+    };
 }
 
-async function generatePnLReport(args, collections, senderId, sock) {
+async function generatePnLReport(args, collections, senderId) {
     const { transactionsCollection, inventoryLogsCollection, usersCollection } = collections;
     const user = await usersCollection.findOne({ userId: senderId });
 
-    await sock.sendMessage(senderId, { text: 'Analyzing your data for the current month... 📈' });
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
@@ -283,13 +282,12 @@ async function generatePnLReport(args, collections, senderId, sock) {
     const monthName = startOfMonth.toLocaleString('default', { month: 'long', year: 'numeric' });
     const pdfBuffer = await generatePnLReportPDF({ totalRevenue, cogs, expensesByCategory }, monthName, user);
 
-    await sock.sendMessage(senderId, {
+    return {
         document: pdfBuffer,
         mimetype: 'application/pdf',
         fileName: `P&L_Report_${monthName.replace(' ', '_')}.pdf`,
         caption: `Here is your Profit & Loss Statement for ${monthName}.`
-    });
-    return null;
+    };
 }
 
 
@@ -310,10 +308,10 @@ async function processMessageWithAI(text, collections, senderId, sock) {
     let history = conversation ? conversation.history : [];
 
     const systemInstruction = `You are 'Smart Accountant', a professional, confident, and friendly AI bookkeeping assistant. Follow these rules strictly:
-1.  **Never Explain Yourself:** Do not mention your functions, code, or that you are an AI. Never explain your limitations or internal thought process. Speak as if you are the one performing the action.
-2.  **Stay Within Abilities:** ONLY perform actions defined in the available tools. If asked to do something else (like send an email), politely decline and state your purpose is bookkeeping.
-3.  **Use the Right Tool:** For simple questions about totals (e.g., "what are my expenses?"), use the 'getMonthlySummary' tool. For requests to "export", "download", or get a "file", use the appropriate 'generate...Report' tool.
-4.  **Be Confident:** When a tool is called, assume it was successful. Announce the result confidently (e.g., "Here is your inventory list.").
+1.  **Never Explain Yourself:** Do not mention your functions, code, or that you are an AI. Never explain your limitations or internal thought process (e.g., do not say "I cannot access data"). Speak as if you are the one performing the action.
+2.  **Stay Within Abilities:** ONLY perform actions defined in the available tools. If asked to do something else (like send an email or browse the web), politely decline and state your purpose is bookkeeping.
+3.  **Use the Right Tool:** For simple questions about totals (e.g., "what are my expenses?"), use the 'getMonthlySummary' tool. For requests to "export", "download", "send the file", or receive a "PDF report", use the appropriate 'generate...Report' tool.
+4.  **Be Confident & Concise:** When a tool is called, assume it was successful. Announce the result confidently and briefly.
 5.  **Stay On Topic:** If asked about things unrelated to bookkeeping (e.g., science, general knowledge), politely guide the user back to your purpose.`;
     
     const chatHistoryForAPI = [
@@ -334,10 +332,21 @@ async function processMessageWithAI(text, collections, senderId, sock) {
         const selectedTool = availableTools[call.name];
         if (selectedTool) {
             console.log(`AI is calling tool: ${call.name} with args:`, call.args);
-            const resultText = await selectedTool(call.args, collections, senderId, sock);
-            if (resultText) {
-                await sock.sendMessage(senderId, { text: resultText });
+            await sock.sendMessage(senderId, { text: `Please give me a moment to process that...` });
+            const resultData = await selectedTool(call.args, collections, senderId);
+
+            if (typeof resultData === 'string') {
+                await sock.sendMessage(senderId, { text: resultData });
+            } else if (resultData && resultData.document) {
+                await sock.sendMessage(senderId, { 
+                    document: resultData.document,
+                    mimetype: resultData.mimetype,
+                    fileName: resultData.fileName,
+                    caption: resultData.caption
+                });
             }
+        } else {
+            await sock.sendMessage(senderId, { text: `Sorry, I don't know how to perform the action: "${call.name}".` });
         }
     } else {
         const textResponse = result.response.text();

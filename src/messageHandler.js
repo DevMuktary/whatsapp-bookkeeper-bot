@@ -7,8 +7,10 @@ const deepseek = new OpenAI({
     baseURL: "https://api.deepseek.com/v1",
 });
 
+// --- MODIFIED: Added a new, specific 'logSale' tool ---
 const tools = [
-  { type: "function", function: { name: 'logTransaction', description: 'Logs a new income or expense transaction.', parameters: { type: 'object', properties: { type: { type: 'string', description: 'The type of transaction, either "income" or "expense".' }, amount: { type: 'number' }, description: { type: 'string' }, category: { type: 'string', description: 'For expenses, a category like "rent", "utilities", "transport". Defaults to "Uncategorized".' } }, required: ['type', 'amount', 'description'] } } },
+  { type: "function", function: { name: 'logSale', description: 'Logs a sale of a product from inventory. This is the primary tool for recording sales.', parameters: { type: 'object', properties: { productName: { type: 'string', description: 'The name of the product sold, e.g., "iPhone 17 Air".' }, quantitySold: { type: 'number', description: 'The number of units sold.' }, totalAmount: { type: 'number', description: 'The total income received from the sale.' } }, required: ['productName', 'quantitySold', 'totalAmount'] } } },
+  { type: "function", function: { name: 'logTransaction', description: 'Logs a generic income or expense that is NOT a product sale, such as "rent", "utilities", or "service income".', parameters: { type: 'object', properties: { type: { type: 'string', description: 'The type of transaction, either "income" or "expense".' }, amount: { type: 'number' }, description: { type: 'string' }, category: { type: 'string', description: 'For expenses, a category like "rent", "utilities", "transport". Defaults to "Uncategorized".' } }, required: ['type', 'amount', 'description'] } } },
   { type: "function", function: { name: 'addProduct', description: 'Adds one or more new products to inventory.', parameters: { type: 'object', properties: { products: { type: 'array', items: { type: 'object', properties: { productName: { type: 'string' }, cost: { type: 'number' }, price: { type: 'number' }, stock: { type: 'number' } }, required: ['productName', 'cost', 'price', 'stock'] } } }, required: ['products'] } } },
   { type: "function", function: { name: 'setOpeningBalance', description: 'Sets the initial inventory or opening balance for a user.', parameters: { type: 'object', properties: { products: { type: 'array', items: { type: 'object', properties: { productName: { type: 'string' }, cost: { type: 'number' }, price: { type: 'number' }, stock: { type: 'number' } }, required: ['productName', 'cost', 'price', 'stock'] } } }, required: ['products'] } } },
   { type: "function", function: { name: 'getInventory', description: 'Retrieves a list of all products in inventory.', parameters: { type: 'object', properties: {} } } },
@@ -18,54 +20,73 @@ const tools = [
   { type: "function", function: { name: 'generatePnLReport', description: 'Generates a professional Profit and Loss (P&L) PDF statement. Use only when the user asks for a "P&L" or "statement".', parameters: { type: 'object', properties: {} } } },
 ];
 
-async function updateStockAfterSale(description, collections, senderId) {
-    const { productsCollection, inventoryLogsCollection } = collections;
-    const saleRegex = /(?:sale of|sold)\s*(\d+)\s*x?\s*(.+)/i;
-    const match = description.match(saleRegex);
+// --- NEW: The logSale function that handles everything in one go ---
+async function logSale(args, collections, senderId) {
+    const { transactionsCollection, productsCollection, inventoryLogsCollection } = collections;
+    const { productName, quantitySold, totalAmount } = args;
 
-    if (match) {
-        const quantitySold = parseInt(match[1], 10);
-        const productNameQuery = match[2].trim();
-        
-        try {
-            const product = await productsCollection.findOne({ 
-                userId: senderId, 
-                productName: { $regex: new RegExp(productNameQuery, "i") } 
-            });
+    try {
+        const product = await productsCollection.findOne({ 
+            userId: senderId, 
+            productName: { $regex: new RegExp(`^${productName}$`, "i") } 
+        });
 
-            if (!product) {
-                console.log(`Could not find product matching "${productNameQuery}" to update stock.`);
-                return null;
-            }
-
-            await productsCollection.updateOne({ _id: product._id }, { $inc: { stock: -quantitySold } });
-            await inventoryLogsCollection.insertOne({ 
-                userId: senderId, 
-                productId: product._id, 
-                type: 'sale', 
-                quantityChange: -quantitySold, 
-                notes: description, 
-                createdAt: new Date() 
-            });
-            
-            const costOfSale = product.cost * quantitySold;
-            console.log(`Stock updated for ${product.productName}. Cost of this sale: ${costOfSale}`);
-            // Return the total cost of the items sold
-            return { costOfSale }; 
-        } catch (error) {
-            console.error('Error updating stock after sale:', error);
-            return null;
+        if (!product) {
+            return { success: false, message: `Could not find a product named "${productName}" in your inventory.` };
         }
+
+        // 1. Log Income Transaction
+        await transactionsCollection.insertOne({
+            userId: senderId,
+            type: 'income',
+            amount: totalAmount,
+            description: `Sale of ${quantitySold} x ${product.productName}`,
+            category: 'Sales',
+            createdAt: new Date()
+        });
+
+        // 2. Calculate and Log Cost of Goods Sold (COGS) Expense
+        const costOfSale = product.cost * quantitySold;
+        if (costOfSale > 0) {
+            await transactionsCollection.insertOne({
+                userId: senderId,
+                type: 'expense',
+                amount: costOfSale,
+                description: `Cost of Sales for ${quantitySold} x ${product.productName}`,
+                category: 'Cost of Goods Sold',
+                createdAt: new Date()
+            });
+        }
+
+        // 3. Update Inventory Stock
+        await productsCollection.updateOne({ _id: product._id }, { $inc: { stock: -quantitySold } });
+
+        // 4. Create Inventory Log
+        await inventoryLogsCollection.insertOne({
+            userId: senderId,
+            productId: product._id,
+            type: 'sale',
+            quantityChange: -quantitySold,
+            notes: `Sold ${quantitySold} units`,
+            createdAt: new Date()
+        });
+
+        console.log(`Sale processed for ${quantitySold} x ${product.productName}. Stock updated.`);
+        return { success: true, message: `Sale of ${quantitySold} x ${product.productName} recorded successfully.` };
+
+    } catch (error) {
+        console.error('Error in logSale function:', error);
+        return { success: false, message: 'An error occurred while processing the sale.' };
     }
-    return null;
 }
 
+
+// --- MODIFIED: This function now ONLY handles non-sale transactions ---
 async function logTransaction(args, collections, senderId) {
-    const { transactionsCollection, productsCollection, inventoryLogsCollection } = collections;
+    const { transactionsCollection } = collections;
     const { type, amount, description, category = 'Uncategorized' } = args;
     
     try {
-        // Step 1: Log the main transaction (e.g., the income from the sale)
         await transactionsCollection.insertOne({ 
             userId: senderId, 
             type, 
@@ -74,24 +95,6 @@ async function logTransaction(args, collections, senderId) {
             category, 
             createdAt: new Date() 
         });
-        
-        // Step 2: If it was an income from a sale, update stock and log the Cost of Goods Sold
-        if (type === 'income') {
-            const saleDetails = await updateStockAfterSale(description, { productsCollection, inventoryLogsCollection }, senderId);
-            
-            if (saleDetails && saleDetails.costOfSale > 0) {
-                // This is the new, crucial part: Log the COGS as an expense
-                await transactionsCollection.insertOne({
-                    userId: senderId,
-                    type: 'expense',
-                    amount: saleDetails.costOfSale,
-                    description: `Cost of Sales for: "${description}"`,
-                    category: 'Cost of Goods Sold',
-                    createdAt: new Date()
-                });
-            }
-        }
-        
         return { success: true, message: `Logged ${type} of ${amount} for ${description}` };
     } catch (error) {
         console.error('Error logging transaction:', error);
@@ -107,24 +110,11 @@ async function addProduct(args, collections, senderId) {
     try {
         for (const product of products) {
             const { productName, cost, price, stock } = product;
-            const newProduct = await productsCollection.insertOne({ 
-                userId: senderId, 
-                productName, 
-                cost, 
-                price, 
-                stock, 
-                createdAt: new Date() 
-            });
-            
-            await inventoryLogsCollection.insertOne({ 
-                userId: senderId, 
-                productId: newProduct.insertedId, 
-                type: 'initial_stock', 
-                quantityChange: stock, 
-                notes: 'Product Added', 
-                createdAt: new Date() 
-            });
-            
+            await productsCollection.updateOne(
+                { userId: senderId, productName: { $regex: new RegExp(`^${productName}$`, "i") } },
+                { $set: { cost, price }, $inc: { stock: stock }, $setOnInsert: { userId: senderId, productName, createdAt: new Date() } },
+                { upsert: true }
+            );
             addedProducts.push(productName);
         }
         return { success: true, count: addedProducts.length, names: addedProducts.join(', ') };
@@ -333,7 +323,9 @@ async function generatePnLReport(args, collections, senderId, sock) {
     }
 }
 
+// --- MODIFIED: Added the new logSale tool ---
 const availableTools = { 
+    logSale,
     logTransaction, 
     addProduct, 
     setOpeningBalance, 

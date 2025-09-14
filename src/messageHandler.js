@@ -194,13 +194,9 @@ async function processMessageWithAI(text, collections, senderId, sock) {
     
     const systemInstruction = `You are 'Smart Accountant', a professional, confident, and friendly AI bookkeeping assistant. Follow these rules with absolute priority: 1. **Use Tools for All Data Questions:** If a user asks a question about their specific financial or inventory data (e.g., "what are my expenses?", "how many soaps do I have?"), you MUST use a tool to get the answer. Do not answer from your own knowledge or provide placeholder text like '[Amount]'. Your primary job is to call the correct function. 2. **Never Explain Yourself:** Do not mention your functions, code, or that you are an AI. Never explain your limitations or internal thought process (e.g., do not say "I cannot access data"). Speak as if you are the one performing the action. 3. **Stay Within Abilities:** ONLY perform actions defined in the available tools. If asked to do something else (like send an email or browse the web), politely state your purpose is bookkeeping. 4. **Use the Right Tool:** For simple questions about totals (e.g., "what are my expenses?"), use 'getMonthlySummary'. For requests to "export", "download", "send the file", or receive a "PDF report", use the appropriate 'generate...Report' tool. 5. **Be Confident & Concise:** When a tool is called, assume it was successful. Announce the result confidently and briefly. 6. **Stay On Topic:** If asked about things unrelated to bookkeeping (e.g., science, general knowledge), politely guide the user back to your purpose.`;
     
-    // --- FIX: Correctly format the history for the API ---
     const messages = [
         { role: "system", content: systemInstruction },
-        ...savedHistory.map(item => ({
-            role: item.role === 'model' ? 'assistant' : 'user',
-            content: item.parts[0].text,
-        })),
+        ...savedHistory,
         { role: "user", content: text }
     ];
 
@@ -212,7 +208,7 @@ async function processMessageWithAI(text, collections, senderId, sock) {
     });
 
     const responseMessage = response.choices[0].message;
-    messages.push(responseMessage); // Add assistant's reply to the message list
+    messages.push(responseMessage);
 
     if (responseMessage.tool_calls) {
         for (const toolCall of responseMessage.tool_calls) {
@@ -244,15 +240,8 @@ async function processMessageWithAI(text, collections, senderId, sock) {
         }
     }
 
-    // --- FIX: Correctly save the history ---
-    const newHistory = [
-        { role: 'user', parts: [{ text: text }] },
-        // Only add assistant's final text reply to history, ignore tool calls
-        { role: 'model', parts: [{ text: response.choices[0].message.content || "" }] } 
-    ];
-    const finalHistory = [...savedHistory, ...newHistory];
-    const prunedHistory = finalHistory.slice(-10);
-    await conversationsCollection.updateOne({ userId: senderId }, { $set: { history: prunedHistory, updatedAt: new Date() } }, { upsert: true });
+    const finalHistoryToSave = messages.filter(msg => msg.role !== 'system' && msg.role !== 'tool').slice(-10);
+    await conversationsCollection.updateOne({ userId: senderId }, { $set: { history: finalHistoryToSave, updatedAt: new Date() } }, { upsert: true });
 }
 
 function parseProductLines(text) {

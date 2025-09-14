@@ -353,7 +353,12 @@ async function processMessageWithAI(text, collections, senderId, sock) {
         }
     } else {
         const textResponse = result.response.text();
-        await sock.sendMessage(senderId, { text: textResponse });
+        // --- THE FINAL FIX ---
+        // Forcefully remove any bracketed text before sending.
+        const cleanResponse = textResponse.replace(/\[.*?\]/g, '').trim();
+        if (cleanResponse) {
+            await sock.sendMessage(senderId, { text: cleanResponse });
+        }
     }
 
     const updatedHistory = await chat.getHistory();

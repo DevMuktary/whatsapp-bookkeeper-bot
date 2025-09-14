@@ -138,11 +138,15 @@ async function processMessageWithAI(text, collections, senderId, sock) {
         { role: "user", content: text }
     ];
 
+    const newHistoryEntries = [{ role: 'user', content: text }];
+
     const response = await deepseek.chat.completions.create({ model: "deepseek-chat", messages: messages, tools: tools, tool_choice: "auto" });
     let responseMessage = response.choices[0].message;
 
     if (responseMessage.tool_calls) {
         messages.push(responseMessage);
+        newHistoryEntries.push(responseMessage);
+
         const toolExecutionPromises = responseMessage.tool_calls.map(async (toolCall) => {
             const functionName = toolCall.function.name;
             const functionArgs = JSON.parse(toolCall.function.arguments);
@@ -158,6 +162,8 @@ async function processMessageWithAI(text, collections, senderId, sock) {
         
         if (toolResponses.length > 0) {
             messages.push(...toolResponses);
+            newHistoryEntries.push(...toolResponses);
+
             const secondResponse = await deepseek.chat.completions.create({ model: "deepseek-chat", messages: messages });
             responseMessage = secondResponse.choices[0].message;
         } else {
@@ -165,18 +171,20 @@ async function processMessageWithAI(text, collections, senderId, sock) {
         }
     }
 
+    newHistoryEntries.push(responseMessage);
+
     if (responseMessage.content) {
         await sock.sendMessage(senderId, { text: responseMessage.content });
     }
 
-    const newHistoryTurn = [
-        { role: 'user', content: text },
-        responseMessage
-    ];
+    const finalHistoryToSave = [...savedHistory, ...newHistoryEntries];
+    const prunedHistory = finalHistoryToSave.slice(-10); 
     
-    const finalHistoryToSave = [...savedHistory, ...newHistoryTurn].filter(msg => msg.content !== null && msg.content !== '');
-    const prunedHistory = finalHistoryToSave.slice(-10);
-    await conversationsCollection.updateOne({ userId: senderId }, { $set: { history: prunedHistory, updatedAt: new Date() } }, { upsert: true });
+    await conversationsCollection.updateOne(
+        { userId: senderId }, 
+        { $set: { history: prunedHistory, updatedAt: new Date() } }, 
+        { upsert: true }
+    );
 }
 
 export async function handleMessage(sock, msg, collections) {

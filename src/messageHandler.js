@@ -7,11 +7,10 @@ const deepseek = new OpenAI({
     baseURL: "https://api.deepseek.com/v1",
 });
 
-// --- MODIFIED: Added a new, specific 'logSale' tool ---
 const tools = [
   { type: "function", function: { name: 'logSale', description: 'Logs a sale of a product from inventory. This is the primary tool for recording sales.', parameters: { type: 'object', properties: { productName: { type: 'string', description: 'The name of the product sold, e.g., "iPhone 17 Air".' }, quantitySold: { type: 'number', description: 'The number of units sold.' }, totalAmount: { type: 'number', description: 'The total income received from the sale.' } }, required: ['productName', 'quantitySold', 'totalAmount'] } } },
   { type: "function", function: { name: 'logTransaction', description: 'Logs a generic income or expense that is NOT a product sale, such as "rent", "utilities", or "service income".', parameters: { type: 'object', properties: { type: { type: 'string', description: 'The type of transaction, either "income" or "expense".' }, amount: { type: 'number' }, description: { type: 'string' }, category: { type: 'string', description: 'For expenses, a category like "rent", "utilities", "transport". Defaults to "Uncategorized".' } }, required: ['type', 'amount', 'description'] } } },
-  { type: "function", function: { name: 'addProduct', description: 'Adds one or more new products to inventory.', parameters: { type: 'object', properties: { products: { type: 'array', items: { type: 'object', properties: { productName: { type: 'string' }, cost: { type: 'number' }, price: { type: 'number' }, stock: { type: 'number' } }, required: ['productName', 'cost', 'price', 'stock'] } } }, required: ['products'] } } },
+  { type: "function", function: { name: 'addProduct', description: 'Adds one or more new products to inventory. If a product already exists, this updates its price and adds to its stock.', parameters: { type: 'object', properties: { products: { type: 'array', items: { type: 'object', properties: { productName: { type: 'string' }, cost: { type: 'number' }, price: { type: 'number' }, stock: { type: 'number' } }, required: ['productName', 'cost', 'price', 'stock'] } } }, required: ['products'] } } },
   { type: "function", function: { name: 'setOpeningBalance', description: 'Sets the initial inventory or opening balance for a user.', parameters: { type: 'object', properties: { products: { type: 'array', items: { type: 'object', properties: { productName: { type: 'string' }, cost: { type: 'number' }, price: { type: 'number' }, stock: { type: 'number' } }, required: ['productName', 'cost', 'price', 'stock'] } } }, required: ['products'] } } },
   { type: "function", function: { name: 'getInventory', description: 'Retrieves a list of all products in inventory.', parameters: { type: 'object', properties: {} } } },
   { type: "function", function: { name: 'getMonthlySummary', description: 'Gets a quick text summary of total income, expenses, and net balance for the current month.', parameters: { type: 'object', properties: {} } } },
@@ -20,7 +19,6 @@ const tools = [
   { type: "function", function: { name: 'generatePnLReport', description: 'Generates a professional Profit and Loss (P&L) PDF statement. Use only when the user asks for a "P&L" or "statement".', parameters: { type: 'object', properties: {} } } },
 ];
 
-// --- NEW: The logSale function that handles everything in one go ---
 async function logSale(args, collections, senderId) {
     const { transactionsCollection, productsCollection, inventoryLogsCollection } = collections;
     const { productName, quantitySold, totalAmount } = args;
@@ -80,8 +78,6 @@ async function logSale(args, collections, senderId) {
     }
 }
 
-
-// --- MODIFIED: This function now ONLY handles non-sale transactions ---
 async function logTransaction(args, collections, senderId) {
     const { transactionsCollection } = collections;
     const { type, amount, description, category = 'Uncategorized' } = args;
@@ -102,6 +98,7 @@ async function logTransaction(args, collections, senderId) {
     }
 }
 
+// --- MODIFIED: This function now prevents duplicate products ---
 async function addProduct(args, collections, senderId) {
     const { productsCollection, inventoryLogsCollection } = collections;
     const { products } = args;
@@ -110,11 +107,40 @@ async function addProduct(args, collections, senderId) {
     try {
         for (const product of products) {
             const { productName, cost, price, stock } = product;
-            await productsCollection.updateOne(
+
+            // This "upsert" logic is the key: it updates if it exists, or inserts if it's new.
+            const result = await productsCollection.updateOne(
                 { userId: senderId, productName: { $regex: new RegExp(`^${productName}$`, "i") } },
-                { $set: { cost, price }, $inc: { stock: stock }, $setOnInsert: { userId: senderId, productName, createdAt: new Date() } },
+                { 
+                    $set: { cost, price }, 
+                    $inc: { stock: stock }, 
+                    $setOnInsert: { userId: senderId, productName, createdAt: new Date() } 
+                },
                 { upsert: true }
             );
+
+            // Log the inventory change
+            if (result.upsertedId) { // It was a new product
+                 await inventoryLogsCollection.insertOne({ 
+                    userId: senderId, 
+                    productId: result.upsertedId, 
+                    type: 'initial_stock', 
+                    quantityChange: stock, 
+                    notes: 'Product created', 
+                    createdAt: new Date() 
+                });
+            } else { // It was an existing product, so we log it as a stock-in/purchase
+                 const existingProduct = await productsCollection.findOne({ userId: senderId, productName: { $regex: new RegExp(`^${productName}$`, "i") } });
+                 await inventoryLogsCollection.insertOne({ 
+                    userId: senderId, 
+                    productId: existingProduct._id, 
+                    type: 'purchase', 
+                    quantityChange: stock, 
+                    notes: 'Added new stock', 
+                    createdAt: new Date() 
+                });
+            }
+            
             addedProducts.push(productName);
         }
         return { success: true, count: addedProducts.length, names: addedProducts.join(', ') };
@@ -323,7 +349,6 @@ async function generatePnLReport(args, collections, senderId, sock) {
     }
 }
 
-// --- MODIFIED: Added the new logSale tool ---
 const availableTools = { 
     logSale,
     logTransaction, 
@@ -343,7 +368,8 @@ async function processMessageWithAI(text, collections, senderId, sock) {
         const conversation = await conversationsCollection.findOne({ userId: senderId });
         const savedHistory = conversation ? conversation.history : [];
         
-        const systemInstruction = `You are 'Smart Accountant', a professional, confident, and friendly AI bookkeeping assistant. Follow these rules with absolute priority: 1. **Use Tools for All Data Questions:** If a user asks a question about their specific financial or inventory data (e.g., "what are my expenses?", "how many soaps do I have?"), you MUST use a tool to get the answer. Do not answer from your own knowledge or provide placeholder text like '[Amount]'. Your primary job is to call the correct function. 2. **Never Explain Yourself:** Do not mention your functions, code, or that you are an AI. Never explain your limitations or internal thought process (e.g., do not say "I cannot access data"). Speak as if you are the one performing the action. 3. **Stay Within Abilities:** ONLY perform actions defined in the available tools. If asked to do something else (like send an email or browse the web), politely state your purpose is bookkeeping. 4. **Use the Right Tool:** For simple questions about totals (e.g., "what are my expenses?"), use 'getMonthlySummary'. For requests to "export", "download", "send the file", or receive a "PDF report", use the appropriate 'generate...Report' tool. 5. **Be Confident & Concise:** When a tool is called, assume it was successful. Announce the result confidently and briefly. 6. **Stay On Topic:** If asked about things unrelated to bookkeeping (e.g., science, general knowledge), politely guide the user back to your purpose.`;
+        // --- MODIFIED: Added a rule to prevent the AI from showing code ---
+        const systemInstruction = `You are 'Smart Accountant', a professional, confident, and friendly AI bookkeeping assistant. Follow these rules with absolute priority: 1. **Use Tools for All Data Questions:** If a user asks a question about their specific financial or inventory data, you MUST use a tool to get the answer. Your primary job is to call the correct function. 2. **Never Explain Yourself:** Do not mention your functions, code, or that you are an AI. Speak as if you are the one performing the action. 3. **CRITICAL RULE:** Never, under any circumstances, write tool call syntax like "<|tool_calls_begin|>" or other code in your text responses. Your responses must be clean, natural language only. 4. **Stay Within Abilities:** ONLY perform actions defined in the available tools. If asked to do something else (like send an email), politely state your purpose is bookkeeping. 5. **Use the Right Tool:** Use 'logSale' for product sales. Use 'logTransaction' for other income/expenses. Use 'getMonthlySummary' for simple questions about totals. Use the 'generate...Report' tools for export requests. 6. **Be Confident & Concise:** When a tool is called, assume it was successful. Announce the result confidently.`;
         
         const messages = [
             { role: "system", content: systemInstruction },
@@ -393,7 +419,11 @@ async function processMessageWithAI(text, collections, senderId, sock) {
         newHistoryEntries.push(responseMessage);
 
         if (responseMessage.content) {
-            await sock.sendMessage(senderId, { text: responseMessage.content });
+            // Final safeguard to clean any stray syntax the AI might produce
+            const cleanContent = responseMessage.content.replace(/<\|.*?\|>/g, '').trim();
+            if (cleanContent) {
+                 await sock.sendMessage(senderId, { text: cleanContent });
+            }
         }
 
         const finalHistoryToSave = [...savedHistory, ...newHistoryEntries];

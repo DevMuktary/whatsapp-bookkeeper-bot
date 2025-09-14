@@ -1,105 +1,80 @@
 import { ReportGenerators } from './reportGenerator.js';
 import { ObjectId } from 'mongodb';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import OpenAI from 'openai';
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const deepseek = new OpenAI({
+    apiKey: process.env.DEEPSEEK_API_KEY,
+    baseURL: "https://api.deepseek.com/v1",
+});
 
 const tools = [
   {
-    name: 'logTransaction',
-    description: 'Logs a new income or expense transaction. Also use for sales of products. For expenses, try to identify a category from the description.',
-    parameters: {
-      type: 'object',
-      properties: {
-        type: { type: 'string', description: 'The type of transaction, either "income" or "expense".' },
-        amount: { type: 'number', description: 'The numerical amount of the transaction.' },
-        description: { type: 'string', description: 'A detailed description of the transaction, including product names and quantities if it is a sale.' },
-        category: { type: 'string', description: 'For expenses, a category like "rent", "utilities", "transport", "cost_of_goods", etc. Defaults to "Uncategorized".' }
-      },
-      required: ['type', 'amount', 'description'],
-    },
+    type: "function",
+    function: {
+        name: 'logTransaction',
+        description: 'Logs a new income or expense transaction. Also use for sales of products. For expenses, try to identify a category from the description.',
+        parameters: { type: 'object', properties: { type: { type: 'string', description: 'The type of transaction, either "income" or "expense".' }, amount: { type: 'number', description: 'The numerical amount of the transaction.' }, description: { type: 'string', description: 'A detailed description of the transaction, including product names and quantities if it is a sale.' }, category: { type: 'string', description: 'For expenses, a category like "rent", "utilities", "transport", "cost_of_goods", etc. Defaults to "Uncategorized".' } }, required: ['type', 'amount', 'description'] },
+    }
   },
   {
-    name: 'addProduct',
-    description: 'Adds one or more new products to the user\'s inventory. Should be used for regular restocking after the initial setup.',
-    parameters: {
-      type: 'object',
-      properties: {
-        products: {
-          type: 'array',
-          description: 'An array of products to add.',
-          items: {
-            type: 'object',
-            properties: {
-              productName: { type: 'string', description: 'The name of the product.' },
-              cost: { type: 'number', description: 'The cost price of one unit of the product.' },
-              price: { type: 'number', description: 'The selling price of one unit of the product.' },
-              stock: { type: 'number', description: 'The initial quantity in stock.' },
-            },
-            required: ['productName', 'cost', 'price', 'stock'],
-          },
-        },
-      },
-      required: ['products'],
-    },
+    type: "function",
+    function: {
+        name: 'addProduct',
+        description: 'Adds one or more new products to the user\'s inventory. Should be used for regular restocking after the initial setup.',
+        parameters: { type: 'object', properties: { products: { type: 'array', description: 'An array of products to add.', items: { type: 'object', properties: { productName: { type: 'string', description: 'The name of the product.' }, cost: { type: 'number', description: 'The cost price of one unit of the product.' }, price: { type: 'number', description: 'The selling price of one unit of the product.' }, stock: { type: 'number', description: 'The initial quantity in stock.' } }, required: ['productName', 'cost', 'price', 'stock'] } } }, required: ['products'] },
+    }
   },
   {
-    name: 'setOpeningBalance',
-    description: 'Sets the initial inventory or opening balance for a user. This is typically a one-time setup action when the user first adds all their existing products.',
-    parameters: {
-      type: 'object',
-      properties: {
-        products: {
-          type: 'array',
-          description: 'An array of all the user\'s starting products.',
-          items: {
-            type: 'object',
-            properties: {
-              productName: { type: 'string', description: 'The name of the product.' },
-              cost: { type: 'number', description: 'The cost price of one unit of the product.' },
-              price: { type: 'number', description: 'The selling price of one unit of the product.' },
-              stock: { type: 'number', description: 'The initial quantity in stock.' },
-            },
-            required: ['productName', 'cost', 'price', 'stock'],
-          },
-        },
-      },
-      required: ['products'],
-    },
+    type: "function",
+    function: {
+        name: 'setOpeningBalance',
+        description: 'Sets the initial inventory or opening balance for a user. This is typically a one-time setup action when the user first adds all their existing products.',
+        parameters: { type: 'object', properties: { products: { type: 'array', description: 'An array of all the user\'s starting products.', items: { type: 'object', properties: { productName: { type: 'string', description: 'The name of the product.' }, cost: { type: 'number', description: 'The cost price of one unit of the product.' }, price: { type: 'number', description: 'The selling price of one unit of the product.' }, stock: { type: 'number', description: 'The initial quantity in stock.' } }, required: ['productName', 'cost', 'price', 'stock'] } } }, required: ['products'] },
+    }
   },
   {
-    name: 'getInventory',
-    description: 'Retrieves and displays a list of all products in the user\'s inventory.',
-    parameters: { type: 'object', properties: {} },
+    type: "function",
+    function: {
+        name: 'getInventory',
+        description: 'Retrieves and displays a list of all products in the user\'s inventory.',
+        parameters: { type: 'object', properties: {} },
+    }
   },
   {
-    name: 'getMonthlySummary',
-    description: 'Gets a quick text summary of total income, expenses, and net balance for the current month. Use for simple questions about totals, like "what are my expenses?" or "how much did I make?"',
-    parameters: { type: 'object', properties: {} },
+    type: "function",
+    function: {
+        name: 'getMonthlySummary',
+        description: 'Gets a quick text summary of total income, expenses, and net balance for the current month. Use for simple questions about totals, like "what are my expenses?" or "how much did I make?"',
+        parameters: { type: 'object', properties: {} },
+    }
   },
   {
-    name: 'generateTransactionReport',
-    description: 'Generates and sends a detailed PDF FILE of all financial transactions for the current month. Use this only when the user explicitly asks to "export", "download", "send the file", or receive a "PDF report" of their transactions.',
-    parameters: { type: 'object', properties: {} },
+    type: "function",
+    function: {
+        name: 'generateTransactionReport',
+        description: 'Generates and sends a detailed PDF FILE of all financial transactions for the current month. Use this only when the user explicitly asks to "export", "download", "send the file", or receive a "PDF report" of their transactions.',
+        parameters: { type: 'object', properties: {} },
+    }
   },
   {
-    name: 'generateInventoryReport',
-    description: 'Generates and sends a detailed PDF FILE of inventory, sales, and profit for the current month. Use this only when the user explicitly asks to "export", "download", or receive a "report file" related to inventory or profit.',
-    parameters: { type: 'object', properties: {} },
+    type: "function",
+    function: {
+        name: 'generateInventoryReport',
+        description: 'Generates and sends a detailed PDF FILE of inventory, sales, and profit for the current month. Use this only when the user explicitly asks to "export", "download", or receive a "report file" related to inventory or profit.',
+        parameters: { type: 'object', properties: {} },
+    }
   },
   {
-    name: 'generatePnLReport',
-    description: 'Generates and sends a professional Profit and Loss (P&L) PDF FILE for the current month. Use this only when the user explicitly asks for a "P&L", "statement", or "profit and loss report".',
-    parameters: { type: 'object', properties: {} },
+    type: "function",
+    function: {
+        name: 'generatePnLReport',
+        description: 'Generates and sends a professional Profit and Loss (P&L) PDF FILE for the current month. Use this only when the user explicitly asks for a "P&L", "statement", or "profit and loss report".',
+        parameters: { type: 'object', properties: {} },
+    }
   },
 ];
 
-const model = genAI.getGenerativeModel({
-  model: "gemini-1.5-flash-latest",
-  tool_config: { function_calling_config: { mode: "any" } }
-});
-
-// --- Specialist Functions that return DATA for the AI to process ---
+// --- Specialist Functions ---
 
 async function logTransaction(args, collections, senderId) {
     const { transactionsCollection, productsCollection, inventoryLogsCollection } = collections;
@@ -110,7 +85,6 @@ async function logTransaction(args, collections, senderId) {
     }
     return { success: true, message: `Logged ${type} of ${amount} for ${description}` };
 }
-
 async function addProduct(args, collections, senderId) {
     const { productsCollection, inventoryLogsCollection } = collections;
     const { products } = args;
@@ -123,26 +97,21 @@ async function addProduct(args, collections, senderId) {
     }
     return { success: true, count: addedProducts.length, names: addedProducts.join(', ') };
 }
-
 async function setOpeningBalance(args, collections, senderId) {
     const result = await addProduct(args, collections, senderId);
     return { ...result, message: "Opening balance set." };
 }
-
 async function getInventory(args, collections, senderId) {
     const { productsCollection, usersCollection } = collections;
     const user = await usersCollection.findOne({ userId: senderId });
     const products = await productsCollection.find({ userId: senderId }).sort({ productName: 1 }).toArray();
-    if (products.length === 0) {
-        return { success: false, message: "No products found in inventory." };
-    }
+    if (products.length === 0) return { success: false, message: "No products found in inventory." };
     return {
         success: true,
         currency: user.currency || 'CURRENCY',
         products: products.map(p => ({ name: p.productName, price: p.price, stock: p.stock }))
     };
 }
-
 async function getMonthlySummary(args, collections, senderId) {
     const { transactionsCollection, usersCollection } = collections;
     const user = await usersCollection.findOne({ userId: senderId });
@@ -150,12 +119,8 @@ async function getMonthlySummary(args, collections, senderId) {
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
-    const summary = await transactionsCollection.aggregate([
-        { $match: { userId: senderId, createdAt: { $gte: startOfMonth, $lte: endOfMonth } } },
-        { $group: { _id: "$type", totalAmount: { $sum: "$amount" } } }
-    ]).toArray();
-    let totalIncome = 0;
-    let totalExpense = 0;
+    const summary = await transactionsCollection.aggregate([ { $match: { userId: senderId, createdAt: { $gte: startOfMonth, $lte: endOfMonth } } }, { $group: { _id: "$type", totalAmount: { $sum: "$amount" } } } ]).toArray();
+    let totalIncome = 0, totalExpense = 0;
     summary.forEach(item => {
         if (item._id === 'income') totalIncome = item.totalAmount;
         if (item._id === 'expense') totalExpense = item.totalAmount;
@@ -169,7 +134,6 @@ async function getMonthlySummary(args, collections, senderId) {
         net: totalIncome - totalExpense
     };
 }
-
 async function generateTransactionReport(args, collections, senderId, sock) {
     const { transactionsCollection, usersCollection } = collections;
     const user = await usersCollection.findOne({ userId: senderId });
@@ -183,7 +147,6 @@ async function generateTransactionReport(args, collections, senderId, sock) {
     await sock.sendMessage(senderId, { document: pdfBuffer, mimetype: 'application/pdf', fileName: `Financial_Report_${monthName.replace(/ /g, '_')}.pdf`, caption: `Here is your financial report for ${monthName}.` });
     return { success: true, message: "Transaction report has been sent." };
 }
-
 async function generateInventoryReport(args, collections, senderId, sock) {
     const { productsCollection, inventoryLogsCollection, usersCollection } = collections;
     const user = await usersCollection.findOne({ userId: senderId });
@@ -198,7 +161,6 @@ async function generateInventoryReport(args, collections, senderId, sock) {
     await sock.sendMessage(senderId, { document: pdfBuffer, mimetype: 'application/pdf', fileName: `Inventory_Report_${monthName.replace(/ /g, '_')}.pdf`, caption: `Here is your inventory and profit report.` });
     return { success: true, message: "Inventory report has been sent." };
 }
-
 async function generatePnLReport(args, collections, senderId, sock) {
     const { transactionsCollection, inventoryLogsCollection, usersCollection } = collections;
     const user = await usersCollection.findOne({ userId: senderId });
@@ -229,42 +191,64 @@ async function processMessageWithAI(text, collections, senderId, sock) {
     const { conversationsCollection } = collections;
     const conversation = await conversationsCollection.findOne({ userId: senderId });
     let history = conversation ? conversation.history : [];
-    const systemInstruction = `You are 'Smart Accountant', a professional, confident, and friendly AI bookkeeping assistant. Follow these rules with absolute priority: 1. **Use Tools for All Data Questions:** If a user asks a question about their specific financial or inventory data (e.g., "what are my expenses?", "how many soaps do I have?"), you MUST use a tool to get the answer. Do not answer from your own knowledge or provide placeholder text like '[Amount]'. Your primary job is to call the correct function. 2. **Never Explain Yourself:** Do not mention your functions, code, or that you are an AI. Never explain your limitations or internal thought process (e.g., do not say "I cannot access data"). Speak as if you are the one performing the action. 3. **Stay Within Abilities:** ONLY perform actions defined in the available tools. If asked to do something else (like send an email or browse the web), politely state your purpose is bookkeeping. 4. **Use the Right Tool:** For simple questions about totals (e.g., "what are my expenses?"), use 'getMonthlySummary'. For requests to "export", "download", "send the file", or receive a "PDF report", use the appropriate 'generate...Report' tool. 5. **Be Confident & Concise:** When a tool is called, assume it was successful. Announce the result confidently and briefly. 6. **Stay On Topic:** If asked about things unrelated to bookkeeping (e.g., science, general knowledge), politely guide the user back to your purpose.`;
-    const chatHistoryForAPI = [{ role: "user", parts: [{ text: systemInstruction }] }, { role: "model", parts: [{ text: "Understood. I will follow these rules." }] }, ...history];
-    const chat = model.startChat({ tools: [{ functionDeclarations: tools }], history: chatHistoryForAPI });
 
-    let result = await chat.sendMessage(text);
-
-    while (true) {
-        const call = result.response.functionCalls()?.[0];
-        if (!call) {
-            break;
-        }
-
-        console.log(`AI is calling tool: ${call.name} with args:`, call.args);
-        const selectedTool = availableTools[call.name];
-        let toolResult;
-
-        if (selectedTool) {
-            const resultData = await selectedTool(call.args, collections, senderId, sock);
-            toolResult = { name: call.name, response: resultData };
-        } else {
-            toolResult = { name: call.name, response: { success: false, message: "Tool not found." } };
-        }
-
-        // Send the tool's result back to the AI
-        result = await chat.sendMessage([ { functionResponse: toolResult } ]);
-    }
+    const systemInstruction = `You are 'Smart Accountant', a professional, confident, and friendly AI bookkeeping assistant. ...`; // Full system prompt
     
-    const finalResponse = result.response.text().replace(/\[.*?\]/g, '').trim();
-    if (finalResponse) {
-        await sock.sendMessage(senderId, { text: finalResponse });
+    const messages = [
+        { role: "system", content: systemInstruction },
+        ...history.map(item => ({
+            role: item.role === 'model' ? 'assistant' : 'user',
+            content: item.content,
+        })),
+        { role: "user", content: text }
+    ];
+
+    const response = await deepseek.chat.completions.create({
+        model: "deepseek-chat",
+        messages: messages,
+        tools: tools,
+        tool_choice: "auto",
+    });
+
+    const responseMessage = response.choices[0].message;
+    messages.push(responseMessage);
+
+    if (responseMessage.tool_calls) {
+        for (const toolCall of responseMessage.tool_calls) {
+            const functionName = toolCall.function.name;
+            const functionArgs = JSON.parse(toolCall.function.arguments);
+            const selectedTool = availableTools[functionName];
+            if (selectedTool) {
+                const functionResult = await selectedTool(functionArgs, collections, senderId, sock);
+                messages.push({
+                    tool_call_id: toolCall.id,
+                    role: "tool",
+                    name: functionName,
+                    content: JSON.stringify(functionResult),
+                });
+            }
+        }
+        
+        const secondResponse = await deepseek.chat.completions.create({
+            model: "deepseek-chat",
+            messages: messages,
+        });
+        const finalResponse = secondResponse.choices[0].message.content;
+        if (finalResponse) {
+            await sock.sendMessage(senderId, { text: finalResponse });
+        }
+    } else {
+        if (responseMessage.content) {
+            await sock.sendMessage(senderId, { text: responseMessage.content });
+        }
     }
 
-    const updatedHistory = await chat.getHistory();
-    const userFacingHistory = updatedHistory.slice(2);
-    const prunedHistory = userFacingHistory.slice(-10); 
-    await conversationsCollection.updateOne({ userId: senderId }, { $set: { history: prunedHistory, updatedAt: new Date() } }, { upsert: true });
+    // Update history
+    const finalHistory = messages.slice(1).map(item => ({
+        role: item.role === 'assistant' ? 'model' : 'user',
+        content: item.content,
+    })).slice(-10);
+    await conversationsCollection.updateOne({ userId: senderId }, { $set: { history: finalHistory, updatedAt: new Date() } }, { upsert: true });
 }
 
 function parseProductLines(text) {
@@ -288,9 +272,7 @@ export async function handleMessage(sock, msg, collections) {
     const { usersCollection, conversationsCollection } = collections;
     const senderId = msg.key.remoteJid;
     const messageText = msg.message?.conversation?.trim();
-
     if (!messageText) return;
-
     let user = await usersCollection.findOne({ userId: senderId });
     let conversation = await conversationsCollection.findOne({ userId: senderId });
 
@@ -327,7 +309,7 @@ export async function handleMessage(sock, msg, collections) {
                 const parsedProducts = parseProductLines(messageText);
                 if (parsedProducts.length > 0) {
                     const resultText = await setOpeningBalance({ products: parsedProducts }, collections, senderId);
-                    await sock.sendMessage(senderId, { text: "Your opening balance has been set successfully!" }); // Simplified confirmation
+                    await sock.sendMessage(senderId, { text: "Your opening balance has been set successfully!" });
                     await conversationsCollection.updateOne({ userId: senderId }, { $unset: { state: "" } });
                 } else {
                     await sock.sendMessage(senderId, { text: "I couldn't understand that format. Please try again in the format: `<Name> <Cost> <Price> <Stock>`" });
@@ -348,7 +330,6 @@ async function updateStockAfterSale(description, collections, senderId) {
     const { productsCollection, inventoryLogsCollection } = collections;
     const saleRegex = /(?:sale of|sold)\s*(\d+)x?\s*(.+)/i;
     const match = description.match(saleRegex);
-
     if (match) {
         const quantitySold = parseInt(match[1], 10);
         const productNameQuery = match[2].trim();

@@ -4,8 +4,6 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// --- 1. DEFINE OUR "TOOLS" FOR THE AI ---
-// This is a list of all the functions our bot can perform, described in a way the AI understands.
 const tools = [
   {
     name: 'logTransaction',
@@ -63,12 +61,8 @@ const tools = [
 
 const model = genAI.getGenerativeModel({
   model: "gemini-1.5-flash-latest",
-  // Tell the model about our tools
   tool_config: { function_calling_config: { mode: "any" } }
 });
-
-
-// --- 2. REFACTOR OUR LOGIC INTO SPECIALIST FUNCTIONS ---
 
 async function logTransaction(args, collections, senderId) {
     const { transactionsCollection, productsCollection, inventoryLogsCollection } = collections;
@@ -145,7 +139,7 @@ async function generateTransactionReport(args, collections, senderId, sock) {
         fileName: `Financial_Report_${monthName.replace(' ', '_')}.pdf`,
         caption: `Here is your financial report for ${monthName}.`
     });
-    return null; // Don't send a text message
+    return null;
 }
 
 async function generateInventoryReport(args, collections, senderId, sock) {
@@ -174,10 +168,9 @@ async function generateInventoryReport(args, collections, senderId, sock) {
         fileName: `Inventory_Report_${monthName.replace(' ', '_')}.pdf`,
         caption: `Here is your inventory and profit report for ${monthName}.`
     });
-    return null; // Don't send a text message
+    return null;
 }
 
-// Map tool names to their functions
 const availableTools = {
     logTransaction,
     addProduct,
@@ -186,25 +179,30 @@ const availableTools = {
     generateInventoryReport,
 };
 
-
-// --- 3. THE NEW, SIMPLIFIED MESSAGE HANDLER ---
 export async function handleMessage(sock, msg, collections) {
+    const { usersCollection, conversationsCollection } = collections;
     const senderId = msg.key.remoteJid;
     const messageText = msg.message?.conversation?.trim();
 
-    if (!messageText) return; // Ignore non-text messages
+    if (!messageText) return;
 
-    // --- Onboarding for new users is still important ---
-    let user = await collections.usersCollection.findOne({ userId: senderId });
+    let user = await usersCollection.findOne({ userId: senderId });
     if (!user) {
-        await collections.usersCollection.insertOne({ userId: senderId, createdAt: new Date() });
-        const welcomeMessage = `👋 Welcome to your AI Bookkeeping Assistant!\n\nI'm now powered by an advanced AI. You can speak to me in plain English.\n\n*Try things like:*\n- "I sold two phone chargers for 10000"\n- "Add a product called Soap, it cost me 300, I sell it for 500, and I have 50 in stock"\n- "What's in my inventory?"\n- "Export my profit report for this month"`;
+        await usersCollection.insertOne({ userId: senderId, createdAt: new Date() });
+        const welcomeMessage = `👋 Welcome to your AI Bookkeeping Assistant!\n\nI'm now powered by an advanced AI with memory. You can speak to me in plain English.\n\n*Try things like:*\n- "I sold two phone chargers for 10000"\n- "Add a product called Soap, it cost me 300, I sell it for 500, and I have 50 in stock"\n- "What's in my inventory?"\n- "Export my profit report for this month"`;
         await sock.sendMessage(senderId, { text: welcomeMessage });
         return;
     }
 
     try {
-        const chat = model.startChat({ tools: [{ functionDeclarations: tools }] });
+        const conversation = await conversationsCollection.findOne({ userId: senderId });
+        const history = conversation ? conversation.history : [];
+
+        const chat = model.startChat({ 
+            tools: [{ functionDeclarations: tools }],
+            history: history 
+        });
+
         const result = await chat.sendMessage(messageText);
         const call = result.response.functionCalls()?.[0];
 
@@ -212,7 +210,6 @@ export async function handleMessage(sock, msg, collections) {
             const selectedTool = availableTools[call.name];
             if (selectedTool) {
                 console.log(`AI is calling tool: ${call.name} with args:`, call.args);
-                // Call the specialist function with the arguments from the AI
                 const resultText = await selectedTool(call.args, collections, senderId, sock);
                 if (resultText) {
                     await sock.sendMessage(senderId, { text: resultText });
@@ -221,18 +218,25 @@ export async function handleMessage(sock, msg, collections) {
                 await sock.sendMessage(senderId, { text: `Sorry, I recognized a command "${call.name}" but I don't know how to perform it.` });
             }
         } else {
-            // If the AI didn't call a function, it might be a general chat.
             const textResponse = result.response.text();
             await sock.sendMessage(senderId, { text: textResponse });
         }
+
+        const updatedHistory = await chat.getHistory();
+        // Limit history to the last 10 turns to prevent it from getting too large
+        const prunedHistory = updatedHistory.slice(-10); 
+        await conversationsCollection.updateOne(
+            { userId: senderId },
+            { $set: { history: prunedHistory, updatedAt: new Date() } },
+            { upsert: true }
+        );
+
     } catch (error) {
         console.error("Error in AI message handler:", error);
         await sock.sendMessage(senderId, { text: "Sorry, I encountered an error trying to understand that." });
     }
 }
 
-
-// --- This helper function is still needed for the logTransaction tool ---
 async function updateStockAfterSale(description, collections, senderId) {
     const { productsCollection, inventoryLogsCollection } = collections;
     const saleRegex = /(?:sale of|sold)\s*(\d+)x?\s*(.+)/i;
@@ -263,4 +267,3 @@ async function updateStockAfterSale(description, collections, senderId) {
     }
     return null;
 }
-

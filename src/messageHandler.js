@@ -156,9 +156,7 @@ async function getInventory(args, collections, senderId) {
 }
 
 async function generateTransactionReport(args, collections, senderId, sock) {
-    const { transactionsCollection, usersCollection } = collections;
-    const user = await usersCollection.findOne({ userId: senderId });
-
+    const { transactionsCollection } = collections;
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
@@ -216,7 +214,7 @@ async function generatePnLReport(args, collections, senderId, sock) {
     const { transactionsCollection, inventoryLogsCollection, usersCollection } = collections;
     const user = await usersCollection.findOne({ userId: senderId });
 
-    await sock.sendMessage(senderId, { text: 'Generating your Profit & Loss statement... 📈' });
+    await sock.sendMessage(senderId, { text: 'Analyzing your data for the current month... 📈' });
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
@@ -226,6 +224,16 @@ async function generatePnLReport(args, collections, senderId, sock) {
         { $group: { _id: null, total: { $sum: '$amount' } } }
     ]).toArray();
     const totalRevenue = income[0]?.total || 0;
+    
+    const expensesResult = await transactionsCollection.find({ 
+        userId: senderId, 
+        type: 'expense', 
+        createdAt: { $gte: startOfMonth, $lte: endOfMonth } 
+    }).toArray();
+
+    if (totalRevenue === 0 && expensesResult.length === 0) {
+        return "You have no financial activity recorded for this month. I cannot generate a Profit & Loss statement.";
+    }
 
     const cogsLogs = await inventoryLogsCollection.aggregate([
         { $match: { userId: senderId, type: 'sale', createdAt: { $gte: startOfMonth, $lte: endOfMonth } } },
@@ -235,14 +243,13 @@ async function generatePnLReport(args, collections, senderId, sock) {
     ]).toArray();
     const cogs = cogsLogs[0]?.total || 0;
 
-    const expenses = await transactionsCollection.aggregate([
-        { $match: { userId: senderId, type: 'expense', createdAt: { $gte: startOfMonth, $lte: endOfMonth } } },
-        { $group: { _id: '$category', total: { $sum: '$amount' } } }
-    ]).toArray();
-    
     const expensesByCategory = {};
-    expenses.forEach(exp => {
-        expensesByCategory[exp._id] = exp.total;
+    expensesResult.forEach(exp => {
+        const category = exp.category || 'Uncategorized';
+        if (!expensesByCategory[category]) {
+            expensesByCategory[category] = 0;
+        }
+        expensesByCategory[category] += exp.amount;
     });
 
     const monthName = startOfMonth.toLocaleString('default', { month: 'long', year: 'numeric' });
@@ -273,11 +280,12 @@ async function processMessageWithAI(text, collections, senderId, sock) {
     let history = conversation ? conversation.history : [];
 
     const systemInstruction = `You are 'Smart Accountant', a professional, confident, and friendly AI bookkeeping assistant on WhatsApp. Your primary goal is to help users manage their finances and inventory. Follow these rules strictly:
-1.  **Stay On Topic:** If the user asks a question that is not related to bookkeeping, finance, or inventory, you MUST politely decline and steer the conversation back to your purpose. Respond with a message like: "I am your dedicated bookkeeping assistant. How can I assist you with your finances today?"
-2.  **Be Conversational, Not Technical:** Never mention your functions, code, APIs, or that you are an AI model. Speak naturally as if you are performing the tasks yourself.
-3.  **Be Confident:** When a tool for a task is called successfully, assume the task is complete and announce it confidently.
-4.  **Be Efficient & Clarify:** If you need more information, ask for all required details in one clear message. If a transaction is unclear, ask for clarification.
-5.  **Prioritize Tool Use:** Your main goal is to identify the user's intent and call the appropriate tool.`;
+1.  **Stay Within Your Abilities:** You can ONLY perform actions defined in the available tools. Do not offer to perform actions you cannot do, such as sending emails, setting reminders, or accessing the internet. If a user asks for something you cannot do, politely state your purpose is bookkeeping.
+2.  **Stay On Topic:** If the user asks a question that is not related to bookkeeping, finance, or inventory (e.g., general knowledge, chit-chat), you MUST politely decline and steer the conversation back to your purpose.
+3.  **Be Conversational, Not Technical:** Never mention your functions, code, APIs, or that you are an AI model. Speak naturally.
+4.  **Be Confident:** When a tool for a task is called successfully, assume the task is complete and announce it confidently.
+5.  **Be Efficient & Clarify:** If you need more information, ask for all required details in one clear message.
+6.  **Prioritize Tool Use:** Your main goal is to identify the user's intent and call the appropriate tool.`;
     
     const chatHistoryForAPI = [
         { role: "user", parts: [{ text: systemInstruction }] },
@@ -356,7 +364,6 @@ export async function handleMessage(sock, msg, collections) {
         return;
     }
     
-    // --- State-Driven Onboarding Logic ---
     switch (conversation?.state) {
         case 'awaiting_store_name':
             await usersCollection.updateOne({ userId: senderId }, { $set: { storeName: messageText } });

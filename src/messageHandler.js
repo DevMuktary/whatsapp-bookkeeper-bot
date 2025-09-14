@@ -125,13 +125,17 @@ async function processMessageWithAI(text, collections, senderId, sock) {
     
     const systemInstruction = `You are 'Smart Accountant', a professional, confident, and friendly AI bookkeeping assistant. Follow these rules with absolute priority: 1. **Use Tools for All Data Questions:** If a user asks a question about their specific financial or inventory data (e.g., "what are my expenses?", "how many soaps do I have?"), you MUST use a tool to get the answer. Do not answer from your own knowledge or provide placeholder text like '[Amount]'. Your primary job is to call the correct function. 2. **Never Explain Yourself:** Do not mention your functions, code, or that you are an AI. Never explain your limitations or internal thought process (e.g., do not say "I cannot access data"). Speak as if you are the one performing the action. 3. **Stay Within Abilities:** ONLY perform actions defined in the available tools. If asked to do something else (like send an email or browse the web), politely state your purpose is bookkeeping. 4. **Use the Right Tool:** For simple questions about totals (e.g., "what are my expenses?"), use 'getMonthlySummary'. For requests to "export", "download", "send the file", or receive a "PDF report", use the appropriate 'generate...Report' tool. 5. **Be Confident & Concise:** When a tool is called, assume it was successful. Announce the result confidently and briefly. 6. **Stay On Topic:** If asked about things unrelated to bookkeeping (e.g., science, general knowledge), politely guide the user back to your purpose.`;
     
-    const messages = [ { role: "system", content: systemInstruction }, ...savedHistory, { role: "user", content: text } ];
+    const messages = [
+        { role: "system", content: systemInstruction },
+        ...savedHistory,
+        { role: "user", content: text }
+    ];
 
     const response = await deepseek.chat.completions.create({ model: "deepseek-chat", messages: messages, tools: tools, tool_choice: "auto" });
-    const responseMessage = response.choices[0].message;
-    messages.push(responseMessage);
+    let responseMessage = response.choices[0].message;
 
     if (responseMessage.tool_calls) {
+        messages.push(responseMessage);
         const toolExecutionPromises = responseMessage.tool_calls.map(async (toolCall) => {
             const functionName = toolCall.function.name;
             const functionArgs = JSON.parse(toolCall.function.arguments);
@@ -141,23 +145,27 @@ async function processMessageWithAI(text, collections, senderId, sock) {
                 return { tool_call_id: toolCall.id, role: "tool", name: functionName, content: JSON.stringify(functionResult) };
             }
         });
-
+        
         const toolResponses = await Promise.all(toolExecutionPromises);
         messages.push(...toolResponses.filter(Boolean));
         
         const secondResponse = await deepseek.chat.completions.create({ model: "deepseek-chat", messages: messages });
-        const finalResponse = secondResponse.choices[0].message.content;
-        if (finalResponse) {
-            await sock.sendMessage(senderId, { text: finalResponse });
-        }
-    } else {
-        if (responseMessage.content) {
-            await sock.sendMessage(senderId, { text: responseMessage.content });
-        }
+        responseMessage = secondResponse.choices[0].message;
     }
 
-    const finalHistoryToSave = messages.filter(msg => msg.role !== 'system' && msg.role !== 'tool').slice(-10);
-    await conversationsCollection.updateOne({ userId: senderId }, { $set: { history: finalHistoryToSave, updatedAt: new Date() } }, { upsert: true });
+    if (responseMessage.content) {
+        await sock.sendMessage(senderId, { text: responseMessage.content });
+    }
+
+    // --- CORRECTED HISTORY SAVING ---
+    // Add the current user message and the final assistant response to the history
+    const newHistoryTurn = [
+        { role: 'user', content: text },
+        responseMessage
+    ];
+    const finalHistoryToSave = [...savedHistory, ...newHistoryTurn];
+    const prunedHistory = finalHistoryToSave.filter(msg => msg.role !== 'system' && msg.role !== 'tool').slice(-10);
+    await conversationsCollection.updateOne({ userId: senderId }, { $set: { history: prunedHistory, updatedAt: new Date() } }, { upsert: true });
 }
 
 function parseProductLines(text) {
@@ -204,9 +212,10 @@ export async function handleMessage(sock, msg, collections) {
                 await sock.sendMessage(senderId, { text: `Perfect. Currency set to *${currency}*.\n\nNow, you can tell me about your starting inventory. For example:\n\n"My opening balance is 20 phone chargers that cost me 3000 and I sell for 5000"` });
                 return;
             case 'awaiting_balance_confirmation':
+                // Handled by AI now, but we can keep a simple yes/no for guided setup
                 if (messageText.toLowerCase().includes('yes')) {
                     await conversationsCollection.updateOne({ userId: senderId }, { $set: { state: 'awaiting_opening_balance' } });
-                    await sock.sendMessage(senderId, { text: `Excellent! Please send your product list now.` });
+                    await sock.sendMessage(senderId, { text: `Excellent! Please describe your starting products now.` });
                 } else {
                     await conversationsCollection.updateOne({ userId: senderId }, { $unset: { state: "" } });
                     await sock.sendMessage(senderId, { text: `No problem. Setup is complete! You can set your opening balance later by telling me "set my opening balance".\n\nI'm ready to help you manage your business!` });

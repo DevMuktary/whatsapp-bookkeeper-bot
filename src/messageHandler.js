@@ -179,7 +179,6 @@ const availableTools = {
     generateInventoryReport,
 };
 
-// Main message handler with new AI logic
 export async function handleMessage(sock, msg, collections) {
     const { usersCollection, conversationsCollection } = collections;
     const senderId = msg.key.remoteJid;
@@ -197,21 +196,34 @@ export async function handleMessage(sock, msg, collections) {
 
     try {
         const conversation = await conversationsCollection.findOne({ userId: senderId });
-        const history = conversation ? conversation.history : [];
+        let history = conversation ? conversation.history : [];
 
-        // The new, improved system prompt that defines the bot's persona
+        // --- THIS IS THE FIX ---
+        // The system instruction is provided as the first item in the history array,
+        // with a special "user" role and an empty "model" response.
         const systemInstruction = `You are 'Smart Accountant', a professional, confident, and friendly AI bookkeeping assistant on WhatsApp. Your primary goal is to help users manage their finances and inventory. Follow these rules strictly:
-1.  **Be Conversational, Not Technical:** Never mention your functions, code, APIs, or that you are an AI model. Speak naturally as if you are performing the tasks yourself. For example, instead of "I will call the getInventory function," say "Let me get your inventory list for you."
-2.  **Be Confident:** When a tool for a task (like generating a report) is called successfully, assume the task is complete and announce it confidently. For example, after generating a PDF, say "Here is your complete inventory report." Do not express uncertainty.
+1.  **Be Conversational, Not Technical:** Never mention your functions, code, APIs, or that you are an AI model. Speak naturally as if you are performing the tasks yourself.
+2.  **Be Confident:** When a tool for a task is called successfully, assume the task is complete and announce it confidently. Do not express uncertainty.
 3.  **Be Efficient:** If you need more information, ask for all required details in one clear message.
 4.  **Prioritize Tool Use:** If the user's request maps directly to a tool, your primary response should be to call that tool.
-5.  **Clarify Ambiguity:** If a user's request for a transaction is unclear (e.g., "rent 5000"), ask a clarifying question.
+5.  **Clarify Ambiguity:** If a user's request for a transaction is unclear, ask a clarifying question.
 6.  **JSON for Transactions:** When you have all the details for a transaction, respond ONLY with the JSON object for the 'logTransaction' tool.`;
+        
+        const chatHistoryForAPI = [
+            {
+                role: "user",
+                parts: [{ text: systemInstruction }],
+            },
+            {
+                role: "model",
+                parts: [{ text: "Understood. I am Smart Accountant, ready to assist." }],
+            },
+            ...history // Add the rest of the user's actual conversation history
+        ];
 
         const chat = model.startChat({ 
             tools: [{ functionDeclarations: tools }],
-            history: history,
-            systemInstruction: systemInstruction,
+            history: chatHistoryForAPI
         });
 
         const result = await chat.sendMessage(messageText);
@@ -232,7 +244,9 @@ export async function handleMessage(sock, msg, collections) {
         }
 
         const updatedHistory = await chat.getHistory();
-        const prunedHistory = updatedHistory.slice(-10); 
+        // We only save the actual user conversation, not our system prompt
+        const userFacingHistory = updatedHistory.slice(2);
+        const prunedHistory = userFacingHistory.slice(-10); 
         await conversationsCollection.updateOne(
             { userId: senderId },
             { $set: { history: prunedHistory, updatedAt: new Date() } },

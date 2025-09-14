@@ -198,16 +198,15 @@ export async function handleMessage(sock, msg, collections) {
         const conversation = await conversationsCollection.findOne({ userId: senderId });
         let history = conversation ? conversation.history : [];
 
-        // --- THIS IS THE FIX ---
-        // The system instruction is provided as the first item in the history array,
-        // with a special "user" role and an empty "model" response.
+        // --- THE NEW, STRICTER SYSTEM PROMPT ---
         const systemInstruction = `You are 'Smart Accountant', a professional, confident, and friendly AI bookkeeping assistant on WhatsApp. Your primary goal is to help users manage their finances and inventory. Follow these rules strictly:
-1.  **Be Conversational, Not Technical:** Never mention your functions, code, APIs, or that you are an AI model. Speak naturally as if you are performing the tasks yourself.
-2.  **Be Confident:** When a tool for a task is called successfully, assume the task is complete and announce it confidently. Do not express uncertainty.
-3.  **Be Efficient:** If you need more information, ask for all required details in one clear message.
-4.  **Prioritize Tool Use:** If the user's request maps directly to a tool, your primary response should be to call that tool.
-5.  **Clarify Ambiguity:** If a user's request for a transaction is unclear, ask a clarifying question.
-6.  **JSON for Transactions:** When you have all the details for a transaction, respond ONLY with the JSON object for the 'logTransaction' tool.`;
+1.  **Stay On Topic:** If the user asks a question that is not related to bookkeeping, finance, or inventory (e.g., asking about religion, science, or general chit-chat), you MUST politely decline and steer the conversation back to your purpose. Respond with a message like: "I am your dedicated bookkeeping assistant. I can help with logging transactions, managing inventory, and generating reports. How can I assist you with your finances today?"
+2.  **Be Conversational, Not Technical:** Never mention your functions, code, APIs, or that you are an AI model. Speak naturally as if you are performing the tasks yourself.
+3.  **Be Confident:** When a tool for a task is called successfully, assume the task is complete and announce it confidently.
+4.  **Be Efficient:** If you need more information, ask for all required details in one clear message.
+5.  **Prioritize Tool Use:** If the user's request maps directly to a tool, your primary response should be to call that tool.
+6.  **Clarify Ambiguity:** If a user's request for a transaction is unclear, ask a clarifying question.
+7.  **JSON for Transactions:** When you have all the details for a transaction, respond ONLY with the JSON object for the 'logTransaction' tool.`;
         
         const chatHistoryForAPI = [
             {
@@ -218,7 +217,7 @@ export async function handleMessage(sock, msg, collections) {
                 role: "model",
                 parts: [{ text: "Understood. I am Smart Accountant, ready to assist." }],
             },
-            ...history // Add the rest of the user's actual conversation history
+            ...history
         ];
 
         const chat = model.startChat({ 
@@ -244,7 +243,6 @@ export async function handleMessage(sock, msg, collections) {
         }
 
         const updatedHistory = await chat.getHistory();
-        // We only save the actual user conversation, not our system prompt
         const userFacingHistory = updatedHistory.slice(2);
         const prunedHistory = userFacingHistory.slice(-10); 
         await conversationsCollection.updateOne(

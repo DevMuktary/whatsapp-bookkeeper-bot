@@ -27,6 +27,7 @@ async function logTransaction(args, collections, senderId) {
     }
     return { success: true, message: `Logged ${type} of ${amount} for ${description}` };
 }
+
 async function addProduct(args, collections, senderId) {
     const { productsCollection, inventoryLogsCollection } = collections;
     const { products } = args;
@@ -39,10 +40,12 @@ async function addProduct(args, collections, senderId) {
     }
     return { success: true, count: addedProducts.length, names: addedProducts.join(', ') };
 }
+
 async function setOpeningBalance(args, collections, senderId) {
     const result = await addProduct(args, collections, senderId);
     return { ...result, message: "Opening balance set." };
 }
+
 async function getInventory(args, collections, senderId) {
     const { productsCollection, usersCollection } = collections;
     const user = await usersCollection.findOne({ userId: senderId });
@@ -50,6 +53,7 @@ async function getInventory(args, collections, senderId) {
     if (products.length === 0) return { success: false, message: "No products found in inventory." };
     return { success: true, currency: user.currency || 'NGN', products: products.map(p => ({ name: p.productName, price: p.price, stock: p.stock })) };
 }
+
 async function getMonthlySummary(args, collections, senderId) {
     const { transactionsCollection, usersCollection } = collections;
     const user = await usersCollection.findOne({ userId: senderId });
@@ -65,6 +69,7 @@ async function getMonthlySummary(args, collections, senderId) {
     });
     return { success: true, currency, month: startOfMonth.toLocaleString('default', { month: 'long' }), income: totalIncome, expense: totalExpense, net: totalIncome - totalExpense };
 }
+
 async function generateTransactionReport(args, collections, senderId, sock) {
     const { transactionsCollection, usersCollection } = collections;
     const user = await usersCollection.findOne({ userId: senderId });
@@ -78,6 +83,7 @@ async function generateTransactionReport(args, collections, senderId, sock) {
     await sock.sendMessage(senderId, { document: pdfBuffer, mimetype: 'application/pdf', fileName: `Financial_Report_${monthName.replace(/ /g, '_')}.pdf`, caption: `Here is your financial report for ${monthName}.` });
     return { success: true, message: "Transaction report has been sent." };
 }
+
 async function generateInventoryReport(args, collections, senderId, sock) {
     const { productsCollection, inventoryLogsCollection, usersCollection } = collections;
     const user = await usersCollection.findOne({ userId: senderId });
@@ -92,6 +98,7 @@ async function generateInventoryReport(args, collections, senderId, sock) {
     await sock.sendMessage(senderId, { document: pdfBuffer, mimetype: 'application/pdf', fileName: `Inventory_Report_${monthName.replace(/ /g, '_')}.pdf`, caption: `Here is your inventory and profit report.` });
     return { success: true, message: "Inventory report has been sent." };
 }
+
 async function generatePnLReport(args, collections, senderId, sock) {
     const { transactionsCollection, inventoryLogsCollection, usersCollection } = collections;
     const user = await usersCollection.findOne({ userId: senderId });
@@ -135,7 +142,7 @@ async function processMessageWithAI(text, collections, senderId, sock) {
     let responseMessage = response.choices[0].message;
 
     if (responseMessage.tool_calls) {
-        messages.push(responseMessage); // Add assistant's tool call message to history
+        messages.push(responseMessage);
         const toolExecutionPromises = responseMessage.tool_calls.map(async (toolCall) => {
             const functionName = toolCall.function.name;
             const functionArgs = JSON.parse(toolCall.function.arguments);
@@ -144,31 +151,31 @@ async function processMessageWithAI(text, collections, senderId, sock) {
                 const functionResult = await selectedTool(functionArgs, collections, senderId, sock);
                 return { tool_call_id: toolCall.id, role: "tool", name: functionName, content: JSON.stringify(functionResult) };
             }
-            return null; // Return null for non-existent tools
+            return null;
         });
         
-        const toolResponses = (await Promise.all(toolExecutionPromises)).filter(Boolean); // Filter out any nulls
-        messages.push(...toolResponses);
+        const toolResponses = (await Promise.all(toolExecutionPromises)).filter(Boolean);
         
-        const secondResponse = await deepseek.chat.completions.create({ model: "deepseek-chat", messages: messages });
-        responseMessage = secondResponse.choices[0].message;
+        if (toolResponses.length > 0) {
+            messages.push(...toolResponses);
+            const secondResponse = await deepseek.chat.completions.create({ model: "deepseek-chat", messages: messages });
+            responseMessage = secondResponse.choices[0].message;
+        } else {
+            responseMessage = { role: 'assistant', content: "I'm not sure how to handle that request. Can you try rephrasing?" };
+        }
     }
 
     if (responseMessage.content) {
         await sock.sendMessage(senderId, { text: responseMessage.content });
     }
 
-    // --- CORRECTED HISTORY SAVING ---
-    // Add the current user message and the final assistant response to the history
     const newHistoryTurn = [
         { role: 'user', content: text },
-        responseMessage // This is now the *final* response from the assistant
+        responseMessage
     ];
     
-    // Filter out null content messages, which can happen with tool calls
-    const finalHistoryToSave = [...savedHistory, ...newHistoryTurn].filter(msg => msg.content !== null);
-
-    const prunedHistory = finalHistoryToSave.slice(-10); // Prune to the last 10 messages
+    const finalHistoryToSave = [...savedHistory, ...newHistoryTurn].filter(msg => msg.content !== null && msg.content !== '');
+    const prunedHistory = finalHistoryToSave.slice(-10);
     await conversationsCollection.updateOne({ userId: senderId }, { $set: { history: prunedHistory, updatedAt: new Date() } }, { upsert: true });
 }
 
@@ -176,13 +183,10 @@ export async function handleMessage(sock, msg, collections) {
     const { usersCollection, conversationsCollection } = collections;
     const senderId = msg.key.remoteJid;
     
-    // Check for different message types, focusing on text and audio
     const messageContent = msg.message;
     if (!messageContent) return;
 
     const messageText = messageContent.conversation || messageContent.extendedTextMessage?.text;
-
-    // We only process if there is text content. Audio processing would go here.
     if (!messageText || messageText.trim() === '') return;
 
     let user = await usersCollection.findOne({ userId: senderId });
@@ -209,25 +213,24 @@ export async function handleMessage(sock, msg, collections) {
                 await sock.sendMessage(senderId, { text: `Perfect. Currency set to *${currency}*.\n\nTo set up your initial stock, you can now tell me about your products. For example:\n\n"My opening balance is 20 phone chargers that cost me 3000 and I sell for 5000"` });
                 return;
             case 'awaiting_opening_balance':
-                // The AI is now smart enough to handle this directly.
-                // We transition them out of the setup state and process the message.
                 await conversationsCollection.updateOne({ userId: senderId }, { $unset: { state: "" } });
-                // Let the message fall through to the AI processor
-                break; // This break is important!
+                break;
         }
     }
     
     try {
+        await sock.sendPresenceUpdate('composing', senderId);
         await processMessageWithAI(messageText, collections, senderId, sock);
     } catch (error) {
         console.error("Error in AI message handler:", error);
         await sock.sendMessage(senderId, { text: "Sorry, I encountered an error and couldn't process your request." });
+    } finally {
+        await sock.sendPresenceUpdate('paused', senderId);
     }
 }
 
 async function updateStockAfterSale(description, collections, senderId) {
     const { productsCollection, inventoryLogsCollection } = collections;
-    // Regex to find patterns like "sale of 5 item name" or "sold 5x item name"
     const saleRegex = /(?:sale of|sold)\s*(\d+)\s*x?\s*(.+)/i;
     const match = description.match(saleRegex);
 
@@ -235,7 +238,6 @@ async function updateStockAfterSale(description, collections, senderId) {
         const quantitySold = parseInt(match[1], 10);
         const productNameQuery = match[2].trim();
         
-        // A more flexible search: finds a product where the name contains the query words
         const product = await productsCollection.findOne({ 
             userId: senderId, 
             productName: { $regex: new RegExp(productNameQuery, "i") } 
@@ -249,7 +251,8 @@ async function updateStockAfterSale(description, collections, senderId) {
         await productsCollection.updateOne({ _id: product._id }, { $inc: { stock: -quantitySold } });
         await inventoryLogsCollection.insertOne({ userId: senderId, productId: product._id, type: 'sale', quantityChange: -quantitySold, notes: description, createdAt: new Date() });
         
-        console.log(`Stock updated for ${product.productName}: sold ${quantitySold}, remaining ${product.stock - quantitySold}`);
+        const newStock = (product.stock || 0) - quantitySold;
+        console.log(`Stock updated for ${product.productName}: sold ${quantitySold}, remaining ${newStock}`);
         return product.productName;
     }
     return null;

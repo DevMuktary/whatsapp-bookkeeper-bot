@@ -18,7 +18,6 @@ const tools = [
   { type: "function", function: { name: 'generatePnLReport', description: 'Generates a professional Profit and Loss (P&L) PDF statement. Use only when the user asks for a "P&L" or "statement".', parameters: { type: 'object', properties: {} } } },
 ];
 
-// Helper function to update stock after sale - moved to top to avoid hoisting issues
 async function updateStockAfterSale(description, collections, senderId) {
     const { productsCollection, inventoryLogsCollection } = collections;
     const saleRegex = /(?:sale of|sold)\s*(\d+)\s*x?\s*(.+)/i;
@@ -333,12 +332,6 @@ const availableTools = {
 async function processMessageWithAI(text, collections, senderId, sock) {
     const { conversationsCollection } = collections;
     
-    // Check environment variable
-    if (!process.env.DEEPSEEK_API_KEY) {
-        console.error("DEEPSEEK_API_KEY is not set!");
-        throw new Error("API key not configured");
-    }
-    
     try {
         const conversation = await conversationsCollection.findOne({ userId: senderId });
         const savedHistory = conversation ? conversation.history : [];
@@ -353,11 +346,6 @@ async function processMessageWithAI(text, collections, senderId, sock) {
 
         let newHistoryEntries = [{ role: 'user', content: text }];
 
-        console.log("Making API call to DeepSeek with:", {
-            messagesCount: messages.length,
-            toolsCount: tools.length
-        });
-
         const response = await deepseek.chat.completions.create({ 
             model: "deepseek-chat", 
             messages: messages, 
@@ -370,74 +358,28 @@ async function processMessageWithAI(text, collections, senderId, sock) {
         if (responseMessage.tool_calls) {
             messages.push(responseMessage);
             
-            // Fixed tool execution with proper error handling
             const toolExecutionPromises = responseMessage.tool_calls.map(async (toolCall) => {
                 const functionName = toolCall.function.name;
-                let functionArgs;
-                
-                try {
-                    functionArgs = JSON.parse(toolCall.function.arguments);
-                } catch (parseError) {
-                    console.error(`Failed to parse tool arguments for ${functionName}:`, parseError);
-                    return {
-                        tool_call_id: toolCall.id,
-                        role: "tool",
-                        name: functionName,
-                        content: JSON.stringify({ 
-                            success: false, 
-                            message: "Invalid function arguments provided" 
-                        })
-                    };
-                }
-                
+                const functionArgs = JSON.parse(toolCall.function.arguments);
                 const selectedTool = availableTools[functionName];
-                
                 if (selectedTool) {
-                    try {
-                        const functionResult = await selectedTool(functionArgs, collections, senderId, sock);
-                        return {
-                            tool_call_id: toolCall.id,
-                            role: "tool",
-                            name: functionName,
-                            content: JSON.stringify(functionResult)
-                        };
-                    } catch (toolError) {
-                        console.error(`Tool execution error for ${functionName}:`, toolError);
-                        return {
-                            tool_call_id: toolCall.id,
-                            role: "tool",
-                            name: functionName,
-                            content: JSON.stringify({ 
-                                success: false, 
-                                message: "Tool execution failed" 
-                            })
-                        };
-                    }
-                } else {
-                    console.error(`Tool not found: ${functionName}`);
-                    return {
-                        tool_call_id: toolCall.id,
-                        role: "tool",
-                        name: functionName,
-                        content: JSON.stringify({ 
-                            success: false, 
-                            message: `Tool '${functionName}' is not available` 
-                        })
-                    };
+                    const functionResult = await selectedTool(functionArgs, collections, senderId, sock);
+                    return { tool_call_id: toolCall.id, role: "tool", name: functionName, content: JSON.stringify(functionResult) };
                 }
+                return null;
             });
             
-            const toolResponses = await Promise.all(toolExecutionPromises);
+            const toolResponses = (await Promise.all(toolExecutionPromises)).filter(Boolean);
             
             if (toolResponses.length > 0) {
                 messages.push(...toolResponses);
                 newHistoryEntries.push(responseMessage, ...toolResponses);
 
-                const secondResponse = await deepseek.chat.completions.create({ 
-                    model: "deepseek-chat", 
-                    messages: messages 
-                });
+                const secondResponse = await deepseek.chat.completions.create({ model: "deepseek-chat", messages: messages });
                 responseMessage = secondResponse.choices[0].message;
+            } else {
+                responseMessage = { role: 'assistant', content: "I'm not sure how to handle that. Could you please rephrase?" };
+                newHistoryEntries = [{ role: 'user', content: text }];
             }
         }
 
@@ -447,8 +389,23 @@ async function processMessageWithAI(text, collections, senderId, sock) {
             await sock.sendMessage(senderId, { text: responseMessage.content });
         }
 
+        // --- CORRECT, ROBUST HISTORY PRUNING LOGIC ---
         const finalHistoryToSave = [...savedHistory, ...newHistoryEntries];
-        const prunedHistory = finalHistoryToSave.slice(-10); 
+        const MAX_TURNS_TO_KEEP = 5;
+        let userMessageCount = 0;
+        let startIndex = -1;
+
+        for (let i = finalHistoryToSave.length - 1; i >= 0; i--) {
+            if (finalHistoryToSave[i].role === 'user') {
+                userMessageCount++;
+                if (userMessageCount === MAX_TURNS_TO_KEEP) {
+                    startIndex = i;
+                    break;
+                }
+            }
+        }
+        
+        const prunedHistory = startIndex !== -1 ? finalHistoryToSave.slice(startIndex) : finalHistoryToSave;
         
         await conversationsCollection.updateOne(
             { userId: senderId }, 
@@ -457,12 +414,7 @@ async function processMessageWithAI(text, collections, senderId, sock) {
         );
         
     } catch (error) {
-        console.error("Detailed error in AI message handler:", {
-            message: error.message,
-            stack: error.stack,
-            senderId,
-            messageText: text
-        });
+        console.error("Detailed error in AI message handler:", error);
         throw error;
     }
 }
@@ -476,14 +428,6 @@ export async function handleMessage(sock, msg, collections) {
 
     const messageText = messageContent.conversation || messageContent.extendedTextMessage?.text;
     if (!messageText || messageText.trim() === '') return;
-
-    console.log("Collections status:", {
-        users: !!collections.usersCollection,
-        conversations: !!collections.conversationsCollection,
-        transactions: !!collections.transactionsCollection,
-        products: !!collections.productsCollection,
-        inventoryLogs: !!collections.inventoryLogsCollection
-    });
 
     try {
         let user = await usersCollection.findOne({ userId: senderId });
@@ -519,12 +463,7 @@ export async function handleMessage(sock, msg, collections) {
         await processMessageWithAI(messageText, collections, senderId, sock);
         
     } catch (error) {
-        console.error("Error in message handler:", {
-            message: error.message,
-            stack: error.stack,
-            senderId,
-            messageText
-        });
+        console.error("Error in message handler:", error);
         await sock.sendMessage(senderId, { text: "Sorry, I encountered an error and couldn't process your request. Please try again." });
     } finally {
         await sock.sendPresenceUpdate('paused', senderId);

@@ -74,7 +74,7 @@ const tools = [
   },
 ];
 
-// --- Specialist Functions ---
+// --- Specialist Functions that return DATA for the AI to process ---
 
 async function logTransaction(args, collections, senderId) {
     const { transactionsCollection, productsCollection, inventoryLogsCollection } = collections;
@@ -194,13 +194,12 @@ async function processMessageWithAI(text, collections, senderId, sock) {
     
     const systemInstruction = `You are 'Smart Accountant', a professional, confident, and friendly AI bookkeeping assistant. Follow these rules with absolute priority: 1. **Use Tools for All Data Questions:** If a user asks a question about their specific financial or inventory data (e.g., "what are my expenses?", "how many soaps do I have?"), you MUST use a tool to get the answer. Do not answer from your own knowledge or provide placeholder text like '[Amount]'. Your primary job is to call the correct function. 2. **Never Explain Yourself:** Do not mention your functions, code, or that you are an AI. Never explain your limitations or internal thought process (e.g., do not say "I cannot access data"). Speak as if you are the one performing the action. 3. **Stay Within Abilities:** ONLY perform actions defined in the available tools. If asked to do something else (like send an email or browse the web), politely state your purpose is bookkeeping. 4. **Use the Right Tool:** For simple questions about totals (e.g., "what are my expenses?"), use 'getMonthlySummary'. For requests to "export", "download", "send the file", or receive a "PDF report", use the appropriate 'generate...Report' tool. 5. **Be Confident & Concise:** When a tool is called, assume it was successful. Announce the result confidently and briefly. 6. **Stay On Topic:** If asked about things unrelated to bookkeeping (e.g., science, general knowledge), politely guide the user back to your purpose.`;
     
-    // --- THIS IS THE FIX for loading history ---
+    // --- FIX: Correctly format the history for the API ---
     const messages = [
         { role: "system", content: systemInstruction },
         ...savedHistory.map(item => ({
             role: item.role === 'model' ? 'assistant' : 'user',
-            // Correctly access the text content from the saved format
-            content: item.parts[0].text, 
+            content: item.parts[0].text,
         })),
         { role: "user", content: text }
     ];
@@ -213,7 +212,7 @@ async function processMessageWithAI(text, collections, senderId, sock) {
     });
 
     const responseMessage = response.choices[0].message;
-    messages.push(responseMessage);
+    messages.push(responseMessage); // Add assistant's reply to the message list
 
     if (responseMessage.tool_calls) {
         for (const toolCall of responseMessage.tool_calls) {
@@ -245,15 +244,14 @@ async function processMessageWithAI(text, collections, senderId, sock) {
         }
     }
 
-    // --- THIS IS THE FIX for saving history ---
-    // Filter out system messages and tool messages, only save user/assistant turns
-    const userAndAssistantMessages = messages.filter(msg => msg.role === 'user' || msg.role === 'assistant');
-    const finalHistoryToSave = userAndAssistantMessages.slice(1).map(item => ({ // slice(1) to skip the initial user message which is already in the history
-        role: item.role === 'assistant' ? 'model' : 'user',
-        parts: [{ text: item.content || "" }], // Ensure content exists
-    }));
-
-    const prunedHistory = finalHistoryToSave.slice(-10);
+    // --- FIX: Correctly save the history ---
+    const newHistory = [
+        { role: 'user', parts: [{ text: text }] },
+        // Only add assistant's final text reply to history, ignore tool calls
+        { role: 'model', parts: [{ text: response.choices[0].message.content || "" }] } 
+    ];
+    const finalHistory = [...savedHistory, ...newHistory];
+    const prunedHistory = finalHistory.slice(-10);
     await conversationsCollection.updateOne({ userId: senderId }, { $set: { history: prunedHistory, updatedAt: new Date() } }, { upsert: true });
 }
 
@@ -314,7 +312,7 @@ export async function handleMessage(sock, msg, collections) {
             case 'awaiting_opening_balance':
                 const parsedProducts = parseProductLines(messageText);
                 if (parsedProducts.length > 0) {
-                    const resultText = await setOpeningBalance({ products: parsedProducts }, collections, senderId);
+                    await setOpeningBalance({ products: parsedProducts }, collections, senderId);
                     await sock.sendMessage(senderId, { text: "Your opening balance has been set successfully!" });
                     await conversationsCollection.updateOne({ userId: senderId }, { $unset: { state: "" } });
                 } else {

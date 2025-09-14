@@ -1,4 +1,4 @@
-import { generateMonthlyReportPDF, generateInventoryReportPDF, generatePnLReportPDF } from './reportGenerator.js';
+import { ReportGenerators } from './reportGenerator.js';
 import { ObjectId } from 'mongodb';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
@@ -99,26 +99,18 @@ const model = genAI.getGenerativeModel({
   tool_config: { function_calling_config: { mode: "any" } }
 });
 
-// --- Specialist Functions ---
+// --- Specialist Functions now return DATA for the AI to process ---
 
 async function logTransaction(args, collections, senderId) {
     const { transactionsCollection, productsCollection, inventoryLogsCollection } = collections;
     const { type, amount, description, category = 'Uncategorized' } = args;
 
-    let replyMessage = `✅ Transaction logged successfully!`;
-    if (type === 'expense') {
-        replyMessage = `✅ Expense logged under category: *${category}*`;
-    }
+    await transactionsCollection.insertOne({ userId: senderId, type, amount, description, category, createdAt: new Date() });
 
     if (type === 'income') {
-        const productSold = await updateStockAfterSale(description, { productsCollection, inventoryLogsCollection }, senderId);
-        if (productSold) {
-            replyMessage += `\n_Stock for "${productSold}" has been updated._`;
-        }
+        await updateStockAfterSale(description, { productsCollection, inventoryLogsCollection }, senderId);
     }
-    
-    await transactionsCollection.insertOne({ userId: senderId, type, amount, description, category, createdAt: new Date() });
-    return replyMessage;
+    return { success: true, message: `Logged ${type} of ${amount} for ${description}` };
 }
 
 async function addProduct(args, collections, senderId) {
@@ -139,25 +131,26 @@ async function addProduct(args, collections, senderId) {
         });
         addedProducts.push(productName);
     }
-    return `✅ Successfully added ${addedProducts.length} product(s): ${addedProducts.join(', ')}`;
+    return { success: true, count: addedProducts.length, names: addedProducts.join(', ') };
 }
 
 async function setOpeningBalance(args, collections, senderId) {
-    const resultText = await addProduct(args, collections, senderId);
-    return resultText + "\n\nYour opening balance has been set successfully!";
+    const result = await addProduct(args, collections, senderId);
+    return { ...result, message: "Opening balance set." };
 }
 
 async function getInventory(args, collections, senderId) {
-    const { productsCollection } = collections;
+    const { productsCollection, usersCollection } = collections;
+    const user = await usersCollection.findOne({ userId: senderId });
     const products = await productsCollection.find({ userId: senderId }).sort({ productName: 1 }).toArray();
     if (products.length === 0) {
-        return "You have no products in your inventory. You can set your opening balance by saying 'set my opening balance'.";
+        return { success: false, message: "No products found in inventory." };
     }
-    let inventoryList = "📦 *Your Inventory*\n\n*Name | Price | Stock*\n---------------------\n";
-    products.forEach(p => {
-        inventoryList += `${p.productName} | ₦${p.price.toLocaleString()} | ${p.stock}\n`;
-    });
-    return inventoryList;
+    return {
+        success: true,
+        currency: user.currency || 'CURRENCY',
+        products: products.map(p => ({ name: p.productName, price: p.price, stock: p.stock }))
+    };
 }
 
 async function getMonthlySummary(args, collections, senderId) {
@@ -179,196 +172,204 @@ async function getMonthlySummary(args, collections, senderId) {
         if (item._id === 'income') totalIncome = item.totalAmount;
         if (item._id === 'expense') totalExpense = item.totalAmount;
     });
-    const net = totalIncome - totalExpense;
-    const monthName = startOfMonth.toLocaleString('default', { month: 'long' });
-
-    return `📊 *Financial Summary for ${monthName}*\n\n*Total Income:* ${currency} ${totalIncome.toLocaleString()}\n*Total Expense:* ${currency} ${totalExpense.toLocaleString()}\n---------------------\n*Net Balance:* *${currency} ${net.toLocaleString()}*`;
+    
+    return {
+        success: true,
+        currency: currency,
+        month: startOfMonth.toLocaleString('default', { month: 'long' }),
+        income: totalIncome,
+        expense: totalExpense,
+        net: totalIncome - totalExpense
+    };
 }
 
-async function generateTransactionReport(args, collections, senderId) {
+async function generateTransactionReport(args, collections, senderId, sock) {
     const { transactionsCollection, usersCollection } = collections;
     const user = await usersCollection.findOne({ userId: senderId });
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
-    
-    const transactions = await transactionsCollection.find({ 
-        userId: senderId, 
-        createdAt: { $gte: startOfMonth, $lte: endOfMonth } 
-    }).sort({ createdAt: 1 }).toArray();
+    const transactions = await transactionsCollection.find({ userId: senderId, createdAt: { $gte: startOfMonth, $lte: endOfMonth } }).sort({ createdAt: 1 }).toArray();
 
     if (transactions.length === 0) {
-        return "You have no transactions this month to export.";
+        return { success: false, message: "No transactions found for this month." };
     }
 
     const monthName = startOfMonth.toLocaleString('default', { month: 'long', year: 'numeric' });
-    const pdfBuffer = await generateMonthlyReportPDF(transactions, monthName, user);
-
-    return {
-        document: pdfBuffer,
-        mimetype: 'application/pdf',
-        fileName: `Financial_Report_${monthName.replace(' ', '_')}.pdf`,
-        caption: `Here is your complete financial report for ${monthName}.`
-    };
+    const pdfBuffer = await ReportGenerators.createMonthlyReportPDF(transactions, monthName, user);
+    await sock.sendMessage(senderId, { document: pdfBuffer, mimetype: 'application/pdf', fileName: `Financial_Report_${monthName.replace(' ', '_')}.pdf`, caption: `Here is your financial report for ${monthName}.` });
+    return { success: true, message: "Transaction report has been sent." };
 }
 
-async function generateInventoryReport(args, collections, senderId) {
+async function generateInventoryReport(args, collections, senderId, sock) {
     const { productsCollection, inventoryLogsCollection, usersCollection } = collections;
     const user = await usersCollection.findOne({ userId: senderId });
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
-
     const products = await productsCollection.find({ userId: senderId }).toArray();
-    const logs = await inventoryLogsCollection.find({
-        userId: senderId,
-        createdAt: { $gte: startOfMonth, $lte: endOfMonth }
-    }).sort({ createdAt: 1 }).toArray();
+    const logs = await inventoryLogsCollection.find({ userId: senderId, createdAt: { $gte: startOfMonth, $lte: endOfMonth } }).sort({ createdAt: 1 }).toArray();
 
     if (products.length === 0) {
-        return "You have no products to report on.";
+        return { success: false, message: "No products to report on." };
     }
 
     const monthName = startOfMonth.toLocaleString('default', { month: 'long', year: 'numeric' });
-    const pdfBuffer = await generateInventoryReportPDF(products, logs, monthName, user);
-    
-    return {
-        document: pdfBuffer,
-        mimetype: 'application/pdf',
-        fileName: `Inventory_Report_${monthName.replace(' ', '_')}.pdf`,
-        caption: `Here is your complete inventory and profit report for ${monthName}.`
-    };
+    const pdfBuffer = await ReportGenerators.createInventoryReportPDF(products, logs, monthName, user);
+    await sock.sendMessage(senderId, { document: pdfBuffer, mimetype: 'application/pdf', fileName: `Inventory_Report_${monthName.replace(' ', '_')}.pdf`, caption: `Here is your inventory and profit report.` });
+    return { success: true, message: "Inventory report has been sent." };
 }
 
-async function generatePnLReport(args, collections, senderId) {
+async function generatePnLReport(args, collections, senderId, sock) {
     const { transactionsCollection, inventoryLogsCollection, usersCollection } = collections;
     const user = await usersCollection.findOne({ userId: senderId });
-
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
-
-    const income = await transactionsCollection.aggregate([
-        { $match: { userId: senderId, type: 'income', createdAt: { $gte: startOfMonth, $lte: endOfMonth } } },
-        { $group: { _id: null, total: { $sum: '$amount' } } }
-    ]).toArray();
+    const income = await transactionsCollection.aggregate([ { $match: { userId: senderId, type: 'income', createdAt: { $gte: startOfMonth, $lte: endOfMonth } } }, { $group: { _id: null, total: { $sum: '$amount' } } } ]).toArray();
     const totalRevenue = income[0]?.total || 0;
-    
-    const expensesResult = await transactionsCollection.find({ 
-        userId: senderId, 
-        type: 'expense', 
-        createdAt: { $gte: startOfMonth, $lte: endOfMonth } 
-    }).toArray();
+    const expensesResult = await transactionsCollection.find({ userId: senderId, type: 'expense', createdAt: { $gte: startOfMonth, $lte: endOfMonth } }).toArray();
 
     if (totalRevenue === 0 && expensesResult.length === 0) {
-        return "You have no financial activity recorded for this month. I cannot generate a Profit & Loss statement.";
+        return { success: false, message: "No financial activity found for this month." };
     }
 
-    const cogsLogs = await inventoryLogsCollection.aggregate([
-        { $match: { userId: senderId, type: 'sale', createdAt: { $gte: startOfMonth, $lte: endOfMonth } } },
-        { $lookup: { from: 'products', localField: 'productId', foreignField: '_id', as: 'productInfo' } },
-        { $unwind: '$productInfo' },
-        { $group: { _id: null, total: { $sum: { $multiply: [ { $abs: '$quantityChange' }, '$productInfo.cost' ] } } } }
-    ]).toArray();
+    const cogsLogs = await inventoryLogsCollection.aggregate([ { $match: { userId: senderId, type: 'sale', createdAt: { $gte: startOfMonth, $lte: endOfMonth } } }, { $lookup: { from: 'products', localField: 'productId', foreignField: '_id', as: 'productInfo' } }, { $unwind: '$productInfo' }, { $group: { _id: null, total: { $sum: { $multiply: [ { $abs: '$quantityChange' }, '$productInfo.cost' ] } } } } ]).toArray();
     const cogs = cogsLogs[0]?.total || 0;
-
     const expensesByCategory = {};
     expensesResult.forEach(exp => {
         const category = exp.category || 'Uncategorized';
-        if (!expensesByCategory[category]) {
-            expensesByCategory[category] = 0;
-        }
+        if (!expensesByCategory[category]) expensesByCategory[category] = 0;
         expensesByCategory[category] += exp.amount;
     });
 
     const monthName = startOfMonth.toLocaleString('default', { month: 'long', year: 'numeric' });
-    const pdfBuffer = await generatePnLReportPDF({ totalRevenue, cogs, expensesByCategory }, monthName, user);
-
-    return {
-        document: pdfBuffer,
-        mimetype: 'application/pdf',
-        fileName: `P&L_Report_${monthName.replace(' ', '_')}.pdf`,
-        caption: `Here is your Profit & Loss Statement for ${monthName}.`
-    };
+    const pdfBuffer = await ReportGenerators.createPnLReportPDF({ totalRevenue, cogs, expensesByCategory }, monthName, user);
+    await sock.sendMessage(senderId, { document: pdfBuffer, mimetype: 'application/pdf', fileName: `P&L_Report_${monthName.replace(' ', '_')}.pdf`, caption: `Here is your Profit & Loss Statement.` });
+    return { success: true, message: "P&L report has been sent." };
 }
 
+const availableTools = { logTransaction, addProduct, setOpeningBalance, getInventory, getMonthlySummary, generateTransactionReport, generateInventoryReport, generatePnLReport };
 
-const availableTools = {
-    logTransaction,
-    addProduct,
-    setOpeningBalance,
-    getInventory,
-    getMonthlySummary,
-    generateTransactionReport,
-    generateInventoryReport,
-    generatePnLReport,
-};
+// --- Main Message Handler ---
+export async function handleMessage(sock, msg, collections) {
+    const { usersCollection, conversationsCollection } = collections;
+    const senderId = msg.key.remoteJid;
+    const messageText = msg.message?.conversation?.trim();
 
-async function processMessageWithAI(text, collections, senderId, sock) {
-    const { conversationsCollection } = collections;
-    const conversation = await conversationsCollection.findOne({ userId: senderId });
-    let history = conversation ? conversation.history : [];
+    if (!messageText) return;
 
-    const systemInstruction = `You are 'Smart Accountant', a professional, confident, and friendly AI bookkeeping assistant. Follow these rules with absolute priority:
-1.  **Use Tools for All Data Questions:** If a user asks a question about their specific financial or inventory data (e.g., "what are my expenses?", "how many soaps do I have?"), you MUST use a tool to get the answer. Do not answer from your own knowledge or provide placeholder text like '[Amount]'. Your primary job is to call the correct function.
-2.  **Never Explain Yourself:** Do not mention your functions, code, or that you are an AI. Never explain your limitations or internal thought process (e.g., do not say "I cannot access data"). Speak as if you are the one performing the action.
-3.  **Stay Within Abilities:** ONLY perform actions defined in the available tools. If asked to do something else (like send an email or browse the web), politely state your purpose is bookkeeping.
-4.  **Use the Right Tool:** For simple questions about totals (e.g., "what are my expenses?"), use 'getMonthlySummary'. For requests to "export", "download", "send the file", or receive a "PDF report", use the appropriate 'generate...Report' tool.
-5.  **Be Confident & Concise:** When a tool is called, assume it was successful. Announce the result confidently and briefly.
-6.  **Stay On Topic:** If asked about things unrelated to bookkeeping (e.g., science, general knowledge), politely guide the user back to your purpose.`;
+    let user = await usersCollection.findOne({ userId: senderId });
+    let conversation = await conversationsCollection.findOne({ userId: senderId });
+
+    if (!user) {
+        await usersCollection.insertOne({ userId: senderId, createdAt: new Date() });
+        await conversationsCollection.updateOne({ userId: senderId }, { $set: { state: 'awaiting_store_name', history: [] } }, { upsert: true });
+        await sock.sendMessage(senderId, { text: `👋 Welcome to your new AI Bookkeeping Assistant!\n\nTo get started, please tell me the name of your business or store.` });
+        return;
+    }
     
-    const chatHistoryForAPI = [
-        { role: "user", parts: [{ text: systemInstruction }] },
-        { role: "model", parts: [{ text: "Understood. I will follow these rules." }] },
-        ...history
-    ];
-
-    const chat = model.startChat({ 
-        tools: [{ functionDeclarations: tools }],
-        history: chatHistoryForAPI
-    });
-
-    const result = await chat.sendMessage(text);
-    const call = result.response.functionCalls()?.[0];
-
-    if (call) {
-        const selectedTool = availableTools[call.name];
-        if (selectedTool) {
-            console.log(`AI is calling tool: ${call.name} with args:`, call.args);
-            await sock.sendMessage(senderId, { text: `Please give me a moment to process that...` });
-            const resultData = await selectedTool(call.args, collections, senderId);
-
-            if (typeof resultData === 'string') {
-                await sock.sendMessage(senderId, { text: resultData });
-            } else if (resultData && resultData.document) {
-                await sock.sendMessage(senderId, { 
-                    document: resultData.document,
-                    mimetype: resultData.mimetype,
-                    fileName: resultData.fileName,
-                    caption: resultData.caption
-                });
-            }
-        } else {
-            await sock.sendMessage(senderId, { text: `Sorry, I don't know how to perform the action: "${call.name}".` });
-        }
-    } else {
-        const textResponse = result.response.text();
-        // --- THE FINAL FIX ---
-        // Forcefully remove any bracketed text before sending.
-        const cleanResponse = textResponse.replace(/\[.*?\]/g, '').trim();
-        if (cleanResponse) {
-            await sock.sendMessage(senderId, { text: cleanResponse });
+    if (conversation?.state) {
+        switch (conversation.state) {
+            case 'awaiting_store_name':
+                await usersCollection.updateOne({ userId: senderId }, { $set: { storeName: messageText } });
+                await conversationsCollection.updateOne({ userId: senderId }, { $set: { state: 'awaiting_currency' } });
+                await sock.sendMessage(senderId, { text: `Great! Your store name is set to *${messageText}*.\n\nNow, please select your primary currency (e.g., NGN, USD, GHS, KES).` });
+                return;
+            case 'awaiting_currency':
+                const currency = messageText.toUpperCase();
+                await usersCollection.updateOne({ userId: senderId }, { $set: { currency: currency } });
+                await conversationsCollection.updateOne({ userId: senderId }, { $set: { state: 'awaiting_balance_confirmation' } });
+                await sock.sendMessage(senderId, { text: `Perfect. Currency set to *${currency}*.\n\nFinally, let's record your current inventory (Opening Balance).\n\nAre you ready to add your products now? (Yes/No)` });
+                return;
+            case 'awaiting_balance_confirmation':
+                if (messageText.toLowerCase().includes('yes')) {
+                    await conversationsCollection.updateOne({ userId: senderId }, { $set: { state: 'awaiting_opening_balance' } });
+                    await sock.sendMessage(senderId, { text: `Excellent! Please send your product list in the format:\n\n*<Name> <Cost> <Price> <Stock>*` });
+                } else {
+                    await conversationsCollection.updateOne({ userId: senderId }, { $unset: { state: "" } });
+                    await sock.sendMessage(senderId, { text: `No problem. Setup is complete! You can set your opening balance later by telling me "set my opening balance".\n\nI'm ready to help you manage your business!` });
+                }
+                return;
+            case 'awaiting_opening_balance':
+                const parsedProducts = parseProductLines(messageText);
+                if (parsedProducts.length > 0) {
+                    const resultText = await setOpeningBalance({ products: parsedProducts }, collections, senderId);
+                    await sock.sendMessage(senderId, { text: resultText });
+                    await conversationsCollection.updateOne({ userId: senderId }, { $unset: { state: "" } });
+                } else {
+                    await sock.sendMessage(senderId, { text: "I couldn't understand that format. Please try again in the format: `<Name> <Cost> <Price> <Stock>`" });
+                }
+                return;
         }
     }
+    
+    try {
+        const history = conversation ? conversation.history : [];
+        const systemInstruction = `You are 'Smart Accountant', a professional, confident, and friendly AI bookkeeping assistant. Follow these rules with absolute priority: 1. **Use Tools for All Data Questions:** If a user asks a question about their specific financial or inventory data (e.g., "what are my expenses?", "how many soaps do I have?"), you MUST use a tool to get the answer. Do not answer from your own knowledge or provide placeholder text like '[Amount]'. Your primary job is to call the correct function. 2. **Never Explain Yourself:** Do not mention your functions, code, or that you are an AI. Never explain your limitations or internal thought process (e.g., do not say "I cannot access data"). Speak as if you are the one performing the action. 3. **Stay Within Abilities:** ONLY perform actions defined in the available tools. If asked to do something else (like send an email or browse the web), politely state your purpose is bookkeeping. 4. **Use the Right Tool:** For simple questions about totals (e.g., "what are my expenses?"), use 'getMonthlySummary'. For requests to "export", "download", "send the file", or receive a "PDF report", use the appropriate 'generate...Report' tool. 5. **Be Confident & Concise:** When a tool is called, assume it was successful. Announce the result confidently and briefly. 6. **Stay On Topic:** If asked about things unrelated to bookkeeping (e.g., science, general knowledge), politely guide the user back to your purpose.`;
+        const chatHistoryForAPI = [ { role: "user", parts: [{ text: systemInstruction }] }, { role: "model", parts: [{ text: "Understood. I will follow these rules." }] }, ...history ];
+        const chat = model.startChat({ tools: [{ functionDeclarations: tools }], history: chatHistoryForAPI });
 
-    const updatedHistory = await chat.getHistory();
-    const userFacingHistory = updatedHistory.slice(2);
-    const prunedHistory = userFacingHistory.slice(-10); 
-    await conversationsCollection.updateOne(
-        { userId: senderId },
-        { $set: { history: prunedHistory, updatedAt: new Date() } },
-        { upsert: true }
-    );
+        // STEP 1: Send user message to AI
+        let result = await chat.sendMessage(messageText);
+        let response = result.response;
+
+        // STEP 2: Check if AI wants to call a function and loop until it doesn't
+        while (response.functionCalls() && response.functionCalls().length > 0) {
+            const functionCalls = response.functionCalls();
+            console.log("AI wants to call tools:", functionCalls.map(c => c.name));
+            
+            const functionResponses = [];
+
+            for (const call of functionCalls) {
+                const selectedTool = availableTools[call.name];
+                if (selectedTool) {
+                    const resultData = await selectedTool(call.args, collections, senderId, sock);
+                    functionResponses.push({
+                        name: call.name,
+                        response: resultData,
+                    });
+                }
+            }
+            
+            // STEP 3: Send function results back to AI
+            result = await chat.sendMessage(JSON.stringify({ functionResponses }));
+            response = result.response;
+        }
+        
+        // STEP 4: Get final AI text response and send to user
+        const finalResponse = response.text().replace(/\[.*?\]/g, '').trim();
+        if (finalResponse) {
+            await sock.sendMessage(senderId, { text: finalResponse });
+        }
+
+        const updatedHistory = await chat.getHistory();
+        const userFacingHistory = updatedHistory.slice(2);
+        const prunedHistory = userFacingHistory.slice(-10); 
+        await conversationsCollection.updateOne({ userId: senderId }, { $set: { history: prunedHistory, updatedAt: new Date() } }, { upsert: true });
+
+    } catch (error) {
+        console.error("Error in AI message handler:", error);
+        await sock.sendMessage(senderId, { text: "Sorry, I encountered an error." });
+    }
+}
+
+async function updateStockAfterSale(description, collections, senderId) {
+    const { productsCollection, inventoryLogsCollection } = collections;
+    const saleRegex = /(?:sale of|sold)\s*(\d+)x?\s*(.+)/i;
+    const match = description.match(saleRegex);
+
+    if (match) {
+        const quantitySold = parseInt(match[1], 10);
+        const productNameQuery = match[2].trim();
+        const searchWords = productNameQuery.split(' ').map(word => new RegExp(word, 'i'));
+        const product = await productsCollection.findOne({ userId: senderId, productName: { $all: searchWords } });
+        if (!product) return null;
+        await productsCollection.updateOne({ _id: product._id }, { $inc: { stock: -quantitySold } });
+        await inventoryLogsCollection.insertOne({ userId: senderId, productId: product._id, type: 'sale', quantityChange: -quantitySold, notes: description, createdAt: new Date() });
+        return product.productName;
+    }
+    return null;
 }
 
 function parseProductLines(text) {
@@ -386,101 +387,4 @@ function parseProductLines(text) {
         }
     }
     return products;
-}
-
-export async function handleMessage(sock, msg, collections) {
-    const { usersCollection, conversationsCollection } = collections;
-    const senderId = msg.key.remoteJid;
-    const messageText = msg.message?.conversation?.trim();
-
-    if (!messageText) return;
-
-    let user = await usersCollection.findOne({ userId: senderId });
-    let conversation = await conversationsCollection.findOne({ userId: senderId });
-
-    if (!user) {
-        await usersCollection.insertOne({ userId: senderId, createdAt: new Date() });
-        await conversationsCollection.updateOne(
-            { userId: senderId },
-            { $set: { state: 'awaiting_store_name', history: [] } },
-            { upsert: true }
-        );
-        const welcomeMessage = `👋 Welcome to your new AI Bookkeeping Assistant!\n\nTo get started, please tell me the name of your business or store.`;
-        await sock.sendMessage(senderId, { text: welcomeMessage });
-        return;
-    }
-    
-    switch (conversation?.state) {
-        case 'awaiting_store_name':
-            await usersCollection.updateOne({ userId: senderId }, { $set: { storeName: messageText } });
-            await conversationsCollection.updateOne({ userId: senderId }, { $set: { state: 'awaiting_currency' } });
-            await sock.sendMessage(senderId, { text: `Great! Your store name is set to *${messageText}*.\n\nNow, please select your primary currency (e.g., NGN, USD, GHS, KES).` });
-            return;
-        
-        case 'awaiting_currency':
-            const currency = messageText.toUpperCase();
-            await usersCollection.updateOne({ userId: senderId }, { $set: { currency: currency } });
-            await conversationsCollection.updateOne({ userId: senderId }, { $set: { state: 'awaiting_balance_confirmation' } });
-            await sock.sendMessage(senderId, { text: `Perfect. Currency set to *${currency}*.\n\nFinally, to get started accurately, we need to record your current inventory (Opening Balance).\n\nAre you ready to add your products now? (Yes/No)` });
-            return;
-
-        case 'awaiting_balance_confirmation':
-            if (messageText.toLowerCase().includes('yes')) {
-                await conversationsCollection.updateOne({ userId: senderId }, { $set: { state: 'awaiting_opening_balance' } });
-                await sock.sendMessage(senderId, { text: `Excellent! Please send your product list in the format:\n\n*<Name> <Cost> <Price> <Stock>*` });
-            } else {
-                await conversationsCollection.updateOne({ userId: senderId }, { $unset: { state: "" } });
-                await sock.sendMessage(senderId, { text: `No problem. Setup is complete! You can set your opening balance later by telling me "set my opening balance".\n\nI'm ready to help you manage your business!` });
-            }
-            return;
-
-        case 'awaiting_opening_balance':
-            const parsedProducts = parseProductLines(messageText);
-            if (parsedProducts.length > 0) {
-                const resultText = await setOpeningBalance({ products: parsedProducts }, collections, senderId);
-                await sock.sendMessage(senderId, { text: resultText });
-                await conversationsCollection.updateOne({ userId: senderId }, { $unset: { state: "" } });
-            } else {
-                await sock.sendMessage(senderId, { text: "I couldn't understand that format. Please try again in the format: `<Name> <Cost> <Price> <Stock>`" });
-            }
-            return;
-    }
-    
-    try {
-        await processMessageWithAI(messageText, collections, senderId, sock);
-    } catch (error) {
-        console.error("Error in AI message handler:", error);
-        await sock.sendMessage(senderId, { text: "Sorry, I encountered an error." });
-    }
-}
-
-async function updateStockAfterSale(description, collections, senderId) {
-    const { productsCollection, inventoryLogsCollection } = collections;
-    const saleRegex = /(?:sale of|sold)\s*(\d+)x?\s*(.+)/i;
-    const match = description.match(saleRegex);
-
-    if (match) {
-        const quantitySold = parseInt(match[1], 10);
-        const productNameQuery = match[2].trim();
-        const searchWords = productNameQuery.split(' ').map(word => new RegExp(word, 'i'));
-
-        const product = await productsCollection.findOne({ 
-            userId: senderId, 
-            productName: { $all: searchWords } 
-        });
-
-        if (!product) return null;
-
-        await productsCollection.updateOne({ _id: product._id }, { $inc: { stock: -quantitySold } });
-        await inventoryLogsCollection.insertOne({
-            userId: senderId,
-            productId: product._id,
-            type: 'sale',
-            quantityChange: -quantitySold,
-            notes: description,
-            createdAt: new Date()
-        });
-        return product.productName;
-    }
-    return null;
 }

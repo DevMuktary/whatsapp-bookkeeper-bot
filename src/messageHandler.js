@@ -1,4 +1,4 @@
-import { generateMonthlyReportPDF, generateInventoryReportPDF } from './reportGenerator.js';
+import { generateMonthlyReportPDF, generateInventoryReportPDF, generatePnLReportPDF } from './reportGenerator.js';
 import { ObjectId } from 'mongodb';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
@@ -7,26 +7,51 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const tools = [
   {
     name: 'logTransaction',
-    description: 'Logs a new income or expense transaction. Also use for sales of products.',
+    description: 'Logs a new income or expense transaction. Also use for sales of products. For expenses, try to identify a category from the description.',
     parameters: {
       type: 'object',
       properties: {
         type: { type: 'string', description: 'The type of transaction, either "income" or "expense".' },
         amount: { type: 'number', description: 'The numerical amount of the transaction.' },
         description: { type: 'string', description: 'A detailed description of the transaction, including product names and quantities if it is a sale.' },
+        category: { type: 'string', description: 'For expenses, a category like "rent", "utilities", "transport", "cost_of_goods", etc. Defaults to "Uncategorized".' }
       },
       required: ['type', 'amount', 'description'],
     },
   },
   {
     name: 'addProduct',
-    description: 'Adds one or more new products to the user\'s inventory.',
+    description: 'Adds one or more new products to the user\'s inventory. Should be used for regular restocking after the initial setup.',
     parameters: {
       type: 'object',
       properties: {
         products: {
           type: 'array',
           description: 'An array of products to add.',
+          items: {
+            type: 'object',
+            properties: {
+              productName: { type: 'string', description: 'The name of the product.' },
+              cost: { type: 'number', description: 'The cost price of one unit of the product.' },
+              price: { type: 'number', description: 'The selling price of one unit of the product.' },
+              stock: { type: 'number', description: 'The initial quantity in stock.' },
+            },
+            required: ['productName', 'cost', 'price', 'stock'],
+          },
+        },
+      },
+      required: ['products'],
+    },
+  },
+  {
+    name: 'setOpeningBalance',
+    description: 'Sets the initial inventory or opening balance for a user. This is typically a one-time setup action when the user first adds all their existing products.',
+    parameters: {
+      type: 'object',
+      properties: {
+        products: {
+          type: 'array',
+          description: 'An array of all the user\'s starting products.',
           items: {
             type: 'object',
             properties: {
@@ -57,6 +82,11 @@ const tools = [
     description: 'Generates and sends a detailed PDF report of inventory, sales, and profit for the current month.',
     parameters: { type: 'object', properties: {} },
   },
+  {
+    name: 'generatePnLReport',
+    description: 'Generates a professional Profit and Loss (P&L) statement for the current month.',
+    parameters: { type: 'object', properties: {} },
+  },
 ];
 
 const model = genAI.getGenerativeModel({
@@ -68,9 +98,13 @@ const model = genAI.getGenerativeModel({
 
 async function logTransaction(args, collections, senderId) {
     const { transactionsCollection, productsCollection, inventoryLogsCollection } = collections;
-    const { type, amount, description } = args;
+    const { type, amount, description, category = 'Uncategorized' } = args;
 
-    let replyMessage = '✅ Transaction logged successfully!';
+    let replyMessage = `✅ Transaction logged successfully!`;
+    if (type === 'expense') {
+        replyMessage = `✅ Expense logged under category: *${category}*`;
+    }
+
     if (type === 'income') {
         const productSold = await updateStockAfterSale(description, { productsCollection, inventoryLogsCollection }, senderId);
         if (productSold) {
@@ -78,7 +112,7 @@ async function logTransaction(args, collections, senderId) {
         }
     }
     
-    await transactionsCollection.insertOne({ userId: senderId, type, amount, description, createdAt: new Date() });
+    await transactionsCollection.insertOne({ userId: senderId, type, amount, description, category, createdAt: new Date() });
     return replyMessage;
 }
 
@@ -103,11 +137,16 @@ async function addProduct(args, collections, senderId) {
     return `✅ Successfully added ${addedProducts.length} product(s): ${addedProducts.join(', ')}`;
 }
 
+async function setOpeningBalance(args, collections, senderId) {
+    const resultText = await addProduct(args, collections, senderId);
+    return resultText + "\n\nYour opening balance has been set successfully!";
+}
+
 async function getInventory(args, collections, senderId) {
     const { productsCollection } = collections;
     const products = await productsCollection.find({ userId: senderId }).sort({ productName: 1 }).toArray();
     if (products.length === 0) {
-        return "You have no products in your inventory.";
+        return "You have no products in your inventory. You can set your opening balance by saying 'set my opening balance'.";
     }
     let inventoryList = "📦 *Your Inventory*\n\n*Name | Price | Stock*\n---------------------\n";
     products.forEach(p => {
@@ -117,7 +156,9 @@ async function getInventory(args, collections, senderId) {
 }
 
 async function generateTransactionReport(args, collections, senderId, sock) {
-    const { transactionsCollection } = collections;
+    const { transactionsCollection, usersCollection } = collections;
+    const user = await usersCollection.findOne({ userId: senderId });
+
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
@@ -171,13 +212,127 @@ async function generateInventoryReport(args, collections, senderId, sock) {
     return null;
 }
 
+async function generatePnLReport(args, collections, senderId, sock) {
+    const { transactionsCollection, inventoryLogsCollection, usersCollection } = collections;
+    const user = await usersCollection.findOne({ userId: senderId });
+
+    await sock.sendMessage(senderId, { text: 'Generating your Profit & Loss statement... 📈' });
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+
+    const income = await transactionsCollection.aggregate([
+        { $match: { userId: senderId, type: 'income', createdAt: { $gte: startOfMonth, $lte: endOfMonth } } },
+        { $group: { _id: null, total: { $sum: '$amount' } } }
+    ]).toArray();
+    const totalRevenue = income[0]?.total || 0;
+
+    const cogsLogs = await inventoryLogsCollection.aggregate([
+        { $match: { userId: senderId, type: 'sale', createdAt: { $gte: startOfMonth, $lte: endOfMonth } } },
+        { $lookup: { from: 'products', localField: 'productId', foreignField: '_id', as: 'productInfo' } },
+        { $unwind: '$productInfo' },
+        { $group: { _id: null, total: { $sum: { $multiply: [ { $abs: '$quantityChange' }, '$productInfo.cost' ] } } } }
+    ]).toArray();
+    const cogs = cogsLogs[0]?.total || 0;
+
+    const expenses = await transactionsCollection.aggregate([
+        { $match: { userId: senderId, type: 'expense', createdAt: { $gte: startOfMonth, $lte: endOfMonth } } },
+        { $group: { _id: '$category', total: { $sum: '$amount' } } }
+    ]).toArray();
+    
+    const expensesByCategory = {};
+    expenses.forEach(exp => {
+        expensesByCategory[exp._id] = exp.total;
+    });
+
+    const monthName = startOfMonth.toLocaleString('default', { month: 'long', year: 'numeric' });
+    const pdfBuffer = await generatePnLReportPDF({ totalRevenue, cogs, expensesByCategory }, monthName, user);
+
+    await sock.sendMessage(senderId, {
+        document: pdfBuffer,
+        mimetype: 'application/pdf',
+        fileName: `P&L_Report_${monthName.replace(' ', '_')}.pdf`,
+        caption: `Here is your Profit & Loss Statement for ${monthName}.`
+    });
+    return null;
+}
+
 const availableTools = {
     logTransaction,
     addProduct,
+    setOpeningBalance,
     getInventory,
     generateTransactionReport,
     generateInventoryReport,
+    generatePnLReport,
 };
+
+async function processMessageWithAI(text, collections, senderId, sock) {
+    const { conversationsCollection } = collections;
+    const conversation = await conversationsCollection.findOne({ userId: senderId });
+    let history = conversation ? conversation.history : [];
+
+    const systemInstruction = `You are 'Smart Accountant', a professional, confident, and friendly AI bookkeeping assistant on WhatsApp. Your primary goal is to help users manage their finances and inventory. Follow these rules strictly:
+1.  **Stay On Topic:** If the user asks a question that is not related to bookkeeping, finance, or inventory, you MUST politely decline and steer the conversation back to your purpose. Respond with a message like: "I am your dedicated bookkeeping assistant. How can I assist you with your finances today?"
+2.  **Be Conversational, Not Technical:** Never mention your functions, code, APIs, or that you are an AI model. Speak naturally as if you are performing the tasks yourself.
+3.  **Be Confident:** When a tool for a task is called successfully, assume the task is complete and announce it confidently.
+4.  **Be Efficient & Clarify:** If you need more information, ask for all required details in one clear message. If a transaction is unclear, ask for clarification.
+5.  **Prioritize Tool Use:** Your main goal is to identify the user's intent and call the appropriate tool.`;
+    
+    const chatHistoryForAPI = [
+        { role: "user", parts: [{ text: systemInstruction }] },
+        { role: "model", parts: [{ text: "Understood. I am Smart Accountant, ready to assist." }] },
+        ...history
+    ];
+
+    const chat = model.startChat({ 
+        tools: [{ functionDeclarations: tools }],
+        history: chatHistoryForAPI
+    });
+
+    const result = await chat.sendMessage(text);
+    const call = result.response.functionCalls()?.[0];
+
+    if (call) {
+        const selectedTool = availableTools[call.name];
+        if (selectedTool) {
+            console.log(`AI is calling tool: ${call.name} with args:`, call.args);
+            const resultText = await selectedTool(call.args, collections, senderId, sock);
+            if (resultText) {
+                await sock.sendMessage(senderId, { text: resultText });
+            }
+        }
+    } else {
+        const textResponse = result.response.text();
+        await sock.sendMessage(senderId, { text: textResponse });
+    }
+
+    const updatedHistory = await chat.getHistory();
+    const userFacingHistory = updatedHistory.slice(2);
+    const prunedHistory = userFacingHistory.slice(-10); 
+    await conversationsCollection.updateOne(
+        { userId: senderId },
+        { $set: { history: prunedHistory, updatedAt: new Date() } },
+        { upsert: true }
+    );
+}
+
+function parseProductLines(text) {
+    const lines = text.split('\n').filter(line => line.trim() !== '');
+    const products = [];
+    for (const line of lines) {
+        const parts = line.trim().split(' ');
+        if (parts.length < 4) continue;
+        const stock = parseInt(parts.pop(), 10);
+        const price = parseFloat(parts.pop());
+        const cost = parseFloat(parts.pop());
+        const productName = parts.join(' ');
+        if (!isNaN(cost) && !isNaN(price) && !isNaN(stock)) {
+            products.push({ productName, cost, price, stock });
+        }
+    }
+    return products;
+}
 
 export async function handleMessage(sock, msg, collections) {
     const { usersCollection, conversationsCollection } = collections;
@@ -187,73 +342,62 @@ export async function handleMessage(sock, msg, collections) {
     if (!messageText) return;
 
     let user = await usersCollection.findOne({ userId: senderId });
+    let conversation = await conversationsCollection.findOne({ userId: senderId });
+
     if (!user) {
         await usersCollection.insertOne({ userId: senderId, createdAt: new Date() });
-        const welcomeMessage = `👋 Welcome to your AI Bookkeeping Assistant!\n\nI'm powered by an advanced AI with memory. You can speak to me in plain English.\n\n*Try things like:*\n- "I sold two phone chargers for 10000"\n- "Add a product called Soap, it cost me 300, I sell it for 500, and I have 50 in stock"\n- "What's in my inventory?"\n- "Export my profit report for this month"`;
+        await conversationsCollection.updateOne(
+            { userId: senderId },
+            { $set: { state: 'awaiting_store_name', history: [] } },
+            { upsert: true }
+        );
+        const welcomeMessage = `👋 Welcome to your new AI Bookkeeping Assistant!\n\nTo get started, please tell me the name of your business or store.`;
         await sock.sendMessage(senderId, { text: welcomeMessage });
         return;
     }
-
-    try {
-        const conversation = await conversationsCollection.findOne({ userId: senderId });
-        let history = conversation ? conversation.history : [];
-
-        // --- THE NEW, STRICTER SYSTEM PROMPT ---
-        const systemInstruction = `You are 'Smart Accountant', a professional, confident, and friendly AI bookkeeping assistant on WhatsApp. Your primary goal is to help users manage their finances and inventory. Follow these rules strictly:
-1.  **Stay On Topic:** If the user asks a question that is not related to bookkeeping, finance, or inventory (e.g., asking about religion, science, or general chit-chat), you MUST politely decline and steer the conversation back to your purpose. Respond with a message like: "I am your dedicated bookkeeping assistant. I can help with logging transactions, managing inventory, and generating reports. How can I assist you with your finances today?"
-2.  **Be Conversational, Not Technical:** Never mention your functions, code, APIs, or that you are an AI model. Speak naturally as if you are performing the tasks yourself.
-3.  **Be Confident:** When a tool for a task is called successfully, assume the task is complete and announce it confidently.
-4.  **Be Efficient:** If you need more information, ask for all required details in one clear message.
-5.  **Prioritize Tool Use:** If the user's request maps directly to a tool, your primary response should be to call that tool.
-6.  **Clarify Ambiguity:** If a user's request for a transaction is unclear, ask a clarifying question.
-7.  **JSON for Transactions:** When you have all the details for a transaction, respond ONLY with the JSON object for the 'logTransaction' tool.`;
+    
+    // --- State-Driven Onboarding Logic ---
+    switch (conversation?.state) {
+        case 'awaiting_store_name':
+            await usersCollection.updateOne({ userId: senderId }, { $set: { storeName: messageText } });
+            await conversationsCollection.updateOne({ userId: senderId }, { $set: { state: 'awaiting_currency' } });
+            await sock.sendMessage(senderId, { text: `Great! Your store name is set to *${messageText}*.\n\nNow, please select your primary currency (e.g., NGN, USD, GHS, KES).` });
+            return;
         
-        const chatHistoryForAPI = [
-            {
-                role: "user",
-                parts: [{ text: systemInstruction }],
-            },
-            {
-                role: "model",
-                parts: [{ text: "Understood. I am Smart Accountant, ready to assist." }],
-            },
-            ...history
-        ];
+        case 'awaiting_currency':
+            const currency = messageText.toUpperCase();
+            await usersCollection.updateOne({ userId: senderId }, { $set: { currency: currency } });
+            await conversationsCollection.updateOne({ userId: senderId }, { $set: { state: 'awaiting_balance_confirmation' } });
+            await sock.sendMessage(senderId, { text: `Perfect. Currency set to *${currency}*.\n\nFinally, to get started accurately, we need to record your current inventory (Opening Balance).\n\nAre you ready to add your products now? (Yes/No)` });
+            return;
 
-        const chat = model.startChat({ 
-            tools: [{ functionDeclarations: tools }],
-            history: chatHistoryForAPI
-        });
-
-        const result = await chat.sendMessage(messageText);
-        const call = result.response.functionCalls()?.[0];
-
-        if (call) {
-            const selectedTool = availableTools[call.name];
-            if (selectedTool) {
-                console.log(`AI is calling tool: ${call.name} with args:`, call.args);
-                const resultText = await selectedTool(call.args, collections, senderId, sock);
-                if (resultText) {
-                    await sock.sendMessage(senderId, { text: resultText });
-                }
+        case 'awaiting_balance_confirmation':
+            if (messageText.toLowerCase().includes('yes')) {
+                await conversationsCollection.updateOne({ userId: senderId }, { $set: { state: 'awaiting_opening_balance' } });
+                await sock.sendMessage(senderId, { text: `Excellent! Please send your product list in the format:\n\n*<Name> <Cost> <Price> <Stock>*` });
+            } else {
+                await conversationsCollection.updateOne({ userId: senderId }, { $unset: { state: "" } });
+                await sock.sendMessage(senderId, { text: `No problem. Setup is complete! You can set your opening balance later by telling me "set my opening balance".\n\nI'm ready to help you manage your business!` });
             }
-        } else {
-            const textResponse = result.response.text();
-            await sock.sendMessage(senderId, { text: textResponse });
-        }
+            return;
 
-        const updatedHistory = await chat.getHistory();
-        const userFacingHistory = updatedHistory.slice(2);
-        const prunedHistory = userFacingHistory.slice(-10); 
-        await conversationsCollection.updateOne(
-            { userId: senderId },
-            { $set: { history: prunedHistory, updatedAt: new Date() } },
-            { upsert: true }
-        );
-
+        case 'awaiting_opening_balance':
+            const parsedProducts = parseProductLines(messageText);
+            if (parsedProducts.length > 0) {
+                const resultText = await setOpeningBalance({ products: parsedProducts }, collections, senderId);
+                await sock.sendMessage(senderId, { text: resultText });
+                await conversationsCollection.updateOne({ userId: senderId }, { $unset: { state: "" } });
+            } else {
+                await sock.sendMessage(senderId, { text: "I couldn't understand that format. Please try again in the format: `<Name> <Cost> <Price> <Stock>`" });
+            }
+            return;
+    }
+    
+    try {
+        await processMessageWithAI(messageText, collections, senderId, sock);
     } catch (error) {
         console.error("Error in AI message handler:", error);
-        await sock.sendMessage(senderId, { text: "Sorry, I encountered an error trying to understand that." });
+        await sock.sendMessage(senderId, { text: "Sorry, I encountered an error." });
     }
 }
 

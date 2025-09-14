@@ -161,7 +161,9 @@ async function getInventory(args, collections, senderId) {
 }
 
 async function getMonthlySummary(args, collections, senderId) {
-    const { transactionsCollection } = collections;
+    const { transactionsCollection, usersCollection } = collections;
+    const user = await usersCollection.findOne({ userId: senderId });
+    const currency = user.currency || 'CURRENCY';
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
@@ -180,7 +182,7 @@ async function getMonthlySummary(args, collections, senderId) {
     const net = totalIncome - totalExpense;
     const monthName = startOfMonth.toLocaleString('default', { month: 'long' });
 
-    return `📊 *Financial Summary for ${monthName}*\n\n*Total Income:* ₦${totalIncome.toLocaleString()}\n*Total Expense:* ₦${totalExpense.toLocaleString()}\n---------------------\n*Net Balance:* *₦${net.toLocaleString()}*`;
+    return `📊 *Financial Summary for ${monthName}*\n\n*Total Income:* ${currency} ${totalIncome.toLocaleString()}\n*Total Expense:* ${currency} ${totalExpense.toLocaleString()}\n---------------------\n*Net Balance:* *${currency} ${net.toLocaleString()}*`;
 }
 
 async function generateTransactionReport(args, collections, senderId) {
@@ -307,16 +309,17 @@ async function processMessageWithAI(text, collections, senderId, sock) {
     const conversation = await conversationsCollection.findOne({ userId: senderId });
     let history = conversation ? conversation.history : [];
 
-    const systemInstruction = `You are 'Smart Accountant', a professional, confident, and friendly AI bookkeeping assistant. Follow these rules strictly:
-1.  **Never Explain Yourself:** Do not mention your functions, code, or that you are an AI. Never explain your limitations or internal thought process (e.g., do not say "I cannot access data"). Speak as if you are the one performing the action.
-2.  **Stay Within Abilities:** ONLY perform actions defined in the available tools. If asked to do something else (like send an email or browse the web), politely decline and state your purpose is bookkeeping.
-3.  **Use the Right Tool:** For simple questions about totals (e.g., "what are my expenses?"), use the 'getMonthlySummary' tool. For requests to "export", "download", "send the file", or receive a "PDF report", use the appropriate 'generate...Report' tool.
-4.  **Be Confident & Concise:** When a tool is called, assume it was successful. Announce the result confidently and briefly.
-5.  **Stay On Topic:** If asked about things unrelated to bookkeeping (e.g., science, general knowledge), politely guide the user back to your purpose.`;
+    const systemInstruction = `You are 'Smart Accountant', a professional, confident, and friendly AI bookkeeping assistant. Follow these rules with absolute priority:
+1.  **Use Tools for All Data Questions:** If a user asks a question about their specific financial or inventory data (e.g., "what are my expenses?", "how many soaps do I have?"), you MUST use a tool to get the answer. Do not answer from your own knowledge or provide placeholder text like '[Amount]'. Your primary job is to call the correct function.
+2.  **Never Explain Yourself:** Do not mention your functions, code, or that you are an AI. Never explain your limitations or internal thought process (e.g., do not say "I cannot access data"). Speak as if you are the one performing the action.
+3.  **Stay Within Abilities:** ONLY perform actions defined in the available tools. If asked to do something else (like send an email or browse the web), politely state your purpose is bookkeeping.
+4.  **Use the Right Tool:** For simple questions about totals (e.g., "what are my expenses?"), use 'getMonthlySummary'. For requests to "export", "download", "send the file", or receive a "PDF report", use the appropriate 'generate...Report' tool.
+5.  **Be Confident & Concise:** When a tool is called, assume it was successful. Announce the result confidently and briefly.
+6.  **Stay On Topic:** If asked about things unrelated to bookkeeping (e.g., science, general knowledge), politely guide the user back to your purpose.`;
     
     const chatHistoryForAPI = [
         { role: "user", parts: [{ text: systemInstruction }] },
-        { role: "model", parts: [{ text: "Understood. I am Smart Accountant, ready to assist." }] },
+        { role: "model", parts: [{ text: "Understood. I will follow these rules." }] },
         ...history
     ];
 

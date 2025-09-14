@@ -190,15 +190,17 @@ const availableTools = { logTransaction, addProduct, setOpeningBalance, getInven
 async function processMessageWithAI(text, collections, senderId, sock) {
     const { conversationsCollection } = collections;
     const conversation = await conversationsCollection.findOne({ userId: senderId });
-    let history = conversation ? conversation.history : [];
-
-    const systemInstruction = `You are 'Smart Accountant', a professional, confident, and friendly AI bookkeeping assistant. ...`; // Full system prompt
+    const savedHistory = conversation ? conversation.history : [];
     
+    const systemInstruction = `You are 'Smart Accountant', a professional, confident, and friendly AI bookkeeping assistant. Follow these rules with absolute priority: 1. **Use Tools for All Data Questions:** If a user asks a question about their specific financial or inventory data (e.g., "what are my expenses?", "how many soaps do I have?"), you MUST use a tool to get the answer. Do not answer from your own knowledge or provide placeholder text like '[Amount]'. Your primary job is to call the correct function. 2. **Never Explain Yourself:** Do not mention your functions, code, or that you are an AI. Never explain your limitations or internal thought process (e.g., do not say "I cannot access data"). Speak as if you are the one performing the action. 3. **Stay Within Abilities:** ONLY perform actions defined in the available tools. If asked to do something else (like send an email or browse the web), politely state your purpose is bookkeeping. 4. **Use the Right Tool:** For simple questions about totals (e.g., "what are my expenses?"), use 'getMonthlySummary'. For requests to "export", "download", "send the file", or receive a "PDF report", use the appropriate 'generate...Report' tool. 5. **Be Confident & Concise:** When a tool is called, assume it was successful. Announce the result confidently and briefly. 6. **Stay On Topic:** If asked about things unrelated to bookkeeping (e.g., science, general knowledge), politely guide the user back to your purpose.`;
+    
+    // --- THIS IS THE FIX for loading history ---
     const messages = [
         { role: "system", content: systemInstruction },
-        ...history.map(item => ({
+        ...savedHistory.map(item => ({
             role: item.role === 'model' ? 'assistant' : 'user',
-            content: item.content,
+            // Correctly access the text content from the saved format
+            content: item.parts[0].text, 
         })),
         { role: "user", content: text }
     ];
@@ -243,12 +245,16 @@ async function processMessageWithAI(text, collections, senderId, sock) {
         }
     }
 
-    // Update history
-    const finalHistory = messages.slice(1).map(item => ({
+    // --- THIS IS THE FIX for saving history ---
+    // Filter out system messages and tool messages, only save user/assistant turns
+    const userAndAssistantMessages = messages.filter(msg => msg.role === 'user' || msg.role === 'assistant');
+    const finalHistoryToSave = userAndAssistantMessages.slice(1).map(item => ({ // slice(1) to skip the initial user message which is already in the history
         role: item.role === 'assistant' ? 'model' : 'user',
-        content: item.content,
-    })).slice(-10);
-    await conversationsCollection.updateOne({ userId: senderId }, { $set: { history: finalHistory, updatedAt: new Date() } }, { upsert: true });
+        parts: [{ text: item.content || "" }], // Ensure content exists
+    }));
+
+    const prunedHistory = finalHistoryToSave.slice(-10);
+    await conversationsCollection.updateOne({ userId: senderId }, { $set: { history: prunedHistory, updatedAt: new Date() } }, { upsert: true });
 }
 
 function parseProductLines(text) {

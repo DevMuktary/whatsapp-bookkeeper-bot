@@ -118,11 +118,71 @@ export async function generateInventoryReportPDF(products, logs, monthName) {
                     doc.moveTo(50, doc.y + 10).lineTo(740, doc.y + 10).strokeColor('#dddddd').stroke();
                 });
             }
-            // Add a page break if there are more products, to avoid overflow
             if (products.indexOf(product) < products.length - 1) {
                 doc.addPage({ margin: 50, layout: 'landscape' });
             }
         });
+
+        doc.end();
+        const buffers = [];
+        stream.on('data', chunk => buffers.push(chunk));
+        stream.on('end', () => resolve(Buffer.concat(buffers)));
+    });
+}
+
+// --- Function for the Profit & Loss Statement ---
+export async function generatePnLReportPDF(data, monthName, user) {
+    return new Promise((resolve) => {
+        const doc = new PDFDocument({ margin: 50 });
+        const stream = new PassThrough();
+        doc.pipe(stream);
+
+        const { totalRevenue, cogs, expensesByCategory } = data;
+        const grossProfit = totalRevenue - cogs;
+        const totalExpenses = Object.values(expensesByCategory).reduce((sum, val) => sum + val, 0);
+        const netProfit = grossProfit - totalExpenses;
+        const currency = user.currency || 'NGN';
+
+        // Header
+        doc.fontSize(20).font('Helvetica-Bold').text('Profit & Loss Statement', { align: 'center' });
+        doc.fontSize(14).font('Helvetica').text(user.storeName, { align: 'center' });
+        doc.fontSize(12).text(`For the Month of ${monthName}`, { align: 'center' });
+        doc.moveDown(2);
+
+        // Revenue Section
+        doc.fontSize(14).font('Helvetica-Bold').text('Revenue');
+        doc.moveTo(50, doc.y).lineTo(550, doc.y).stroke();
+        doc.fontSize(11).font('Helvetica').text('Total Sales Revenue', { continued: true }).text(currency + ' ' + totalRevenue.toLocaleString(), { align: 'right' });
+        doc.moveDown();
+
+        // COGS & Gross Profit
+        doc.text('Cost of Goods Sold (COGS)', { continued: true }).text(currency + ' ' + cogs.toLocaleString(), { align: 'right' });
+        doc.moveTo(50, doc.y).lineTo(550, doc.y).strokeColor('black').stroke();
+        doc.font('Helvetica-Bold').text('Gross Profit', { continued: true }).text(currency + ' ' + grossProfit.toLocaleString(), { align: 'right' });
+        doc.moveDown(2);
+
+        // Operating Expenses Section
+        doc.fontSize(14).font('Helvetica-Bold').text('Operating Expenses');
+        doc.moveTo(50, doc.y).lineTo(550, doc.y).stroke();
+        doc.font('Helvetica');
+        if (Object.keys(expensesByCategory).length > 0) {
+            for (const [category, amount] of Object.entries(expensesByCategory)) {
+                doc.text(category.charAt(0).toUpperCase() + category.slice(1), { continued: true }).text(currency + ' ' + amount.toLocaleString(), { align: 'right' });
+            }
+        } else {
+            doc.text("No operating expenses logged.", { color: 'grey' });
+        }
+        doc.moveTo(50, doc.y).lineTo(550, doc.y).strokeColor('black').stroke();
+        doc.font('Helvetica-Bold').text('Total Operating Expenses', { continued: true }).text(currency + ' ' + totalExpenses.toLocaleString(), { align: 'right' });
+        doc.moveDown(2);
+
+        // Net Profit Section
+        const finalY = doc.y;
+        doc.moveTo(50, finalY).lineTo(550, finalY).stroke();
+        doc.moveTo(50, finalY + 1.5).lineTo(550, finalY + 1.5).stroke();
+        doc.fontSize(14).font('Helvetica-Bold').text('Net Profit / (Loss)', { continued: true }).text(currency + ' ' + netProfit.toLocaleString(), { align: 'right' });
+        doc.moveTo(50, doc.y).lineTo(550, doc.y).stroke();
+        doc.moveTo(50, doc.y + 1.5).lineTo(550, doc.y + 1.5).stroke();
 
         doc.end();
         const buffers = [];

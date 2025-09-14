@@ -4,9 +4,10 @@ import pino from 'pino';
 import { connectToDB } from './db.js';
 import { handleMessage } from './messageHandler.js';
 
+const processingUsers = new Set(); // Manages active users
+
 export async function startBot() {
     console.log("Starting Bot...");
-    // Connect to DB and get all collections
     const collections = await connectToDB();
 
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
@@ -41,8 +42,22 @@ export async function startBot() {
     sock.ev.on('messages.upsert', async (m) => {
         const msg = m.messages[0];
         if (!msg.key.fromMe && msg.message) {
-            // Pass the socket and all database collections to the handler
-            await handleMessage(sock, msg, collections);
+            const senderId = msg.key.remoteJid;
+
+            // Prevents a single user from running multiple commands at once
+            if (processingUsers.has(senderId)) {
+                return;
+            }
+
+            processingUsers.add(senderId); // Lock the user
+
+            try {
+                await handleMessage(sock, msg, collections);
+            } catch (error) {
+                console.error("Unhandled error in message handler pipeline:", error);
+            } finally {
+                processingUsers.delete(senderId); // Unlock the user
+            }
         }
     });
 }

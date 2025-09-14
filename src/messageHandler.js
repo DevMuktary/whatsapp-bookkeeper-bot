@@ -18,6 +18,7 @@ const tools = [
   { type: "function", function: { name: 'generatePnLReport', description: 'Generates a professional Profit and Loss (P&L) PDF statement. Use only when the user asks for a "P&L" or "statement".', parameters: { type: 'object', properties: {} } } },
 ];
 
+// Helper function to update stock after sale - moved to top to avoid hoisting issues
 async function updateStockAfterSale(description, collections, senderId) {
     const { productsCollection, inventoryLogsCollection } = collections;
     const saleRegex = /(?:sale of|sold)\s*(\d+)\s*x?\s*(.+)/i;
@@ -332,6 +333,12 @@ const availableTools = {
 async function processMessageWithAI(text, collections, senderId, sock) {
     const { conversationsCollection } = collections;
     
+    // Validate environment variable
+    if (!process.env.DEEPSEEK_API_KEY) {
+        console.error("DEEPSEEK_API_KEY is not set!");
+        throw new Error("API key not configured");
+    }
+    
     try {
         const conversation = await conversationsCollection.findOne({ userId: senderId });
         const savedHistory = conversation ? conversation.history : [];
@@ -346,6 +353,11 @@ async function processMessageWithAI(text, collections, senderId, sock) {
 
         let newHistoryEntries = [{ role: 'user', content: text }];
 
+        console.log("Making API call to DeepSeek with:", {
+            messagesCount: messages.length,
+            toolsCount: tools.length
+        });
+
         const response = await deepseek.chat.completions.create({ 
             model: "deepseek-chat", 
             messages: messages, 
@@ -358,28 +370,78 @@ async function processMessageWithAI(text, collections, senderId, sock) {
         if (responseMessage.tool_calls) {
             messages.push(responseMessage);
             
+            // Robust tool execution with comprehensive error handling
             const toolExecutionPromises = responseMessage.tool_calls.map(async (toolCall) => {
                 const functionName = toolCall.function.name;
-                const functionArgs = JSON.parse(toolCall.function.arguments);
-                const selectedTool = availableTools[functionName];
-                if (selectedTool) {
-                    const functionResult = await selectedTool(functionArgs, collections, senderId, sock);
-                    return { tool_call_id: toolCall.id, role: "tool", name: functionName, content: JSON.stringify(functionResult) };
+                let functionArgs;
+                
+                // Handle JSON parsing errors
+                try {
+                    functionArgs = JSON.parse(toolCall.function.arguments);
+                } catch (parseError) {
+                    console.error(`Failed to parse tool arguments for ${functionName}:`, parseError);
+                    return {
+                        tool_call_id: toolCall.id,
+                        role: "tool",
+                        name: functionName,
+                        content: JSON.stringify({ 
+                            success: false, 
+                            message: "Invalid function arguments provided" 
+                        })
+                    };
                 }
-                return null;
+                
+                const selectedTool = availableTools[functionName];
+                
+                if (selectedTool) {
+                    // Handle tool execution errors
+                    try {
+                        const functionResult = await selectedTool(functionArgs, collections, senderId, sock);
+                        return {
+                            tool_call_id: toolCall.id,
+                            role: "tool",
+                            name: functionName,
+                            content: JSON.stringify(functionResult)
+                        };
+                    } catch (toolError) {
+                        console.error(`Tool execution error for ${functionName}:`, toolError);
+                        return {
+                            tool_call_id: toolCall.id,
+                            role: "tool",
+                            name: functionName,
+                            content: JSON.stringify({ 
+                                success: false, 
+                                message: "Tool execution failed" 
+                            })
+                        };
+                    }
+                } else {
+                    // Handle missing tools
+                    console.error(`Tool not found: ${functionName}`);
+                    return {
+                        tool_call_id: toolCall.id,
+                        role: "tool",
+                        name: functionName,
+                        content: JSON.stringify({ 
+                            success: false, 
+                            message: `Tool '${functionName}' is not available` 
+                        })
+                    };
+                }
             });
             
-            const toolResponses = (await Promise.all(toolExecutionPromises)).filter(Boolean);
+            // Wait for all tool executions to complete (no filtering needed)
+            const toolResponses = await Promise.all(toolExecutionPromises);
             
             if (toolResponses.length > 0) {
                 messages.push(...toolResponses);
                 newHistoryEntries.push(responseMessage, ...toolResponses);
 
-                const secondResponse = await deepseek.chat.completions.create({ model: "deepseek-chat", messages: messages });
+                const secondResponse = await deepseek.chat.completions.create({ 
+                    model: "deepseek-chat", 
+                    messages: messages 
+                });
                 responseMessage = secondResponse.choices[0].message;
-            } else {
-                responseMessage = { role: 'assistant', content: "I'm not sure how to handle that. Could you please rephrase?" };
-                newHistoryEntries = [{ role: 'user', content: text }];
             }
         }
 
@@ -389,12 +451,13 @@ async function processMessageWithAI(text, collections, senderId, sock) {
             await sock.sendMessage(senderId, { text: responseMessage.content });
         }
 
-        // --- CORRECT, ROBUST HISTORY PRUNING LOGIC ---
+        // Use your improved history pruning logic - counts user turns instead of naive slicing
         const finalHistoryToSave = [...savedHistory, ...newHistoryEntries];
         const MAX_TURNS_TO_KEEP = 5;
         let userMessageCount = 0;
         let startIndex = -1;
 
+        // Count backwards from the end to find the 5th user message
         for (let i = finalHistoryToSave.length - 1; i >= 0; i--) {
             if (finalHistoryToSave[i].role === 'user') {
                 userMessageCount++;
@@ -405,6 +468,7 @@ async function processMessageWithAI(text, collections, senderId, sock) {
             }
         }
         
+        // Keep everything from the 5th user message to the end, or all messages if less than 5 turns
         const prunedHistory = startIndex !== -1 ? finalHistoryToSave.slice(startIndex) : finalHistoryToSave;
         
         await conversationsCollection.updateOne(
@@ -414,7 +478,12 @@ async function processMessageWithAI(text, collections, senderId, sock) {
         );
         
     } catch (error) {
-        console.error("Detailed error in AI message handler:", error);
+        console.error("Detailed error in AI message handler:", {
+            message: error.message,
+            stack: error.stack,
+            senderId,
+            messageText: text
+        });
         throw error;
     }
 }
@@ -429,10 +498,20 @@ export async function handleMessage(sock, msg, collections) {
     const messageText = messageContent.conversation || messageContent.extendedTextMessage?.text;
     if (!messageText || messageText.trim() === '') return;
 
+    // Debug logging for collections status
+    console.log("Collections status:", {
+        users: !!collections.usersCollection,
+        conversations: !!collections.conversationsCollection,
+        transactions: !!collections.transactionsCollection,
+        products: !!collections.productsCollection,
+        inventoryLogs: !!collections.inventoryLogsCollection
+    });
+
     try {
         let user = await usersCollection.findOne({ userId: senderId });
         let conversation = await conversationsCollection.findOne({ userId: senderId });
 
+        // Handle new user onboarding
         if (!user) {
             await usersCollection.insertOne({ userId: senderId, createdAt: new Date() });
             await conversationsCollection.updateOne({ userId: senderId }, { $set: { state: 'awaiting_store_name', history: [] } }, { upsert: true });
@@ -440,6 +519,7 @@ export async function handleMessage(sock, msg, collections) {
             return;
         }
         
+        // Handle onboarding states
         if (conversation?.state) {
             switch (conversation.state) {
                 case 'awaiting_store_name':
@@ -459,11 +539,19 @@ export async function handleMessage(sock, msg, collections) {
             }
         }
         
+        // Show typing indicator
         await sock.sendPresenceUpdate('composing', senderId);
+        
+        // Process the message with AI
         await processMessageWithAI(messageText, collections, senderId, sock);
         
     } catch (error) {
-        console.error("Error in message handler:", error);
+        console.error("Error in message handler:", {
+            message: error.message,
+            stack: error.stack,
+            senderId,
+            messageText
+        });
         await sock.sendMessage(senderId, { text: "Sorry, I encountered an error and couldn't process your request. Please try again." });
     } finally {
         await sock.sendPresenceUpdate('paused', senderId);

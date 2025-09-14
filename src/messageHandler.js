@@ -73,18 +73,23 @@ const tools = [
     parameters: { type: 'object', properties: {} },
   },
   {
+    name: 'getMonthlySummary',
+    description: 'Gets a quick text summary of total income, expenses, and net balance for the current month. Use for simple questions about totals.',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
     name: 'generateTransactionReport',
-    description: 'Generates and sends a PDF report of all financial transactions for the current month.',
+    description: 'Generates and sends a detailed PDF FILE of all financial transactions for the current month. Use this only when the user explicitly asks to "export", "download", or receive a "report file".',
     parameters: { type: 'object', properties: {} },
   },
   {
     name: 'generateInventoryReport',
-    description: 'Generates and sends a detailed PDF report of inventory, sales, and profit for the current month.',
+    description: 'Generates and sends a detailed PDF FILE of inventory, sales, and profit for the current month. Use this only when the user explicitly asks to "export", "download", or receive a "report file" related to inventory or profit.',
     parameters: { type: 'object', properties: {} },
   },
   {
     name: 'generatePnLReport',
-    description: 'Generates a professional Profit and Loss (P&L) statement for the current month.',
+    description: 'Generates and sends a professional Profit and Loss (P&L) PDF FILE for the current month. Use this only when the user explicitly asks for a "P&L", "statement", or "profit and loss report".',
     parameters: { type: 'object', properties: {} },
   },
 ];
@@ -153,6 +158,29 @@ async function getInventory(args, collections, senderId) {
         inventoryList += `${p.productName} | ₦${p.price.toLocaleString()} | ${p.stock}\n`;
     });
     return inventoryList;
+}
+
+async function getMonthlySummary(args, collections, senderId) {
+    const { transactionsCollection } = collections;
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+    
+    const summary = await transactionsCollection.aggregate([
+        { $match: { userId: senderId, createdAt: { $gte: startOfMonth, $lte: endOfMonth } } },
+        { $group: { _id: "$type", totalAmount: { $sum: "$amount" } } }
+    ]).toArray();
+
+    let totalIncome = 0;
+    let totalExpense = 0;
+    summary.forEach(item => {
+        if (item._id === 'income') totalIncome = item.totalAmount;
+        if (item._id === 'expense') totalExpense = item.totalAmount;
+    });
+    const net = totalIncome - totalExpense;
+    const monthName = startOfMonth.toLocaleString('default', { month: 'long' });
+
+    return `📊 *Financial Summary for ${monthName}*\n\n*Total Income:* ₦${totalIncome.toLocaleString()}\n*Total Expense:* ₦${totalExpense.toLocaleString()}\n---------------------\n*Net Balance:* *₦${net.toLocaleString()}*`;
 }
 
 async function generateTransactionReport(args, collections, senderId, sock) {
@@ -264,11 +292,13 @@ async function generatePnLReport(args, collections, senderId, sock) {
     return null;
 }
 
+
 const availableTools = {
     logTransaction,
     addProduct,
     setOpeningBalance,
     getInventory,
+    getMonthlySummary,
     generateTransactionReport,
     generateInventoryReport,
     generatePnLReport,
@@ -279,13 +309,12 @@ async function processMessageWithAI(text, collections, senderId, sock) {
     const conversation = await conversationsCollection.findOne({ userId: senderId });
     let history = conversation ? conversation.history : [];
 
-    const systemInstruction = `You are 'Smart Accountant', a professional, confident, and friendly AI bookkeeping assistant on WhatsApp. Your primary goal is to help users manage their finances and inventory. Follow these rules strictly:
-1.  **Stay Within Your Abilities:** You can ONLY perform actions defined in the available tools. Do not offer to perform actions you cannot do, such as sending emails, setting reminders, or accessing the internet. If a user asks for something you cannot do, politely state your purpose is bookkeeping.
-2.  **Stay On Topic:** If the user asks a question that is not related to bookkeeping, finance, or inventory (e.g., general knowledge, chit-chat), you MUST politely decline and steer the conversation back to your purpose.
-3.  **Be Conversational, Not Technical:** Never mention your functions, code, APIs, or that you are an AI model. Speak naturally.
-4.  **Be Confident:** When a tool for a task is called successfully, assume the task is complete and announce it confidently.
-5.  **Be Efficient & Clarify:** If you need more information, ask for all required details in one clear message.
-6.  **Prioritize Tool Use:** Your main goal is to identify the user's intent and call the appropriate tool.`;
+    const systemInstruction = `You are 'Smart Accountant', a professional, confident, and friendly AI bookkeeping assistant. Follow these rules strictly:
+1.  **Never Explain Yourself:** Do not mention your functions, code, or that you are an AI. Never explain your limitations or internal thought process. Speak as if you are the one performing the action.
+2.  **Stay Within Abilities:** ONLY perform actions defined in the available tools. If asked to do something else (like send an email), politely decline and state your purpose is bookkeeping.
+3.  **Use the Right Tool:** For simple questions about totals (e.g., "what are my expenses?"), use the 'getMonthlySummary' tool. For requests to "export", "download", or get a "file", use the appropriate 'generate...Report' tool.
+4.  **Be Confident:** When a tool is called, assume it was successful. Announce the result confidently (e.g., "Here is your inventory list.").
+5.  **Stay On Topic:** If asked about things unrelated to bookkeeping (e.g., science, general knowledge), politely guide the user back to your purpose.`;
     
     const chatHistoryForAPI = [
         { role: "user", parts: [{ text: systemInstruction }] },

@@ -125,13 +125,17 @@ async function processMessageWithAI(text, collections, senderId, sock) {
     
     const systemInstruction = `You are 'Smart Accountant', a professional, confident, and friendly AI bookkeeping assistant. Follow these rules with absolute priority: 1. **Use Tools for All Data Questions:** If a user asks a question about their specific financial or inventory data (e.g., "what are my expenses?", "how many soaps do I have?"), you MUST use a tool to get the answer. Do not answer from your own knowledge or provide placeholder text like '[Amount]'. Your primary job is to call the correct function. 2. **Never Explain Yourself:** Do not mention your functions, code, or that you are an AI. Never explain your limitations or internal thought process (e.g., do not say "I cannot access data"). Speak as if you are the one performing the action. 3. **Stay Within Abilities:** ONLY perform actions defined in the available tools. If asked to do something else (like send an email or browse the web), politely state your purpose is bookkeeping. 4. **Use the Right Tool:** For simple questions about totals (e.g., "what are my expenses?"), use 'getMonthlySummary'. For requests to "export", "download", "send the file", or receive a "PDF report", use the appropriate 'generate...Report' tool. 5. **Be Confident & Concise:** When a tool is called, assume it was successful. Announce the result confidently and briefly. 6. **Stay On Topic:** If asked about things unrelated to bookkeeping (e.g., science, general knowledge), politely guide the user back to your purpose.`;
     
-    const messages = [ { role: "system", content: systemInstruction }, ...savedHistory, { role: "user", content: text } ];
+    const messages = [
+        { role: "system", content: systemInstruction },
+        ...savedHistory,
+        { role: "user", content: text }
+    ];
 
     const response = await deepseek.chat.completions.create({ model: "deepseek-chat", messages: messages, tools: tools, tool_choice: "auto" });
     let responseMessage = response.choices[0].message;
-    messages.push(responseMessage);
 
     if (responseMessage.tool_calls) {
+        messages.push(responseMessage); // Add assistant's tool call message to history
         const toolExecutionPromises = responseMessage.tool_calls.map(async (toolCall) => {
             const functionName = toolCall.function.name;
             const functionArgs = JSON.parse(toolCall.function.arguments);
@@ -140,10 +144,11 @@ async function processMessageWithAI(text, collections, senderId, sock) {
                 const functionResult = await selectedTool(functionArgs, collections, senderId, sock);
                 return { tool_call_id: toolCall.id, role: "tool", name: functionName, content: JSON.stringify(functionResult) };
             }
+            return null; // Return null for non-existent tools
         });
         
-        const toolResponses = await Promise.all(toolExecutionPromises);
-        messages.push(...toolResponses.filter(Boolean));
+        const toolResponses = (await Promise.all(toolExecutionPromises)).filter(Boolean); // Filter out any nulls
+        messages.push(...toolResponses);
         
         const secondResponse = await deepseek.chat.completions.create({ model: "deepseek-chat", messages: messages });
         responseMessage = secondResponse.choices[0].message;
@@ -153,31 +158,33 @@ async function processMessageWithAI(text, collections, senderId, sock) {
         await sock.sendMessage(senderId, { text: responseMessage.content });
     }
 
-    const finalHistoryToSave = messages.filter(msg => msg.role !== 'system' && msg.role !== 'tool');
-    const prunedHistory = finalHistoryToSave.slice(-10);
-    await conversationsCollection.updateOne({ userId: senderId }, { $set: { history: prunedHistory, updatedAt: new Date() } }, { upsert: true });
-}
+    // --- CORRECTED HISTORY SAVING ---
+    // Add the current user message and the final assistant response to the history
+    const newHistoryTurn = [
+        { role: 'user', content: text },
+        responseMessage // This is now the *final* response from the assistant
+    ];
+    
+    // Filter out null content messages, which can happen with tool calls
+    const finalHistoryToSave = [...savedHistory, ...newHistoryTurn].filter(msg => msg.content !== null);
 
-function parseProductLines(text) {
-    const lines = text.split('\n').filter(line => line.trim() !== '');
-    const products = [];
-    for (const line of lines) {
-        const parts = line.trim().split(' ');
-        if (parts.length < 4) continue;
-        const stock = parseInt(parts.pop(), 10);
-        const price = parseFloat(parts.pop());
-        const cost = parseFloat(parts.pop());
-        const productName = parts.join(' ');
-        if (!isNaN(cost) && !isNaN(price) && !isNaN(stock)) products.push({ productName, cost, price, stock });
-    }
-    return products;
+    const prunedHistory = finalHistoryToSave.slice(-10); // Prune to the last 10 messages
+    await conversationsCollection.updateOne({ userId: senderId }, { $set: { history: prunedHistory, updatedAt: new Date() } }, { upsert: true });
 }
 
 export async function handleMessage(sock, msg, collections) {
     const { usersCollection, conversationsCollection } = collections;
     const senderId = msg.key.remoteJid;
-    const messageText = msg.message?.conversation?.trim();
-    if (!messageText) return;
+    
+    // Check for different message types, focusing on text and audio
+    const messageContent = msg.message;
+    if (!messageContent) return;
+
+    const messageText = messageContent.conversation || messageContent.extendedTextMessage?.text;
+
+    // We only process if there is text content. Audio processing would go here.
+    if (!messageText || messageText.trim() === '') return;
+
     let user = await usersCollection.findOne({ userId: senderId });
     let conversation = await conversationsCollection.findOne({ userId: senderId });
 
@@ -198,13 +205,15 @@ export async function handleMessage(sock, msg, collections) {
             case 'awaiting_currency':
                 const currency = messageText.toUpperCase();
                 await usersCollection.updateOne({ userId: senderId }, { $set: { currency: currency } });
-                await conversationsCollection.updateOne({ userId: senderId }, { $set: { state: 'awaiting_balance_confirmation' } });
-                await sock.sendMessage(senderId, { text: `Perfect. Currency set to *${currency}*.\n\nNow, you can tell me about your starting inventory. For example:\n\n"My opening balance is 20 phone chargers that cost me 3000 and I sell for 5000"` });
+                await conversationsCollection.updateOne({ userId: senderId }, { $set: { state: 'awaiting_opening_balance' } });
+                await sock.sendMessage(senderId, { text: `Perfect. Currency set to *${currency}*.\n\nTo set up your initial stock, you can now tell me about your products. For example:\n\n"My opening balance is 20 phone chargers that cost me 3000 and I sell for 5000"` });
                 return;
-            case 'awaiting_balance_confirmation':
-                await processMessageWithAI(`set opening balance with: ${messageText}`, collections, senderId, sock);
+            case 'awaiting_opening_balance':
+                // The AI is now smart enough to handle this directly.
+                // We transition them out of the setup state and process the message.
                 await conversationsCollection.updateOne({ userId: senderId }, { $unset: { state: "" } });
-                return;
+                // Let the message fall through to the AI processor
+                break; // This break is important!
         }
     }
     
@@ -212,22 +221,35 @@ export async function handleMessage(sock, msg, collections) {
         await processMessageWithAI(messageText, collections, senderId, sock);
     } catch (error) {
         console.error("Error in AI message handler:", error);
-        await sock.sendMessage(senderId, { text: "Sorry, I encountered an error." });
+        await sock.sendMessage(senderId, { text: "Sorry, I encountered an error and couldn't process your request." });
     }
 }
 
 async function updateStockAfterSale(description, collections, senderId) {
     const { productsCollection, inventoryLogsCollection } = collections;
-    const saleRegex = /(?:sale of|sold)\s*(\d+)x?\s*(.+)/i;
+    // Regex to find patterns like "sale of 5 item name" or "sold 5x item name"
+    const saleRegex = /(?:sale of|sold)\s*(\d+)\s*x?\s*(.+)/i;
     const match = description.match(saleRegex);
+
     if (match) {
         const quantitySold = parseInt(match[1], 10);
         const productNameQuery = match[2].trim();
-        const searchWords = productNameQuery.split(' ').map(word => new RegExp(word, 'i'));
-        const product = await productsCollection.findOne({ userId: senderId, productName: { $all: searchWords } });
-        if (!product) return null;
+        
+        // A more flexible search: finds a product where the name contains the query words
+        const product = await productsCollection.findOne({ 
+            userId: senderId, 
+            productName: { $regex: new RegExp(productNameQuery, "i") } 
+        });
+
+        if (!product) {
+            console.log(`Could not find product matching "${productNameQuery}" to update stock.`);
+            return null;
+        }
+
         await productsCollection.updateOne({ _id: product._id }, { $inc: { stock: -quantitySold } });
         await inventoryLogsCollection.insertOne({ userId: senderId, productId: product._id, type: 'sale', quantityChange: -quantitySold, notes: description, createdAt: new Date() });
+        
+        console.log(`Stock updated for ${product.productName}: sold ${quantitySold}, remaining ${product.stock - quantitySold}`);
         return product.productName;
     }
     return null;

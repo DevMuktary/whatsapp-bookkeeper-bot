@@ -9,7 +9,14 @@ const mongoClient = new MongoClient(mongoUri);
 let db;
 
 export async function connectToDB() {
-    if (db) return { db };
+    if (db) {
+        const usersCollection = db.collection('users');
+        const transactionsCollection = db.collection('transactions');
+        const productsCollection = db.collection('products');
+        const inventoryLogsCollection = db.collection('inventory_logs');
+        const conversationsCollection = db.collection('conversations');
+        return { db, usersCollection, transactionsCollection, productsCollection, inventoryLogsCollection, conversationsCollection };
+    }
     try {
         await mongoClient.connect();
         db = mongoClient.db("bookkeeperDB");
@@ -18,7 +25,6 @@ export async function connectToDB() {
         const transactionsCollection = db.collection('transactions');
         const productsCollection = db.collection('products');
         const inventoryLogsCollection = db.collection('inventory_logs');
-        // --- ADD THIS LINE ---
         const conversationsCollection = db.collection('conversations');
         return { db, usersCollection, transactionsCollection, productsCollection, inventoryLogsCollection, conversationsCollection };
     } catch (error) {

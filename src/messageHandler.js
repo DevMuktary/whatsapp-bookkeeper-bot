@@ -138,15 +138,14 @@ async function processMessageWithAI(text, collections, senderId, sock) {
         { role: "user", content: text }
     ];
 
-    const newHistoryEntries = [{ role: 'user', content: text }];
+    let newHistoryEntries = [{ role: 'user', content: text }];
 
     const response = await deepseek.chat.completions.create({ model: "deepseek-chat", messages: messages, tools: tools, tool_choice: "auto" });
     let responseMessage = response.choices[0].message;
 
     if (responseMessage.tool_calls) {
         messages.push(responseMessage);
-        newHistoryEntries.push(responseMessage);
-
+        
         const toolExecutionPromises = responseMessage.tool_calls.map(async (toolCall) => {
             const functionName = toolCall.function.name;
             const functionArgs = JSON.parse(toolCall.function.arguments);
@@ -162,12 +161,14 @@ async function processMessageWithAI(text, collections, senderId, sock) {
         
         if (toolResponses.length > 0) {
             messages.push(...toolResponses);
-            newHistoryEntries.push(...toolResponses);
+            newHistoryEntries.push(responseMessage, ...toolResponses); // Add the full sequence to history
 
             const secondResponse = await deepseek.chat.completions.create({ model: "deepseek-chat", messages: messages });
             responseMessage = secondResponse.choices[0].message;
         } else {
-            responseMessage = { role: 'assistant', content: "I'm not sure how to handle that request. Can you try rephrasing?" };
+            // This is a fallback if a tool fails to execute. We don't save the broken tool_call sequence.
+            responseMessage = { role: 'assistant', content: "I'm not sure how to handle that. Could you please rephrase?" };
+            newHistoryEntries = [{ role: 'user', content: text }]; // Reset history for this turn
         }
     }
 

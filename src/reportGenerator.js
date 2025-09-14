@@ -1,17 +1,19 @@
 import PDFDocument from 'pdfkit';
 import { PassThrough } from 'stream';
 
-// --- Function for the /export command ---
-export async function generateMonthlyReportPDF(transactions, monthName) {
+// --- Function for the Transaction Report ---
+export async function generateMonthlyReportPDF(transactions, monthName, user) {
     return new Promise((resolve) => {
         const doc = new PDFDocument({ margin: 50 });
         const stream = new PassThrough();
+        const currency = user.currency || 'CURRENCY';
         
         doc.pipe(stream);
 
         // --- Report Header ---
         doc.fontSize(20).font('Helvetica-Bold').text('Monthly Financial Report', { align: 'center' });
-        doc.fontSize(14).font('Helvetica').text(monthName, { align: 'center' });
+        doc.fontSize(14).font('Helvetica').text(user.storeName || '', { align: 'center' });
+        doc.fontSize(12).text(monthName, { align: 'center' });
         doc.moveDown(2);
 
         // --- Summary Section ---
@@ -25,9 +27,9 @@ export async function generateMonthlyReportPDF(transactions, monthName) {
 
         doc.fontSize(12).font('Helvetica-Bold').text('Summary', { underline: true });
         doc.moveDown();
-        doc.font('Helvetica').text(`Total Income: NGN ${totalIncome.toLocaleString()}`);
-        doc.text(`Total Expense: NGN ${totalExpense.toLocaleString()}`);
-        doc.font('Helvetica-Bold').text(`Net Balance: NGN ${net.toLocaleString()}`);
+        doc.font('Helvetica').text(`Total Income: ${currency} ${totalIncome.toLocaleString()}`);
+        doc.text(`Total Expense: ${currency} ${totalExpense.toLocaleString()}`);
+        doc.font('Helvetica-Bold').text(`Net Balance: ${currency} ${net.toLocaleString()}`);
         doc.moveDown(2);
 
         // --- Transactions Table Header ---
@@ -43,8 +45,8 @@ export async function generateMonthlyReportPDF(transactions, monthName) {
            .text('Date', itemX, tableTop)
            .text('Description', dateX, tableTop)
            .text('Type', typeX, tableTop)
-           .text('Amount (NGN)', amountX, tableTop, { align: 'right' });
-        doc.moveTo(itemX, doc.y).lineTo(550, doc.y).stroke(); // Underline header
+           .text(`Amount (${currency})`, amountX, tableTop, { align: 'right' });
+        doc.moveTo(itemX, doc.y).lineTo(550, doc.y).stroke();
         
         // --- Transactions Table Rows ---
         doc.font('Helvetica');
@@ -56,7 +58,7 @@ export async function generateMonthlyReportPDF(transactions, monthName) {
                .text(t.description, dateX, y)
                .text(t.type.charAt(0).toUpperCase() + t.type.slice(1), typeX, y)
                .text(t.amount.toLocaleString(), amountX, y, { align: 'right' });
-            doc.moveTo(itemX, doc.y + 12).lineTo(550, doc.y + 12).strokeColor('#dddddd').stroke(); // Separator line
+            doc.moveTo(itemX, doc.y + 12).lineTo(550, doc.y + 12).strokeColor('#dddddd').stroke();
         });
         
         doc.end();
@@ -66,19 +68,21 @@ export async function generateMonthlyReportPDF(transactions, monthName) {
     });
 }
 
-// --- Function for the /exportinventory command ---
-export async function generateInventoryReportPDF(products, logs, monthName) {
+// --- Function for the Inventory & Profit Report ---
+export async function generateInventoryReportPDF(products, logs, monthName, user) {
     return new Promise((resolve) => {
         const doc = new PDFDocument({ margin: 50, layout: 'landscape' });
         const stream = new PassThrough();
+        const currency = user.currency || 'CURRENCY';
         doc.pipe(stream);
 
         // Header
         doc.fontSize(20).font('Helvetica-Bold').text('Inventory & Profit Report', { align: 'center' });
-        doc.fontSize(14).font('Helvetica').text(monthName, { align: 'center' });
+        doc.fontSize(14).font('Helvetica').text(user.storeName || '', { align: 'center' });
+        doc.fontSize(12).text(monthName, { align: 'center' });
         doc.moveDown(2);
 
-        products.forEach(product => {
+        products.forEach((product, index) => {
             doc.fontSize(14).font('Helvetica-Bold').text(`Product: ${product.productName}`, { underline: true });
             doc.moveDown();
 
@@ -91,13 +95,12 @@ export async function generateInventoryReportPDF(products, logs, monthName) {
             doc.fontSize(11).font('Helvetica')
                .text(`- Stock Status: ${product.stock} units remaining.`)
                .text(`- Units Sold this month: ${unitsSold}`)
-               .text(`- Total Revenue: NGN ${revenue.toLocaleString()}`)
-               .text(`- Cost of Goods Sold: NGN ${costOfGoodsSold.toLocaleString()}`)
-               .font('Helvetica-Bold').text(`- Gross Profit: NGN ${profit.toLocaleString()}`)
+               .text(`- Total Revenue: ${currency} ${revenue.toLocaleString()}`)
+               .text(`- Cost of Goods Sold: ${currency} ${costOfGoodsSold.toLocaleString()}`)
+               .font('Helvetica-Bold').text(`- Gross Profit: ${currency} ${profit.toLocaleString()}`)
                .font('Helvetica');
             doc.moveDown();
 
-            // Detailed Log Table
             if (productLogs.length > 0) {
                 const tableTop = doc.y;
                 doc.fontSize(9).font('Helvetica-Bold')
@@ -118,7 +121,7 @@ export async function generateInventoryReportPDF(products, logs, monthName) {
                     doc.moveTo(50, doc.y + 10).lineTo(740, doc.y + 10).strokeColor('#dddddd').stroke();
                 });
             }
-            if (products.indexOf(product) < products.length - 1) {
+            if (index < products.length - 1) {
                 doc.addPage({ margin: 50, layout: 'landscape' });
             }
         });
@@ -141,7 +144,7 @@ export async function generatePnLReportPDF(data, monthName, user) {
         const grossProfit = totalRevenue - cogs;
         const totalExpenses = Object.values(expensesByCategory).reduce((sum, val) => sum + val, 0);
         const netProfit = grossProfit - totalExpenses;
-        const currency = user.currency || 'NGN';
+        const currency = user.currency || 'CURRENCY';
 
         // Header
         doc.fontSize(20).font('Helvetica-Bold').text('Profit & Loss Statement', { align: 'center' });

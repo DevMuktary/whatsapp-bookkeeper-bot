@@ -64,6 +64,8 @@ const model = genAI.getGenerativeModel({
   tool_config: { function_calling_config: { mode: "any" } }
 });
 
+// --- Specialist Functions ---
+
 async function logTransaction(args, collections, senderId) {
     const { transactionsCollection, productsCollection, inventoryLogsCollection } = collections;
     const { type, amount, description } = args;
@@ -116,7 +118,6 @@ async function getInventory(args, collections, senderId) {
 
 async function generateTransactionReport(args, collections, senderId, sock) {
     const { transactionsCollection } = collections;
-    await sock.sendMessage(senderId, { text: 'Generating your monthly transaction report... 📄' });
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
@@ -137,14 +138,13 @@ async function generateTransactionReport(args, collections, senderId, sock) {
         document: pdfBuffer,
         mimetype: 'application/pdf',
         fileName: `Financial_Report_${monthName.replace(' ', '_')}.pdf`,
-        caption: `Here is your financial report for ${monthName}.`
+        caption: `Here is your complete financial report for ${monthName}.`
     });
     return null;
 }
 
 async function generateInventoryReport(args, collections, senderId, sock) {
     const { productsCollection, inventoryLogsCollection } = collections;
-    await sock.sendMessage(senderId, { text: 'Generating your inventory & profit report... 📦' });
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
@@ -166,7 +166,7 @@ async function generateInventoryReport(args, collections, senderId, sock) {
         document: pdfBuffer,
         mimetype: 'application/pdf',
         fileName: `Inventory_Report_${monthName.replace(' ', '_')}.pdf`,
-        caption: `Here is your inventory and profit report for ${monthName}.`
+        caption: `Here is your complete inventory and profit report for ${monthName}.`
     });
     return null;
 }
@@ -179,6 +179,7 @@ const availableTools = {
     generateInventoryReport,
 };
 
+// Main message handler with new AI logic
 export async function handleMessage(sock, msg, collections) {
     const { usersCollection, conversationsCollection } = collections;
     const senderId = msg.key.remoteJid;
@@ -189,7 +190,7 @@ export async function handleMessage(sock, msg, collections) {
     let user = await usersCollection.findOne({ userId: senderId });
     if (!user) {
         await usersCollection.insertOne({ userId: senderId, createdAt: new Date() });
-        const welcomeMessage = `👋 Welcome to your AI Bookkeeping Assistant!\n\nI'm now powered by an advanced AI with memory. You can speak to me in plain English.\n\n*Try things like:*\n- "I sold two phone chargers for 10000"\n- "Add a product called Soap, it cost me 300, I sell it for 500, and I have 50 in stock"\n- "What's in my inventory?"\n- "Export my profit report for this month"`;
+        const welcomeMessage = `👋 Welcome to your AI Bookkeeping Assistant!\n\nI'm powered by an advanced AI with memory. You can speak to me in plain English.\n\n*Try things like:*\n- "I sold two phone chargers for 10000"\n- "Add a product called Soap, it cost me 300, I sell it for 500, and I have 50 in stock"\n- "What's in my inventory?"\n- "Export my profit report for this month"`;
         await sock.sendMessage(senderId, { text: welcomeMessage });
         return;
     }
@@ -198,9 +199,19 @@ export async function handleMessage(sock, msg, collections) {
         const conversation = await conversationsCollection.findOne({ userId: senderId });
         const history = conversation ? conversation.history : [];
 
+        // The new, improved system prompt that defines the bot's persona
+        const systemInstruction = `You are 'Smart Accountant', a professional, confident, and friendly AI bookkeeping assistant on WhatsApp. Your primary goal is to help users manage their finances and inventory. Follow these rules strictly:
+1.  **Be Conversational, Not Technical:** Never mention your functions, code, APIs, or that you are an AI model. Speak naturally as if you are performing the tasks yourself. For example, instead of "I will call the getInventory function," say "Let me get your inventory list for you."
+2.  **Be Confident:** When a tool for a task (like generating a report) is called successfully, assume the task is complete and announce it confidently. For example, after generating a PDF, say "Here is your complete inventory report." Do not express uncertainty.
+3.  **Be Efficient:** If you need more information, ask for all required details in one clear message.
+4.  **Prioritize Tool Use:** If the user's request maps directly to a tool, your primary response should be to call that tool.
+5.  **Clarify Ambiguity:** If a user's request for a transaction is unclear (e.g., "rent 5000"), ask a clarifying question.
+6.  **JSON for Transactions:** When you have all the details for a transaction, respond ONLY with the JSON object for the 'logTransaction' tool.`;
+
         const chat = model.startChat({ 
             tools: [{ functionDeclarations: tools }],
-            history: history 
+            history: history,
+            systemInstruction: systemInstruction,
         });
 
         const result = await chat.sendMessage(messageText);
@@ -214,8 +225,6 @@ export async function handleMessage(sock, msg, collections) {
                 if (resultText) {
                     await sock.sendMessage(senderId, { text: resultText });
                 }
-            } else {
-                await sock.sendMessage(senderId, { text: `Sorry, I recognized a command "${call.name}" but I don't know how to perform it.` });
             }
         } else {
             const textResponse = result.response.text();
@@ -223,7 +232,6 @@ export async function handleMessage(sock, msg, collections) {
         }
 
         const updatedHistory = await chat.getHistory();
-        // Limit history to the last 10 turns to prevent it from getting too large
         const prunedHistory = updatedHistory.slice(-10); 
         await conversationsCollection.updateOne(
             { userId: senderId },

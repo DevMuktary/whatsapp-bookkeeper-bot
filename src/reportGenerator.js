@@ -18,12 +18,9 @@ function generateHeader(doc, user) {
 
 // --- Reusable Footer Function ---
 function generateFooter(doc) {
-    const pageCount = doc.bufferedPageRange().count;
+    const pageCount = doc.bufferedPageRange().count; // Get the total number of pages after all content
     for (let i = 0; i < pageCount; i++) {
-        doc.switchToPage(i);
-
-        // This check prevents a footer from being added to an empty overflow page
-        if (doc.x === doc.page.margins.left && doc.y === doc.page.margins.top) continue;
+        doc.switchToPage(i); // Switch to each page to add the footer
 
         const genDate = new Date().toLocaleString('en-GB');
         doc.fontSize(8)
@@ -97,11 +94,13 @@ function createMonthlyReportPDF(transactions, monthName, user) {
             rowY += 20;
         });
 
-        generateFooter(doc);
-        doc.end();
+        doc.end(); // End the document here to finalize page content
         const buffers = [];
         stream.on('data', chunk => buffers.push(chunk));
-        stream.on('end', () => resolve(Buffer.concat(buffers)));
+        stream.on('end', () => {
+            generateFooter(doc); // Generate footer after all content is added and page count is final
+            resolve(Buffer.concat(buffers));
+        });
     });
 }
 
@@ -149,11 +148,13 @@ function createInventoryReportPDF(products, logs, monthName, user) {
             doc.moveDown(3);
         });
 
-        generateFooter(doc);
-        doc.end();
+        doc.end(); // End the document here to finalize page content
         const buffers = [];
         stream.on('data', chunk => buffers.push(chunk));
-        stream.on('end', () => resolve(Buffer.concat(buffers)));
+        stream.on('end', () => {
+            generateFooter(doc); // Generate footer after all content is added and page count is final
+            resolve(Buffer.concat(buffers));
+        });
     });
 }
 
@@ -175,8 +176,9 @@ function createPnLReportPDF(data, monthName, user) {
         doc.moveDown(3);
 
         const drawRow = (label, amount, isBold = false, isSub = false) => {
-            // Check if there's enough space for the next line, if not, add a page
-            if (doc.y + 20 > doc.page.height - doc.page.margins.bottom) doc.addPage();
+            // Check if there's enough space for the next line, plus the footer height
+            const requiredSpace = (isBold ? 11 : 10) + (isBold ? 1.2 : 1) * 10 + 60; // line height + bottom margin + footer height
+            if (doc.y + requiredSpace > doc.page.height - doc.page.margins.bottom) doc.addPage();
             
             const itemX = 50;
             const amountX = 350;
@@ -200,6 +202,9 @@ function createPnLReportPDF(data, monthName, user) {
         drawRow('Gross Profit', `${currency} ${grossProfit.toLocaleString()}`, true);
         doc.moveDown(2);
 
+        // Check for page break before drawing Operating Expenses header
+        if (doc.y + 100 > doc.page.height - doc.page.margins.bottom) doc.addPage();
+
         doc.fontSize(11).font(fontBold).text('Operating Expenses', 50, doc.y);
         generateHr(doc, doc.y);
         doc.moveDown();
@@ -209,8 +214,7 @@ function createPnLReportPDF(data, monthName, user) {
                 drawRow(category, `(${currency} ${amount.toLocaleString()})`, false, true);
             }
         } else {
-            doc.fontSize(9).font(font).text('No operating expenses logged.', { indent: 15 });
-            doc.moveDown();
+            drawRow('No operating expenses logged.', ''); // Align the "No expenses" message
         }
         
         doc.moveDown(0.5);
@@ -219,6 +223,7 @@ function createPnLReportPDF(data, monthName, user) {
         drawRow('Total Operating Expenses', `(${currency} ${totalExpenses.toLocaleString()})`, true);
         doc.moveDown(2);
         
+        // Final check before drawing the Net Profit box, considering footer space
         if (doc.y + 40 > doc.page.height - doc.page.margins.bottom) doc.addPage();
 
         const netProfitY = doc.y;
@@ -227,11 +232,13 @@ function createPnLReportPDF(data, monthName, user) {
         doc.text('Net Profit / (Loss)', 60, netProfitY + 9);
         doc.text(`${currency} ${netProfit.toLocaleString()}`, 350, netProfitY + 9, { width: 190, align: 'right' });
 
-        generateFooter(doc);
-        doc.end();
+        doc.end(); // End the document here to finalize page content
         const buffers = [];
         stream.on('data', chunk => buffers.push(chunk));
-        stream.on('end', () => resolve(Buffer.concat(buffers)));
+        stream.on('end', () => {
+            generateFooter(doc); // Generate footer after all content is added and page count is final
+            resolve(Buffer.concat(buffers));
+        });
     });
 }
 

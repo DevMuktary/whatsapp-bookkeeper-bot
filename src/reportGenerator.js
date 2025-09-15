@@ -18,8 +18,8 @@ function generateHeader(doc, user) {
 
 // --- Reusable Footer Function ---
 function generateFooter(doc) {
-    const range = doc.bufferedPageRange();
-    for (let i = range.start; i < range.start + range.count; i++) {
+    const pageCount = doc.bufferedPageRange().count;
+    for (let i = 0; i < pageCount; i++) {
         doc.switchToPage(i);
 
         // This check prevents a footer from being added to an empty overflow page
@@ -28,7 +28,7 @@ function generateFooter(doc) {
         const genDate = new Date().toLocaleString('en-GB');
         doc.fontSize(8)
            .fillColor('#AAAAAA')
-           .text(`Page ${i + 1} of ${range.count}`, 50, doc.page.height - 50, { align: 'right', width: 500 })
+           .text(`Page ${i + 1} of ${pageCount}`, 50, doc.page.height - 50, { align: 'right', width: 500 })
            .text(`Generated on: ${genDate}`, 50, doc.page.height - 50, { align: 'left' });
     }
 }
@@ -36,18 +36,6 @@ function generateFooter(doc) {
 // --- Reusable function for drawing a horizontal line ---
 function generateHr(doc, y) {
     doc.strokeColor("#E5E7EB").lineWidth(1).moveTo(50, y).lineTo(550, y).stroke();
-}
-
-// --- Reusable function for drawing perfectly aligned rows ---
-function drawRow(doc, y, label, amount, isBold = false, isSub = false) {
-    const itemX = 50;
-    const amountX = 350;
-    const rowWidth = 190;
-
-    doc.font(isBold ? fontBold : font)
-       .fontSize(isBold ? 10 : 9)
-       .text(label, itemX + (isSub ? 15 : 0), y, { align: 'left' })
-       .text(amount, amountX, y, { width: rowWidth, align: 'right' });
 }
 
 function createMonthlyReportPDF(transactions, monthName, user) {
@@ -136,6 +124,7 @@ function createInventoryReportPDF(products, logs, monthName, user) {
         doc.moveDown(2);
         
         products.forEach((product) => {
+            // Check if enough space for the next product entry, if not, create a new page
             if (doc.y > (doc.page.height - doc.page.margins.bottom - 150)) doc.addPage();
 
             const productLogs = logs.filter(log => log.productId.equals(product._id));
@@ -186,15 +175,18 @@ function createPnLReportPDF(data, monthName, user) {
         doc.moveDown(3);
 
         const drawRow = (label, amount, isBold = false, isSub = false) => {
+            // Check if there's enough space for the next line, if not, add a page
+            if (doc.y + 20 > doc.page.height - doc.page.margins.bottom) doc.addPage();
+            
             const itemX = 50;
             const amountX = 350;
             const rowWidth = 190;
-            const y = doc.y; // Capture current y
+            const y = doc.y;
             doc.font(isBold ? fontBold : font)
                .fontSize(isBold ? 11 : 10)
                .text(label, itemX + (isSub ? 15 : 0), y, { align: 'left' })
                .text(amount, amountX, y, { width: rowWidth, align: 'right' });
-            doc.moveDown(isBold ? 1 : 0.8);
+            doc.moveDown(isBold ? 1.2 : 1);
         };
         
         doc.fontSize(11).font(fontBold).text('Revenue', 50, doc.y);
@@ -207,8 +199,6 @@ function createPnLReportPDF(data, monthName, user) {
         doc.moveDown(0.5);
         drawRow('Gross Profit', `${currency} ${grossProfit.toLocaleString()}`, true);
         doc.moveDown(2);
-
-        if ((doc.y + 100) > (doc.page.height - doc.page.margins.bottom)) doc.addPage();
 
         doc.fontSize(11).font(fontBold).text('Operating Expenses', 50, doc.y);
         generateHr(doc, doc.y);
@@ -229,7 +219,7 @@ function createPnLReportPDF(data, monthName, user) {
         drawRow('Total Operating Expenses', `(${currency} ${totalExpenses.toLocaleString()})`, true);
         doc.moveDown(2);
         
-        if ((doc.y + 40) > (doc.page.height - doc.page.margins.bottom)) doc.addPage();
+        if (doc.y + 40 > doc.page.height - doc.page.margins.bottom) doc.addPage();
 
         const netProfitY = doc.y;
         doc.rect(50, netProfitY, 500, 30).fill(brandColor);

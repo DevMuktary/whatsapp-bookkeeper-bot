@@ -98,7 +98,6 @@ async function logTransaction(args, collections, senderId) {
     }
 }
 
-// --- MODIFIED: This function now prevents duplicate products ---
 async function addProduct(args, collections, senderId) {
     const { productsCollection, inventoryLogsCollection } = collections;
     const { products } = args;
@@ -108,7 +107,6 @@ async function addProduct(args, collections, senderId) {
         for (const product of products) {
             const { productName, cost, price, stock } = product;
 
-            // This "upsert" logic is the key: it updates if it exists, or inserts if it's new.
             const result = await productsCollection.updateOne(
                 { userId: senderId, productName: { $regex: new RegExp(`^${productName}$`, "i") } },
                 { 
@@ -119,8 +117,7 @@ async function addProduct(args, collections, senderId) {
                 { upsert: true }
             );
 
-            // Log the inventory change
-            if (result.upsertedId) { // It was a new product
+            if (result.upsertedId) {
                  await inventoryLogsCollection.insertOne({ 
                     userId: senderId, 
                     productId: result.upsertedId, 
@@ -129,7 +126,7 @@ async function addProduct(args, collections, senderId) {
                     notes: 'Product created', 
                     createdAt: new Date() 
                 });
-            } else { // It was an existing product, so we log it as a stock-in/purchase
+            } else {
                  const existingProduct = await productsCollection.findOne({ userId: senderId, productName: { $regex: new RegExp(`^${productName}$`, "i") } });
                  await inventoryLogsCollection.insertOne({ 
                     userId: senderId, 
@@ -309,6 +306,7 @@ async function generatePnLReport(args, collections, senderId, sock) {
         const expensesResult = await transactionsCollection.find({ 
             userId: senderId, 
             type: 'expense', 
+            category: { $ne: 'Cost of Goods Sold' }, // <-- THE FIX IS HERE
             createdAt: { $gte: startOfMonth, $lte: endOfMonth } 
         }).toArray();
         
@@ -368,7 +366,6 @@ async function processMessageWithAI(text, collections, senderId, sock) {
         const conversation = await conversationsCollection.findOne({ userId: senderId });
         const savedHistory = conversation ? conversation.history : [];
         
-        // --- MODIFIED: Added a rule to prevent the AI from showing code ---
         const systemInstruction = `You are 'Smart Accountant', a professional, confident, and friendly AI bookkeeping assistant. Follow these rules with absolute priority: 1. **Use Tools for All Data Questions:** If a user asks a question about their specific financial or inventory data, you MUST use a tool to get the answer. Your primary job is to call the correct function. 2. **Never Explain Yourself:** Do not mention your functions, code, or that you are an AI. Speak as if you are the one performing the action. 3. **CRITICAL RULE:** Never, under any circumstances, write tool call syntax like "<|tool_calls_begin|>" or other code in your text responses. Your responses must be clean, natural language only. 4. **Stay Within Abilities:** ONLY perform actions defined in the available tools. If asked to do something else (like send an email), politely state your purpose is bookkeeping. 5. **Use the Right Tool:** Use 'logSale' for product sales. Use 'logTransaction' for other income/expenses. Use 'getMonthlySummary' for simple questions about totals. Use the 'generate...Report' tools for export requests. 6. **Be Confident & Concise:** When a tool is called, assume it was successful. Announce the result confidently.`;
         
         const messages = [
@@ -419,7 +416,6 @@ async function processMessageWithAI(text, collections, senderId, sock) {
         newHistoryEntries.push(responseMessage);
 
         if (responseMessage.content) {
-            // Final safeguard to clean any stray syntax the AI might produce
             const cleanContent = responseMessage.content.replace(/<\|.*?\|>/g, '').trim();
             if (cleanContent) {
                  await sock.sendMessage(senderId, { text: cleanContent });

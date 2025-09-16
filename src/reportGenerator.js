@@ -22,7 +22,7 @@ function generateFooter(doc) {
     for (let i = 0; i < pageCount; i++) {
         doc.switchToPage(i);
         
-        // This check prevents a footer from being added to an empty overflow page
+        // This check prevents a footer from being added to a completely empty overflow page
         if (doc.x === doc.page.margins.left && doc.y === doc.page.margins.top) continue;
 
         const genDate = new Date().toLocaleString('en-GB');
@@ -40,7 +40,8 @@ function generateHr(doc, y) {
 
 function createMonthlyReportPDF(transactions, monthName, user) {
     return new Promise((resolve) => {
-        const doc = new PDFDocument({ margins: { top: 50, bottom: 60, left: 50, right: 50 }, bufferPages: true });
+        // Increased bottom margin to create a safe zone for the footer
+        const doc = new PDFDocument({ margins: { top: 50, bottom: 75, left: 50, right: 50 }, bufferPages: true });
         const stream = new PassThrough();
         const currency = user.currency || 'CUR';
         doc.pipe(stream);
@@ -70,7 +71,7 @@ function createMonthlyReportPDF(transactions, monthName, user) {
         doc.moveDown();
         
         const tableTop = doc.y;
-        const rowHeight = 25; // Increased row height
+        const rowHeight = 25;
         doc.rect(50, tableTop, 500, rowHeight).fill(brandColor);
         doc.fontSize(10).font(fontBold).fillColor('white');
         doc.text('Date', 60, tableTop + 8, { width: 70 });
@@ -80,7 +81,7 @@ function createMonthlyReportPDF(transactions, monthName, user) {
         doc.text('Amount', 460, tableTop + 8, { width: 80, align: 'right' });
         
         let rowY = tableTop + rowHeight;
-        doc.fillColor('black').font(font);
+        
         transactions.forEach((t, i) => {
             if ((rowY + rowHeight) > (doc.page.height - doc.page.margins.bottom)) { 
                 doc.addPage(); 
@@ -89,8 +90,12 @@ function createMonthlyReportPDF(transactions, monthName, user) {
             if (i % 2 === 1) doc.rect(50, rowY, 500, rowHeight).fill(lightGrey);
             
             const formattedDate = t.createdAt.toLocaleDateString('en-GB');
-            doc.fontSize(10) // Increased font size from 9 to 10
-               .text(formattedDate, 60, rowY + 8, { width: 70 })
+            
+            // --- THIS IS THE FIX for blurry/faint text ---
+            // Reset text color to black for every row to ensure visibility
+            doc.fillColor('black').font(font).fontSize(10);
+               
+            doc.text(formattedDate, 60, rowY + 8, { width: 70 })
                .text(t.description, 140, rowY + 8, { width: 150 })
                .text(t.category, 300, rowY + 8, { width: 100 })
                .text(t.type.charAt(0).toUpperCase() + t.type.slice(1), 410, rowY + 8, { width: 50 })
@@ -108,7 +113,7 @@ function createMonthlyReportPDF(transactions, monthName, user) {
 
 function createInventoryReportPDF(products, logs, monthName, user) {
      return new Promise((resolve) => {
-        const doc = new PDFDocument({ margins: { top: 50, bottom: 60, left: 50, right: 50 }, bufferPages: true });
+        const doc = new PDFDocument({ margins: { top: 50, bottom: 75, left: 50, right: 50 }, bufferPages: true });
         const stream = new PassThrough();
         const currency = user.currency || 'CUR';
         doc.pipe(stream);
@@ -159,7 +164,7 @@ function createInventoryReportPDF(products, logs, monthName, user) {
 
 function createPnLReportPDF(data, monthName, user) {
     return new Promise((resolve) => {
-        const doc = new PDFDocument({ margins: { top: 50, bottom: 60, left: 50, right: 50 }, bufferPages: true });
+        const doc = new PDFDocument({ margins: { top: 50, bottom: 75, left: 50, right: 50 }, bufferPages: true });
         const stream = new PassThrough();
         const currency = user.currency || 'CUR';
         doc.pipe(stream);
@@ -194,7 +199,7 @@ function createPnLReportPDF(data, monthName, user) {
         drawRow('Gross Profit', `${currency} ${grossProfit.toLocaleString()}`, true);
         doc.moveDown(2);
 
-        if (doc.y + 100 > doc.page.height - doc.page.margins.bottom) doc.addPage();
+        if (doc.y + 100 > (doc.page.height - doc.page.margins.bottom)) doc.addPage();
 
         doc.fontSize(11).font(fontBold).text('Operating Expenses', 50, doc.y);
         generateHr(doc, doc.y);
@@ -214,7 +219,7 @@ function createPnLReportPDF(data, monthName, user) {
         drawRow('Total Operating Expenses', `(${currency} ${totalExpenses.toLocaleString()})`, true);
         doc.moveDown(2);
         
-        if (doc.y + 40 > doc.page.height - doc.page.margins.bottom) doc.addPage();
+        if (doc.y + 40 > (doc.page.height - doc.page.margins.bottom)) doc.addPage();
 
         const netProfitY = doc.y;
         doc.rect(50, netProfitY, 500, 30).fill(brandColor);

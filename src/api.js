@@ -1,8 +1,13 @@
 import express from 'express';
 import cors from 'cors';
 import { loginUser } from './services/authService.js';
-import { authenticateToken } from './middleware/authMiddleware.js'; // <-- NEW: Import middleware
-import { getUserSummary } from './services/userService.js';    // <-- NEW: Import user service
+import { authenticateToken } from './middleware/authMiddleware.js';
+// --- NEW: Import the new functions ---
+import { 
+    getUserSummary, 
+    getUserTransactions, 
+    getUserInventory 
+} from './services/userService.js';
 
 // --- Security: Define which websites can access your API ---
 const corsOptions = {
@@ -34,15 +39,24 @@ export function startApi(collections) {
     });
     
     // --- Protected Routes (User Must Be Logged In) ---
-    // Notice 'authenticateToken' is "plugged in" before the main function.
-    // It runs first, checks the token, and then calls the next function (getUserSummary).
+    
+    // Summary Route
     app.get('/api/v1/user/summary', authenticateToken, (req, res) => {
         getUserSummary(req, res, collections);
+    });
+
+    // --- NEW: Transactions Route (Paginated) ---
+    app.get('/api/v1/user/transactions', authenticateToken, (req, res) => {
+        getUserTransactions(req, res, collections);
+    });
+
+    // --- NEW: Inventory Route ---
+    app.get('/api/v1/user/inventory', authenticateToken, (req, res) => {
+        getUserInventory(req, res, collections);
     });
     
     
     // --- (Placeholder) Admin get all users route ---
-    // We will also protect this with middleware
     // app.get('/api/v1/admin/users', authenticateToken, (req, res) => {
     //    // Logic for admins to get all users
     // });

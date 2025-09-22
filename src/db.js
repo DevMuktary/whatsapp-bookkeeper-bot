@@ -6,19 +6,15 @@ if (!mongoUri) {
 }
 const mongoClient = new MongoClient(mongoUri);
 
-let db;
-let collections = {};
-
+/**
+ * Connects to the MongoDB database and returns the collections.
+ */
 export async function connectToDB() {
-    if (db) {
-        return collections;
-    }
     try {
         await mongoClient.connect();
-        db = mongoClient.db("bookkeeperDB");
+        const db = mongoClient.db("bookkeeperDB");
         
-        // Define collections once after connection is established
-        collections = {
+        const collections = {
             db,
             usersCollection: db.collection('users'),
             transactionsCollection: db.collection('transactions'),

@@ -5,9 +5,9 @@ import { authenticateToken, adminOnly } from './middleware/authMiddleware.js';
 import { 
     getUserSummary, 
     getUserTransactions, 
-    getUserInventory 
+    getUserInventory,
+    getUserReport // <-- NEW IMPORT
 } from './services/userService.js';
-// --- NEW: Import the new admin API functions ---
 import { 
     getAllUsers, 
     getReportForUser 
@@ -55,6 +55,11 @@ export function startApi(collections) {
     app.get('/api/v1/user/inventory', authenticateToken, (req, res) => {
         getUserInventory(req, res, collections);
     });
+
+    // --- NEW: User Report Download Route ---
+    app.get('/api/v1/user/reports/:reportType', authenticateToken, (req, res) => {
+        getUserReport(req, res, collections);
+    });
     
     
     // --- Protected Admin Routes (Must Be Admin) ---
@@ -62,8 +67,6 @@ export function startApi(collections) {
        getAllUsers(req, res, collections);
     });
 
-    // --- NEW: Admin Report Download Route ---
-    // This uses URL parameters (e.g., .../pnl)
     app.get('/api/v1/admin/reports/user/:userId/:reportType', authenticateToken, adminOnly, (req, res) => {
        getReportForUser(req, res, collections);
     });

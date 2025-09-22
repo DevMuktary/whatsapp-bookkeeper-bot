@@ -1,15 +1,13 @@
 import { processMessageWithAI } from './services/aiService.js';
 import { handleOnboarding } from './services/onboardingService.js';
-import bcrypt from 'bcrypt'; // <-- NEW: Import bcrypt
+import { handleAdminCommand } from './services/adminService.js'; // <-- NEW: Import Admin Service
+import bcrypt from 'bcrypt';
 
-// --- NEW: Define Admin Phone Numbers ---
-// We strip the '+' and use the country code.
 const ADMIN_NUMBERS = ['2348105294232', '2348146817448'];
-const SALT_ROUNDS = 10; // For bcrypt hashing
+const SALT_ROUNDS = 10;
 
 /**
  * Main message handler (Router)
- * This function routes incoming messages to the correct service.
  */
 export async function handleMessage(sock, msg, collections) {
     const { usersCollection, conversationsCollection } = collections;
@@ -25,15 +23,12 @@ export async function handleMessage(sock, msg, collections) {
         let user = await usersCollection.findOne({ userId: senderId });
         let conversation = await conversationsCollection.findOne({ userId: senderId });
 
-        // --- 1. New User Onboarding (UPDATED) ---
+        // --- 1. New User Onboarding ---
         if (!user) {
-            // --- NEW: Admin Role & Password Logic ---
-            const normalizedSenderId = senderId.split('@')[0]; // "234810..."
+            const normalizedSenderId = senderId.split('@')[0];
             const isAdmin = ADMIN_NUMBERS.includes(normalizedSenderId);
             const role = isAdmin ? 'admin' : 'user';
             
-            // Create a secure, temporary password.
-            // In the future, we can have the user set this.
             const tempPassword = `fynax@${Math.floor(Math.random() * 10000)}`;
             const hashedPassword = await bcrypt.hash(tempPassword, SALT_ROUNDS);
             
@@ -45,14 +40,8 @@ export async function handleMessage(sock, msg, collections) {
                 createdAt: new Date(),
             };
 
-            // This welcome message will be sent AFTER they set their store name.
-            if (isAdmin) {
-                console.log(`ADMIN USER ${senderId} created.`);
-            }
-            // --- END OF NEW LOGIC ---
-
             await usersCollection.insertOne(newUser);
-            user = newUser; // Assign the new user object
+            user = newUser; 
 
             const newConversation = {
                 userId: senderId,
@@ -61,18 +50,25 @@ export async function handleMessage(sock, msg, collections) {
             };
 
             await conversationsCollection.insertOne(newConversation);
-            conversation = newConversation; // Assign the new convo object
+            conversation = newConversation;
             
             await sock.sendMessage(senderId, { text: `👋 Welcome to Fynax Bookkeeper, your new AI Bookkeeping Assistant!\n\nTo get started, please tell me the name of your business or store.` });
             
             if (isAdmin) {
-                // Send a special welcome to admins
-                await sock.sendMessage(senderId, { text: `🔑 *Admin Access Granted.*\nYour temporary web password is: \`${tempPassword}\`\n\nPlease change this later.` });
+                await sock.sendMessage(senderId, { text: `🔑 *Admin Access Granted.*\nYour temporary web password is: \`${tempPassword}\`\nYou can change it with /setpass [your_phone] [new_pass]\nType /help for all commands.` });
             }
             return;
         }
 
-        // --- 2. Check for Onboarding State ---
+        // --- NEW: 2. Check for Admin Command ---
+        // We check this *before* onboarding or block checks,
+        // so an admin can use commands at any time.
+        if (messageText.startsWith('/') && user.role === 'admin') {
+            await handleAdminCommand(sock, messageText, collections, user);
+            return; // Admin command handled, stop.
+        }
+
+        // --- 3. Check for Onboarding State ---
         if (conversation?.state) {
             const isHandledByOnboarding = await handleOnboarding(sock, messageText, collections, senderId, conversation.state);
             if (isHandledByOnboarding) {
@@ -80,16 +76,9 @@ export async function handleMessage(sock, msg, collections) {
             }
         }
         
-        // --- 3. (Placeholder) Check for Live Chat State ---
-        // if (conversation?.chatState === 'live') {
-        //     await handleLiveChatMessage(sock, msg, collections, senderId);
-        //     return;
-        // }
-
         // --- 4. Check for Blocked User ---
         if (user?.isBlocked) {
-            // We'll just ignore blocked users.
-            return; 
+            return; // Ignore.
         }
 
         // --- 5. If all checks pass, process with AI ---

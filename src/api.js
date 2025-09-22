@@ -1,6 +1,8 @@
 import express from 'express';
 import cors from 'cors';
-import { loginUser } from './services/authService.js'; // <-- NEW IMPORT
+import { loginUser } from './services/authService.js';
+import { authenticateToken } from './middleware/authMiddleware.js'; // <-- NEW: Import middleware
+import { getUserSummary } from './services/userService.js';    // <-- NEW: Import user service
 
 // --- Security: Define which websites can access your API ---
 const corsOptions = {
@@ -22,24 +24,26 @@ export function startApi(collections) {
 
     // --- API Routes ---
 
-    // A simple test route
+    // --- Unprotected Routes (Public) ---
     app.get('/api/v1/health', (req, res) => {
         res.status(200).json({ status: 'ok', message: 'Fynax API is running' });
     });
 
-    // --- NEW: The real login route ---
-    // We pass (req, res) to the function, and also the 'collections'
     app.post('/api/v1/auth/login', (req, res) => {
         loginUser(req, res, collections);
     });
     
-    // (Placeholder) Get user data route
-    // app.get('/api/v1/user/summary', (req, res) => {
-    //     // Logic to get user's financial summary
-    // });
+    // --- Protected Routes (User Must Be Logged In) ---
+    // Notice 'authenticateToken' is "plugged in" before the main function.
+    // It runs first, checks the token, and then calls the next function (getUserSummary).
+    app.get('/api/v1/user/summary', authenticateToken, (req, res) => {
+        getUserSummary(req, res, collections);
+    });
     
-    // (Placeholder) Admin get all users route
-    // app.get('/api/v1/admin/users', (req, res) => {
+    
+    // --- (Placeholder) Admin get all users route ---
+    // We will also protect this with middleware
+    // app.get('/api/v1/admin/users', authenticateToken, (req, res) => {
     //    // Logic for admins to get all users
     // });
 

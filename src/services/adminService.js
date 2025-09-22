@@ -1,6 +1,8 @@
 import bcrypt from 'bcrypt';
 import { normalizePhone } from '../utils/helpers.js';
-import * as reportService from './reportService.js'; // <-- NEW IMPORT
+import * as reportService from './reportService.js';
+import archiver from 'archiver'; // <-- NEW IMPORT
+
 const SALT_ROUNDS = 10;
 
 // ==================================================================
@@ -24,21 +26,18 @@ export async function getAllUsers(req, res, collections) {
 }
 
 /**
- * --- NEW API Endpoint: Get a Report for a Specific User ---
+ * --- API Endpoint: Get a Report for a Specific User ---
  */
 export async function getReportForUser(req, res, collections) {
     const { usersCollection } = collections;
     const { userId, reportType } = req.params;
-
     try {
         const user = await usersCollection.findOne({ userId: userId });
         if (!user) {
             return res.status(404).json({ message: "User not found." });
         }
-
         let pdfBuffer;
         let fileName = `${reportType}_report_${user.storeName || userId}.pdf`;
-
         switch (reportType.toLowerCase()) {
             case 'transactions':
                 pdfBuffer = await reportService.getTransactionReportAsBuffer(collections, userId);
@@ -55,15 +54,62 @@ export async function getReportForUser(req, res, collections) {
             default:
                 return res.status(400).json({ message: "Invalid report type. Use 'transactions', 'inventory', or 'pnl'." });
         }
-        
-        // --- Send the PDF as a download ---
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
         res.send(pdfBuffer);
-
     } catch (error) {
         console.error(`Error in getReportForUser (${reportType}):`, error);
         res.status(404).json({ message: error.message || "Could not generate report." });
+    }
+}
+
+/**
+ * --- NEW API Endpoint: Generate ZIP of All P&L Reports ---
+ */
+export async function generateAllPnlReportsZip(req, res, collections) {
+    const { usersCollection } = collections;
+    const archive = archiver('zip', {
+        zlib: { level: 9 } // Sets the compression level.
+    });
+
+    // --- Set HTTP headers for ZIP download ---
+    const zipFileName = `Fynax_All_P&L_Reports_${new Date().toISOString().split('T')[0]}.zip`;
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${zipFileName}"`);
+
+    // Pipe the archive stream directly to the response
+    archive.pipe(res);
+
+    try {
+        // Find all non-admin, non-blocked users
+        const users = await usersCollection.find({ 
+            role: 'user', 
+            isBlocked: false 
+        }).toArray();
+
+        for (const user of users) {
+            try {
+                // Generate the P&L report buffer for this user
+                const pdfBuffer = await reportService.getPnLReportAsBuffer(collections, user.userId);
+                
+                // Add the PDF to the ZIP file
+                const storeName = (user.storeName || user.userId.split('@')[0]).replace(/[^a-zA-Z0-9]/g, '_');
+                archive.append(pdfBuffer, { name: `P&L_${storeName}.pdf` });
+
+            } catch (err) {
+                // A single user's report failed (e.g., no data). Log it and continue.
+                console.error(`Failed to generate P&L for ${user.userId}: ${err.message}`);
+                // Add a simple text file to the zip indicating the failure
+                archive.append(`Failed to generate report: ${err.message}`, { name: `FAILED_P&L_${user.userId.split('@')[0]}.txt` });
+            }
+        }
+
+        // Finalize the archive (this sends the zip file)
+        await archive.finalize();
+
+    } catch (error) {
+        console.error("Error in generateAllPnlReportsZip:", error);
+        res.status(500).json({ message: "An internal server error occurred while creating the ZIP file." });
     }
 }
 
@@ -79,9 +125,7 @@ export async function getReportForUser(req, res, collections) {
 async function blockUser(args, collections, sock, adminUser) {
     const { usersCollection } = collections;
     const phoneToBlock = args[0];
-    if (!phoneToBlock) {
-        return await sock.sendMessage(adminUser.userId, { text: "Usage: /block [phone_number]" });
-    }
+    if (!phoneToBlock) { return await sock.sendMessage(adminUser.userId, { text: "Usage: /block [phone_number]" }); }
     const targetJid = normalizePhone(phoneToBlock);
     if (!targetJid) { return await sock.sendMessage(adminUser.userId, { text: `Invalid phone number format.` }); }
     const targetUser = await usersCollection.findOne({ userId: targetJid });

@@ -1,8 +1,43 @@
 import bcrypt from 'bcrypt';
-import { normalizePhone } from '../utils/helpers.js'; // <-- NEW IMPORT
+import { normalizePhone } from '../utils/helpers.js';
 const SALT_ROUNDS = 10;
 
-// --- THE normalizePhone FUNCTION IS GONE FROM HERE ---
+// ==================================================================
+// --- API ENDPOINT LOGIC (NEW) ---
+// ==================================================================
+
+/**
+ * --- API Endpoint: Get All Users (for Admin) ---
+ * Fetches a list of all users, hiding sensitive data.
+ */
+export async function getAllUsers(req, res, collections) {
+    const { usersCollection } = collections;
+    
+    try {
+        const users = await usersCollection.find(
+            {},
+            { 
+                // --- Security: Projection ---
+                // We *explicitly* remove fields we don't want to send.
+                projection: {
+                    websitePassword: 0, // NEVER send the password hash
+                    // 'history' is not in this collection, but good practice
+                } 
+            }
+        ).toArray();
+        
+        res.status(200).json(users);
+
+    } catch (error) {
+        console.error("Error in getAllUsers:", error);
+        res.status(500).json({ message: "An internal server error occurred." });
+    }
+}
+
+
+// ==================================================================
+// --- BOT COMMAND LOGIC (Existing) ---
+// ==================================================================
 
 /**
  * --- Admin Function: Block a User ---
@@ -18,7 +53,7 @@ async function blockUser(args, collections, sock, adminUser) {
     if (!targetJid) {
         return await sock.sendMessage(adminUser.userId, { text: `Invalid phone number format.` });
     }
-
+    
     const targetUser = await usersCollection.findOne({ userId: targetJid });
 
     if (!targetUser) {
@@ -46,7 +81,7 @@ async function unblockUser(args, collections, sock, adminUser) {
     if (!targetJid) {
         return await sock.sendMessage(adminUser.userId, { text: `Invalid phone number format.` });
     }
-
+    
     const targetUser = await usersCollection.findOne({ userId: targetJid });
 
     if (!targetUser) {
@@ -76,7 +111,7 @@ async function setPassword(args, collections, sock, adminUser) {
     if (!targetJid) {
         return await sock.sendMessage(adminUser.userId, { text: `Invalid phone number format.` });
     }
-
+    
     const targetUser = await usersCollection.findOne({ userId: targetJid });
 
     if (!targetUser) {
@@ -100,7 +135,7 @@ async function showHelp(sock, adminUser) {
 
 
 /**
- * --- Main Admin Command Router ---
+ * --- Main Admin Command Router (Bot) ---
  */
 export async function handleAdminCommand(sock, messageText, collections, adminUser) {
     const parts = messageText.split(' ');

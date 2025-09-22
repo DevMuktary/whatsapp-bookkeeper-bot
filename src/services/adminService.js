@@ -1,13 +1,14 @@
 import bcrypt from 'bcrypt';
 import { normalizePhone } from '../utils/helpers.js';
 import * as reportService from './reportService.js';
-import archiver from 'archiver'; // <-- NEW IMPORT
+import archiver from 'archiver';
 
 const SALT_ROUNDS = 10;
 
 // ==================================================================
 // --- API ENDPOINT LOGIC ---
 // ==================================================================
+// (getAllUsers, getReportForUser, generateAllPnlReportsZip - all unchanged)
 
 /**
  * --- API Endpoint: Get All Users (for Admin) ---
@@ -64,60 +65,40 @@ export async function getReportForUser(req, res, collections) {
 }
 
 /**
- * --- NEW API Endpoint: Generate ZIP of All P&L Reports ---
+ * --- API Endpoint: Generate ZIP of All P&L Reports ---
  */
 export async function generateAllPnlReportsZip(req, res, collections) {
     const { usersCollection } = collections;
-    const archive = archiver('zip', {
-        zlib: { level: 9 } // Sets the compression level.
-    });
-
-    // --- Set HTTP headers for ZIP download ---
+    const archive = archiver('zip', { zlib: { level: 9 } });
     const zipFileName = `Fynax_All_P&L_Reports_${new Date().toISOString().split('T')[0]}.zip`;
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="${zipFileName}"`);
-
-    // Pipe the archive stream directly to the response
     archive.pipe(res);
-
     try {
-        // Find all non-admin, non-blocked users
         const users = await usersCollection.find({ 
             role: 'user', 
             isBlocked: false 
         }).toArray();
-
         for (const user of users) {
             try {
-                // Generate the P&L report buffer for this user
                 const pdfBuffer = await reportService.getPnLReportAsBuffer(collections, user.userId);
-                
-                // Add the PDF to the ZIP file
                 const storeName = (user.storeName || user.userId.split('@')[0]).replace(/[^a-zA-Z0-9]/g, '_');
                 archive.append(pdfBuffer, { name: `P&L_${storeName}.pdf` });
-
             } catch (err) {
-                // A single user's report failed (e.g., no data). Log it and continue.
                 console.error(`Failed to generate P&L for ${user.userId}: ${err.message}`);
-                // Add a simple text file to the zip indicating the failure
                 archive.append(`Failed to generate report: ${err.message}`, { name: `FAILED_P&L_${user.userId.split('@')[0]}.txt` });
             }
         }
-
-        // Finalize the archive (this sends the zip file)
         await archive.finalize();
-
     } catch (error) {
         console.error("Error in generateAllPnlReportsZip:", error);
         res.status(500).json({ message: "An internal server error occurred while creating the ZIP file." });
     }
 }
 
-
 // ==================================================================
-// --- BOT COMMAND LOGIC (Existing) ---
+// --- BOT COMMAND LOGIC (Updated) ---
 // ==================================================================
-// (This logic for /block, /unblock, /setpass, /help is unchanged)
 
 /**
  * --- Admin Function: Block a User ---
@@ -170,12 +151,79 @@ async function setPassword(args, collections, sock, adminUser) {
 }
 
 /**
+ * --- (NEW) Admin Function: Reply to a User in Live Chat ---
+ */
+async function replyToUser(args, collections, sock, adminUser) {
+    const { usersCollection } = collections;
+    const phoneToReply = args[0];
+    const message = args.slice(1).join(' ');
+
+    if (!phoneToReply || !message) {
+        return await sock.sendMessage(adminUser.userId, { text: "Usage: /reply [phone_number] [message]" });
+    }
+
+    const targetJid = normalizePhone(phoneToReply);
+    const targetUser = await usersCollection.findOne({ userId: targetJid });
+
+    if (!targetUser) {
+        return await sock.sendMessage(adminUser.userId, { text: `User ${targetJid} not found.` });
+    }
+
+    // Send the admin's reply to the user
+    await sock.sendMessage(targetJid, { text: `💬 *Support Agent:* ${message}` });
+    // Confirm to the admin
+    await sock.sendMessage(adminUser.userId, { text: `✅ Your reply has been sent to ${targetUser.storeName || targetJid}.` });
+}
+
+/**
+ * --- (NEW) Admin Function: End a Live Chat Session ---
+ */
+async function endChat(args, collections, sock, adminUser) {
+    const { conversationsCollection } = collections;
+    const phoneToEnd = args[0];
+    if (!phoneToEnd) {
+        return await sock.sendMessage(adminUser.userId, { text: "Usage: /endchat [phone_number]" });
+    }
+
+    const targetJid = normalizePhone(phoneToEnd);
+    
+    // Set the user's chatState back to 'bot'
+    await conversationsCollection.updateOne(
+        { userId: targetJid },
+        { $set: { chatState: 'bot' }, $unset: { liveChatTicketId: "" } }
+    );
+
+    // Notify both the admin and the user
+    await sock.sendMessage(adminUser.userId, { text: `✅ Chat session ended for ${targetJid}. The bot is now active for them.` });
+    await sock.sendMessage(targetJid, { text: `Your chat with the support agent has ended. Fynax Bookkeeper is now active again.` });
+}
+
+
+/**
  * --- Admin Function: List available commands ---
  */
 async function showHelp(sock, adminUser) {
-    const helpText = `*Fynax Admin Panel* 🔑\n\nAvailable commands:\n\n*/block [phone_number]*\n_Stops a user from using the bot._\n\n*/unblock [phone_number]*\n_Re-enables a user._\n\n*/setpass [phone_number] [new_password]*\n_Resets a user's web password._\n\n*/help*\n_Shows this message._`;
+    const helpText = `*Fynax Admin Panel* 🔑\n\nAvailable commands:\n
+*/reply [phone] [message]*
+_Reply to a user in live chat._
+
+*/endchat [phone]*
+_End a live chat session and reactivate the bot for a user._
+
+*/block [phone]*
+_Stops a user from using the bot._
+
+*/unblock [phone]*
+_Re-enables a user._
+
+*/setpass [phone] [new_pass]*
+_Resets a user's web password._
+
+*/help*
+_Shows this message._`;
     await sock.sendMessage(adminUser.userId, { text: helpText });
 }
+
 
 /**
  * --- Main Admin Command Router (Bot) ---
@@ -185,10 +233,27 @@ export async function handleAdminCommand(sock, messageText, collections, adminUs
     const command = parts[0].toLowerCase();
     const args = parts.slice(1);
     switch (command) {
-        case '/block': await blockUser(args, collections, sock, adminUser); break;
-        case '/unblock': await unblockUser(args, collections, sock, adminUser); break;
-        case '/setpass': await setPassword(args, collections, sock, adminUser); break;
-        case '/help': await showHelp(sock, adminUser); break;
-        default: await sock.sendMessage(adminUser.userId, { text: `Unknown command: ${command}\nType /help for a list of commands.` });
+        // --- NEW COMMANDS ---
+        case '/reply':
+            await replyToUser(args, collections, sock, adminUser);
+            break;
+        case '/endchat':
+            await endChat(args, collections, sock, adminUser);
+            break;
+        // --- EXISTING COMMANDS ---
+        case '/block': 
+            await blockUser(args, collections, sock, adminUser); 
+            break;
+        case '/unblock': 
+            await unblockUser(args, collections, sock, adminUser); 
+            break;
+        case '/setpass': 
+            await setPassword(args, collections, sock, adminUser); 
+            break;
+        case '/help': 
+            await showHelp(sock, adminUser); 
+            break;
+        default: 
+            await sock.sendMessage(adminUser.userId, { text: `Unknown command: ${command}\nType /help for a list of commands.` });
     }
 }

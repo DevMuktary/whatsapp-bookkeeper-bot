@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import * as accountingService from './accountingService.js';
 import * as reportService from './reportService.js';
+import * as authService from './authService.js'; // <-- NEW IMPORT
 
 // --- AI Client Initialization ---
 const deepseek = new OpenAI({
@@ -8,8 +9,9 @@ const deepseek = new OpenAI({
     baseURL: "https://api.deepseek.com/v1",
 });
 
-// --- AI Tool Definitions ---
+// --- AI Tool Definitions (UPDATED) ---
 const tools = [
+  // ... (all the existing tools like logSale, logTransaction, etc.)
   { type: "function", function: { name: 'logSale', description: 'Logs a sale of a product from inventory. This is the primary tool for recording sales.', parameters: { type: 'object', properties: { productName: { type: 'string', description: 'The name of the product sold, e.g., "iPhone 17 Air".' }, quantitySold: { type: 'number', description: 'The number of units sold.' }, totalAmount: { type: 'number', description: 'The total income received from the sale.' } }, required: ['productName', 'quantitySold', 'totalAmount'] } } },
   { type: "function", function: { name: 'logTransaction', description: 'Logs a generic income or expense that is NOT a product sale, such as "rent", "utilities", or "service income".', parameters: { type: 'object', properties: { type: { type: 'string', description: 'The type of transaction, either "income" or "expense".' }, amount: { type: 'number' }, description: { type: 'string' }, category: { type: 'string', description: 'For expenses, a category like "rent", "utilities", "transport". Defaults to "Uncategorized".' } }, required: ['type', 'amount', 'description'] } } },
   { type: "function", function: { name: 'addProduct', description: 'Adds one or more new products to inventory. If a product already exists, this updates its price and adds to its stock.', parameters: { type: 'object', properties: { products: { type: 'array', items: { type: 'object', properties: { productName: { type: 'string' }, cost: { type: 'number' }, price: { type: 'number' }, stock: { type: 'number' } }, required: ['productName', 'cost', 'price', 'stock'] } } }, required: ['products'] } } },
@@ -19,22 +21,47 @@ const tools = [
   { type: "function", function: { name: 'generateTransactionReport', description: 'Generates a PDF file of all financial transactions. Use only when the user explicitly asks to "export", "download", or receive a "PDF report".', parameters: { type: 'object', properties: {} } } },
   { type: "function", function: { name: 'generateInventoryReport', description: 'Generates a PDF file of inventory, sales, and profit. Use only when the user explicitly asks for an "inventory report" or "profit report".', parameters: { type: 'object', properties: {} } } },
   { type: "function", function: { name: 'generatePnLReport', description: 'Generates a professional Profit and Loss (P&L) PDF statement. Use only when the user asks for a "P&L" or "statement".', parameters: { type: 'object', properties: {} } } },
+  
+  // --- NEWLY ADDED TOOL ---
+  { 
+    type: "function", 
+    function: { 
+      name: 'changeWebsitePassword', 
+      description: "Changes the user's password for the Fynax website dashboard. The new password must be at least 6 characters.", 
+      parameters: { 
+        type: 'object', 
+        properties: { 
+          newPassword: { 
+            type: 'string', 
+            description: 'The new password the user wants to set. Must be at least 6 characters.' 
+          } 
+        }, 
+        required: ['newPassword'] 
+      } 
+    } 
+  }
 ];
 
-// --- Tool Function Mapping ---
+// --- Tool Function Mapping (UPDATED) ---
 const availableTools = { 
+    // Accounting
     logSale: accountingService.logSale,
     logTransaction: accountingService.logTransaction, 
     addProduct: accountingService.addProduct, 
     setOpeningBalance: accountingService.setOpeningBalance, 
     getInventory: accountingService.getInventory, 
     getMonthlySummary: accountingService.getMonthlySummary, 
+    
+    // Reporting
     generateTransactionReport: reportService.generateTransactionReport, 
     generateInventoryReport: reportService.generateInventoryReport, 
-    generatePnLReport: reportService.generatePnLReport 
+    generatePnLReport: reportService.generatePnLReport,
+
+    // --- NEWLY ADDED MAPPING ---
+    changeWebsitePassword: authService.changePasswordFromBot
 };
 
-// --- Core AI Processing Function ---
+// --- Core AI Processing Function (UPDATED) ---
 export async function processMessageWithAI(text, collections, senderId, sock) {
     const { conversationsCollection } = collections;
     
@@ -42,7 +69,8 @@ export async function processMessageWithAI(text, collections, senderId, sock) {
         const conversation = await conversationsCollection.findOne({ userId: senderId });
         const savedHistory = conversation ? conversation.history : [];
         
-        const systemInstruction = `You are 'Fynax Bookkeeper', a professional, confident, and friendly AI bookkeeping assistant. Your name is Fynax Bookkeeper. Follow these rules with absolute priority: 1. **Use Tools for All Data Questions:** If a user asks a question about their specific financial or inventory data, you MUST use a tool to get the answer. Your primary job is to call the correct function. 2. **Never Explain Yourself:** Do not mention your functions, code, or that you are an AI. Speak as if you are the one performing the action. 3. **CRITICAL RULE:** Never, under any circumstances, write tool call syntax like "<|tool_calls_begin|>" or other code in your text responses. Your responses must be clean, natural language only. 4. **Stay Within Abilities:** ONLY perform actions defined in the available tools. If asked to do something else (like send an email or browse the internet), politely state your purpose is bookkeeping for their business. Do not answer questions outside of this scope. 5. **Use the Right Tool:** Use 'logSale' for product sales. Use 'logTransaction' for other income/expenses. Use 'getMonthlySummary' for simple questions about totals. Use the 'generate...Report' tools for export requests. 6. **Be Confident & Concise:** When a tool is called, assume it was successful. Announce the result confidently.`;
+        // --- UPDATED SYSTEM PROMPT ---
+        const systemInstruction = `You are 'Fynax Bookkeeper', a professional, confident, and friendly AI bookkeeping assistant. Your name is Fynax Bookkeeper. Follow these rules with absolute priority: 1. **Use Tools for All Data Questions:** If a user asks a question about their specific financial or inventory data, you MUST use a tool to get the answer. Your primary job is to call the correct function. 2. **Never Explain Yourself:** Do not mention your functions, code, or that you are an AI. Speak as if you are the one performing the action. 3. **CRITICAL RULE:** Never, under any circumstances, write tool call syntax like "<|tool_calls_begin|>" or other code in your text responses. Your responses must be clean, natural language only. 4. **Stay Within Abilities:** ONLY perform actions defined in the available tools. This includes logging sales/expenses, managing inventory, generating reports, and **changing the user's website password**. If asked to do something else (like send an email or browse the internet), politely state your purpose is bookkeeping. Do not answer questions outside of this scope. 5. **Password Rule:** If a user wants to change their password, use the 'changeWebsitePassword' tool. Ensure the new password is at least 6 characters. If it's not, ask them to provide a longer one. 6. **Be Confident & Concise:** When a tool is called, assume it was successful. Announce the result confidently.`;
         
         const messages = [
             { role: "system", content: systemInstruction },
@@ -69,6 +97,7 @@ export async function processMessageWithAI(text, collections, senderId, sock) {
                 const functionArgs = JSON.parse(toolCall.function.arguments);
                 const selectedTool = availableTools[functionName];
                 if (selectedTool) {
+                    // Pass all required args
                     const functionResult = await selectedTool(functionArgs, collections, senderId, sock);
                     return { tool_call_id: toolCall.id, role: "tool", name: functionName, content: JSON.stringify(functionResult) };
                 }
@@ -98,6 +127,7 @@ export async function processMessageWithAI(text, collections, senderId, sock) {
             }
         }
 
+        // --- History pruning logic remains the same ---
         const finalHistoryToSave = [...savedHistory, ...newHistoryEntries];
         const MAX_TURNS_TO_KEEP = 5;
         let userMessageCount = 0;
@@ -123,6 +153,6 @@ export async function processMessageWithAI(text, collections, senderId, sock) {
         
     } catch (error) {
         console.error("Detailed error in AI message handler:", error);
-        throw error; // Re-throw the error to be caught by handleMessage
+        throw error;
     }
 }

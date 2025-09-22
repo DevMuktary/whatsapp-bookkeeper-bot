@@ -1,13 +1,16 @@
 import express from 'express';
 import cors from 'cors';
 import { loginUser } from './services/authService.js';
-import { authenticateToken } from './middleware/authMiddleware.js';
-// --- NEW: Import the new functions ---
+// --- NEW: Import both middlewares ---
+import { authenticateToken, adminOnly } from './middleware/authMiddleware.js';
 import { 
     getUserSummary, 
     getUserTransactions, 
     getUserInventory 
 } from './services/userService.js';
+// --- NEW: Import the admin API function ---
+import { getAllUsers } from './services/adminService.js';
+
 
 // --- Security: Define which websites can access your API ---
 const corsOptions = {
@@ -38,28 +41,28 @@ export function startApi(collections) {
         loginUser(req, res, collections);
     });
     
-    // --- Protected Routes (User Must Be Logged In) ---
-    
-    // Summary Route
+    // --- Protected User Routes (User Must Be Logged In) ---
     app.get('/api/v1/user/summary', authenticateToken, (req, res) => {
         getUserSummary(req, res, collections);
     });
 
-    // --- NEW: Transactions Route (Paginated) ---
     app.get('/api/v1/user/transactions', authenticateToken, (req, res) => {
         getUserTransactions(req, res, collections);
     });
 
-    // --- NEW: Inventory Route ---
     app.get('/api/v1/user/inventory', authenticateToken, (req, res) => {
         getUserInventory(req, res, collections);
     });
     
     
-    // --- (Placeholder) Admin get all users route ---
-    // app.get('/api/v1/admin/users', authenticateToken, (req, res) => {
-    //    // Logic for admins to get all users
-    // });
+    // --- NEW: Protected Admin Routes (Must Be Admin) ---
+    // This route uses a *chain* of middleware.
+    // 1. 'authenticateToken' runs (checks if logged in).
+    // 2. 'adminOnly' runs (checks if role is 'admin').
+    // 3. 'getAllUsers' runs (only if both checks pass).
+    app.get('/api/v1/admin/users', authenticateToken, adminOnly, (req, res) => {
+       getAllUsers(req, res, collections);
+    });
 
     return app;
 }

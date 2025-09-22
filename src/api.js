@@ -6,11 +6,12 @@ import {
     getUserSummary, 
     getUserTransactions, 
     getUserInventory,
-    getUserReport // <-- NEW IMPORT
+    getUserReport
 } from './services/userService.js';
 import { 
     getAllUsers, 
-    getReportForUser 
+    getReportForUser,
+    generateAllPnlReportsZip // <-- NEW IMPORT
 } from './services/adminService.js';
 
 
@@ -56,7 +57,6 @@ export function startApi(collections) {
         getUserInventory(req, res, collections);
     });
 
-    // --- NEW: User Report Download Route ---
     app.get('/api/v1/user/reports/:reportType', authenticateToken, (req, res) => {
         getUserReport(req, res, collections);
     });
@@ -69,6 +69,11 @@ export function startApi(collections) {
 
     app.get('/api/v1/admin/reports/user/:userId/:reportType', authenticateToken, adminOnly, (req, res) => {
        getReportForUser(req, res, collections);
+    });
+
+    // --- NEW: Admin All-Reports ZIP Download Route ---
+    app.get('/api/v1/admin/reports/all-pnl-zip', authenticateToken, adminOnly, (req, res) => {
+        generateAllPnlReportsZip(req, res, collections);
     });
 
     return app;

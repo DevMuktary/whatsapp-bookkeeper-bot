@@ -1,36 +1,37 @@
 import { Boom } from '@hapi/boom';
 import makeWASocket, { DisconnectReason, useMultiFileAuthState } from '@whiskeysockets/baileys';
 import pino from 'pino';
-import { connectToDB } from './db.js';
+// We no longer import connectToDB here
 import { handleMessage } from './messageHandler.js';
 
-const processingUsers = new Set(); // Manages active users
+const processingUsers = new Set();
 
-export async function startBot() {
+/**
+ * Starts the WhatsApp bot.
+ * @param {object} collections - The MongoDB collections object.
+ */
+export async function startBot(collections) {
     console.log("Starting Bot...");
-    const collections = await connectToDB();
+    // We no longer call connectToDB(). We receive 'collections'.
 
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     const sock = makeWASocket({
         logger: pino({ level: 'silent' }),
-        printQRInTerminal: false,
+        printQRInTerminal: true, // We fixed this earlier
         auth: state,
     });
 
     sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect, qr } = update;
-        if (qr) {
-            console.log("--------------------------------------------------");
-            console.log("COPY THE TEXT BELOW and paste it into a QR code generator app/website:");
-            console.log(qr);
-            console.log("--------------------------------------------------");
-        }
+        const { connection, lastDisconnect } = update;
+        // We removed the QR logic, as printQRInTerminal handles it.
+        
         if (connection === 'close') {
             const shouldReconnect = (lastDisconnect.error instanceof Boom) &&
                 lastDisconnect.error.output.statusCode !== DisconnectReason.loggedOut;
             console.log('Connection closed due to:', lastDisconnect.error, ', reconnecting:', shouldReconnect);
             if (shouldReconnect) {
-                startBot();
+                // We pass collections to the retry
+                startBot(collections);
             }
         } else if (connection === 'open') {
             console.log('✅ WhatsApp connection opened!');
@@ -44,19 +45,19 @@ export async function startBot() {
         if (!msg.key.fromMe && msg.message) {
             const senderId = msg.key.remoteJid;
 
-            // Prevents a single user from running multiple commands at once
             if (processingUsers.has(senderId)) {
                 return;
             }
 
-            processingUsers.add(senderId); // Lock the user
+            processingUsers.add(senderId);
 
             try {
+                // Pass collections to the handler
                 await handleMessage(sock, msg, collections);
             } catch (error) {
                 console.error("Unhandled error in message handler pipeline:", error);
             } finally {
-                processingUsers.delete(senderId); // Unlock the user
+                processingUsers.delete(senderId);
             }
         }
     });

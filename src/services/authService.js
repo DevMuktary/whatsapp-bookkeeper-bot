@@ -3,8 +3,9 @@ import jwt from 'jsonwebtoken';
 import Joi from 'joi';
 import { normalizePhone } from '../utils/helpers.js';
 
+const SALT_ROUNDS = 10; // Added salt rounds for hashing
+
 // --- Validation Schema ---
-// Ensures the input data is in the correct format before we even touch the database.
 const loginSchema = Joi.object({
     phone: Joi.string().min(10).max(15).required(),
     password: Joi.string().min(6).required()
@@ -48,7 +49,6 @@ export async function loginUser(req, res, collections) {
     }
 
     // 5. Generate JWT Token
-    // The token is a secure key that proves the user is logged in.
     const token = jwt.sign(
         { 
             userId: user.userId, 
@@ -56,7 +56,7 @@ export async function loginUser(req, res, collections) {
             storeName: user.storeName 
         },
         process.env.JWT_SECRET,
-        { expiresIn: '8h' } // Token lasts for 8 hours
+        { expiresIn: '8h' }
     );
 
     // 6. Send Success Response
@@ -68,4 +68,32 @@ export async function loginUser(req, res, collections) {
             role: user.role
         }
     });
+}
+
+/**
+ * --- NEW BOT TOOL: Change User's Web Password ---
+ * Handles a request from the WhatsApp bot AI.
+ */
+export async function changePasswordFromBot(args, collections, senderId) {
+    const { usersCollection } = collections;
+    const { newPassword } = args;
+
+    if (!newPassword || newPassword.length < 6) {
+        return { success: false, message: "Password must be at least 6 characters long. Please try again." };
+    }
+
+    try {
+        const hashedPassword = await bcrypt.hash(newPassword, SALT_ROUNDS);
+        
+        await usersCollection.updateOne(
+            { userId: senderId },
+            { $set: { websitePassword: hashedPassword } }
+        );
+
+        return { success: true, message: "Your website password has been successfully changed." };
+
+    } catch (error) {
+        console.error("Error in changePasswordFromBot:", error);
+        return { success: false, message: "An error occurred while trying to change your password." };
+    }
 }

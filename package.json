@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.2",
+    "bcrypt": "^5.1.1",
     "dotenv": "^16.4.5",
     "mongodb": "^6.5.0",
     "openai": "^4.47.1",

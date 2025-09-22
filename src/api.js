@@ -1,15 +1,17 @@
 import express from 'express';
 import cors from 'cors';
 import { loginUser } from './services/authService.js';
-// --- NEW: Import both middlewares ---
 import { authenticateToken, adminOnly } from './middleware/authMiddleware.js';
 import { 
     getUserSummary, 
     getUserTransactions, 
     getUserInventory 
 } from './services/userService.js';
-// --- NEW: Import the admin API function ---
-import { getAllUsers } from './services/adminService.js';
+// --- NEW: Import the new admin API functions ---
+import { 
+    getAllUsers, 
+    getReportForUser 
+} from './services/adminService.js';
 
 
 // --- Security: Define which websites can access your API ---
@@ -55,13 +57,15 @@ export function startApi(collections) {
     });
     
     
-    // --- NEW: Protected Admin Routes (Must Be Admin) ---
-    // This route uses a *chain* of middleware.
-    // 1. 'authenticateToken' runs (checks if logged in).
-    // 2. 'adminOnly' runs (checks if role is 'admin').
-    // 3. 'getAllUsers' runs (only if both checks pass).
+    // --- Protected Admin Routes (Must Be Admin) ---
     app.get('/api/v1/admin/users', authenticateToken, adminOnly, (req, res) => {
        getAllUsers(req, res, collections);
+    });
+
+    // --- NEW: Admin Report Download Route ---
+    // This uses URL parameters (e.g., .../pnl)
+    app.get('/api/v1/admin/reports/user/:userId/:reportType', authenticateToken, adminOnly, (req, res) => {
+       getReportForUser(req, res, collections);
     });
 
     return app;

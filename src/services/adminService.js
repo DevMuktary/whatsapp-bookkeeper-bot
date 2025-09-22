@@ -1,19 +1,8 @@
 import bcrypt from 'bcrypt';
+import { normalizePhone } from '../utils/helpers.js'; // <-- NEW IMPORT
 const SALT_ROUNDS = 10;
 
-/**
- * Normalizes a phone number to the format used in the DB (e.g., 234810...).
- * @param {string} phone - The input phone number (e.g., +234810..., 0810...)
- * @returns {string} - The normalized JID-like number.
- */
-function normalizePhone(phone) {
-    let normalized = phone.replace(/[^0-9]/g, ''); // Remove non-numeric chars
-    if (normalized.startsWith('0')) {
-        normalized = '234' + normalized.substring(1); // Assume 234 for local numbers
-    }
-    // Add other rules here if needed, e.g., for other country codes
-    return `${normalized}@s.whatsapp.net`;
-}
+// --- THE normalizePhone FUNCTION IS GONE FROM HERE ---
 
 /**
  * --- Admin Function: Block a User ---
@@ -26,6 +15,10 @@ async function blockUser(args, collections, sock, adminUser) {
     }
 
     const targetJid = normalizePhone(phoneToBlock);
+    if (!targetJid) {
+        return await sock.sendMessage(adminUser.userId, { text: `Invalid phone number format.` });
+    }
+
     const targetUser = await usersCollection.findOne({ userId: targetJid });
 
     if (!targetUser) {
@@ -50,6 +43,10 @@ async function unblockUser(args, collections, sock, adminUser) {
     }
 
     const targetJid = normalizePhone(phoneToUnblock);
+    if (!targetJid) {
+        return await sock.sendMessage(adminUser.userId, { text: `Invalid phone number format.` });
+    }
+
     const targetUser = await usersCollection.findOne({ userId: targetJid });
 
     if (!targetUser) {
@@ -76,6 +73,10 @@ async function setPassword(args, collections, sock, adminUser) {
     }
 
     const targetJid = normalizePhone(phoneToSet);
+    if (!targetJid) {
+        return await sock.sendMessage(adminUser.userId, { text: `Invalid phone number format.` });
+    }
+
     const targetUser = await usersCollection.findOne({ userId: targetJid });
 
     if (!targetUser) {
@@ -86,7 +87,6 @@ async function setPassword(args, collections, sock, adminUser) {
     await usersCollection.updateOne({ userId: targetJid }, { $set: { websitePassword: hashedPassword } });
 
     await sock.sendMessage(adminUser.userId, { text: `Password for ${targetUser.userId} has been changed.` });
-    // Notify the user as well
     await sock.sendMessage(targetJid, { text: `An admin has reset your web password. Your new password is: \`${newPassword}\`` });
 }
 
@@ -101,12 +101,11 @@ async function showHelp(sock, adminUser) {
 
 /**
  * --- Main Admin Command Router ---
- * This function is called by messageHandler
  */
 export async function handleAdminCommand(sock, messageText, collections, adminUser) {
     const parts = messageText.split(' ');
-    const command = parts[0].toLowerCase(); // e.g., "/block"
-    const args = parts.slice(1); // e.g., ["0810..."]
+    const command = parts[0].toLowerCase();
+    const args = parts.slice(1);
 
     switch (command) {
         case '/block':

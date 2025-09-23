@@ -1,4 +1,4 @@
-import *S from './accountingService.js';
+import * as S from './accountingService.js'; // <-- THE FIX IS HERE
 
 /**
  * --- BOT TOOL: Get Financial Data for Analysis ---

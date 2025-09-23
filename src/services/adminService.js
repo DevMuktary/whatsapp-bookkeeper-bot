@@ -8,7 +8,6 @@ const SALT_ROUNDS = 10;
 // ==================================================================
 // --- API ENDPOINT LOGIC ---
 // ==================================================================
-// (getAllUsers, getReportForUser, generateAllPnlReportsZip - all unchanged)
 
 /**
  * --- API Endpoint: Get All Users (for Admin) ---
@@ -30,13 +29,12 @@ export async function getAllUsers(req, res, collections) {
  * --- API Endpoint: Get a Report for a Specific User ---
  */
 export async function getReportForUser(req, res, collections) {
+    // ... (This function is unchanged)
     const { usersCollection } = collections;
     const { userId, reportType } = req.params;
     try {
         const user = await usersCollection.findOne({ userId: userId });
-        if (!user) {
-            return res.status(404).json({ message: "User not found." });
-        }
+        if (!user) { return res.status(404).json({ message: "User not found." }); }
         let pdfBuffer;
         let fileName = `${reportType}_report_${user.storeName || userId}.pdf`;
         switch (reportType.toLowerCase()) {
@@ -68,6 +66,7 @@ export async function getReportForUser(req, res, collections) {
  * --- API Endpoint: Generate ZIP of All P&L Reports ---
  */
 export async function generateAllPnlReportsZip(req, res, collections) {
+    // ... (This function is unchanged)
     const { usersCollection } = collections;
     const archive = archiver('zip', { zlib: { level: 9 } });
     const zipFileName = `Fynax_All_P&L_Reports_${new Date().toISOString().split('T')[0]}.zip`;
@@ -75,10 +74,7 @@ export async function generateAllPnlReportsZip(req, res, collections) {
     res.setHeader('Content-Disposition', `attachment; filename="${zipFileName}"`);
     archive.pipe(res);
     try {
-        const users = await usersCollection.find({ 
-            role: 'user', 
-            isBlocked: false 
-        }).toArray();
+        const users = await usersCollection.find({ role: 'user', isBlocked: false }).toArray();
         for (const user of users) {
             try {
                 const pdfBuffer = await reportService.getPnLReportAsBuffer(collections, user.userId);
@@ -96,9 +92,66 @@ export async function generateAllPnlReportsZip(req, res, collections) {
     }
 }
 
+/**
+ * --- NEW API Endpoint: Block a User ---
+ */
+export async function blockUserApi(req, res, collections) {
+    const { usersCollection } = collections;
+    const { userId } = req.body; // We'll send the userId in the request body
+
+    if (!userId) {
+        return res.status(400).json({ message: "userId is required." });
+    }
+
+    try {
+        const targetUser = await usersCollection.findOne({ userId: userId });
+        if (!targetUser) {
+            return res.status(404).json({ message: "User not found." });
+        }
+        if (targetUser.role === 'admin') {
+            return res.status(403).json({ message: "Cannot block an admin." });
+        }
+
+        await usersCollection.updateOne({ userId: userId }, { $set: { isBlocked: true } });
+        res.status(200).json({ success: true, message: `User ${userId} has been blocked.` });
+    } catch (error) {
+        console.error("Error in blockUserApi:", error);
+        res.status(500).json({ message: "An internal server error occurred." });
+    }
+}
+
+/**
+ * --- NEW API Endpoint: Unblock a User ---
+ */
+export async function unblockUserApi(req, res, collections) {
+    const { usersCollection } = collections;
+    const { userId } = req.body;
+
+    if (!userId) {
+        return res.status(400).json({ message: "userId is required." });
+    }
+
+    try {
+        const targetUser = await usersCollection.findOne({ userId: userId });
+        if (!targetUser) {
+            return res.status(404).json({ message: "User not found." });
+        }
+
+        await usersCollection.updateOne({ userId: userId }, { $set: { isBlocked: false } });
+        res.status(200).json({ success: true, message: `User ${userId} has been unblocked.` });
+    } catch (error) {
+        console.error("Error in unblockUserApi:", error);
+        res.status(500).json({ message: "An internal server error occurred." });
+    }
+}
+
+
 // ==================================================================
-// --- BOT COMMAND LOGIC (Updated) ---
+// --- BOT COMMAND LOGIC (Unchanged) ---
 // ==================================================================
+// (This logic for /block, /unblock, /setpass, /help is unchanged)
+// ... (rest of the file: blockUser, unblockUser, setPassword, etc.)
+// ... (I've removed it for brevity, but you should have the full file)
 
 /**
  * --- Admin Function: Block a User ---
@@ -151,53 +204,35 @@ async function setPassword(args, collections, sock, adminUser) {
 }
 
 /**
- * --- (NEW) Admin Function: Reply to a User in Live Chat ---
+ * --- Admin Function: Reply to a User in Live Chat ---
  */
 async function replyToUser(args, collections, sock, adminUser) {
     const { usersCollection } = collections;
     const phoneToReply = args[0];
     const message = args.slice(1).join(' ');
-
-    if (!phoneToReply || !message) {
-        return await sock.sendMessage(adminUser.userId, { text: "Usage: /reply [phone_number] [message]" });
-    }
-
+    if (!phoneToReply || !message) { return await sock.sendMessage(adminUser.userId, { text: "Usage: /reply [phone_number] [message]" }); }
     const targetJid = normalizePhone(phoneToReply);
     const targetUser = await usersCollection.findOne({ userId: targetJid });
-
-    if (!targetUser) {
-        return await sock.sendMessage(adminUser.userId, { text: `User ${targetJid} not found.` });
-    }
-
-    // Send the admin's reply to the user
+    if (!targetUser) { return await sock.sendMessage(adminUser.userId, { text: `User ${targetJid} not found.` }); }
     await sock.sendMessage(targetJid, { text: `💬 *Support Agent:* ${message}` });
-    // Confirm to the admin
     await sock.sendMessage(adminUser.userId, { text: `✅ Your reply has been sent to ${targetUser.storeName || targetJid}.` });
 }
 
 /**
- * --- (NEW) Admin Function: End a Live Chat Session ---
+ * --- Admin Function: End a Live Chat Session ---
  */
 async function endChat(args, collections, sock, adminUser) {
     const { conversationsCollection } = collections;
     const phoneToEnd = args[0];
-    if (!phoneToEnd) {
-        return await sock.sendMessage(adminUser.userId, { text: "Usage: /endchat [phone_number]" });
-    }
-
+    if (!phoneToEnd) { return await sock.sendMessage(adminUser.userId, { text: "Usage: /endchat [phone_number]" }); }
     const targetJid = normalizePhone(phoneToEnd);
-    
-    // Set the user's chatState back to 'bot'
     await conversationsCollection.updateOne(
         { userId: targetJid },
         { $set: { chatState: 'bot' }, $unset: { liveChatTicketId: "" } }
     );
-
-    // Notify both the admin and the user
     await sock.sendMessage(adminUser.userId, { text: `✅ Chat session ended for ${targetJid}. The bot is now active for them.` });
     await sock.sendMessage(targetJid, { text: `Your chat with the support agent has ended. Fynax Bookkeeper is now active again.` });
 }
-
 
 /**
  * --- Admin Function: List available commands ---
@@ -224,7 +259,6 @@ _Shows this message._`;
     await sock.sendMessage(adminUser.userId, { text: helpText });
 }
 
-
 /**
  * --- Main Admin Command Router (Bot) ---
  */
@@ -233,27 +267,12 @@ export async function handleAdminCommand(sock, messageText, collections, adminUs
     const command = parts[0].toLowerCase();
     const args = parts.slice(1);
     switch (command) {
-        // --- NEW COMMANDS ---
-        case '/reply':
-            await replyToUser(args, collections, sock, adminUser);
-            break;
-        case '/endchat':
-            await endChat(args, collections, sock, adminUser);
-            break;
-        // --- EXISTING COMMANDS ---
-        case '/block': 
-            await blockUser(args, collections, sock, adminUser); 
-            break;
-        case '/unblock': 
-            await unblockUser(args, collections, sock, adminUser); 
-            break;
-        case '/setpass': 
-            await setPassword(args, collections, sock, adminUser); 
-            break;
-        case '/help': 
-            await showHelp(sock, adminUser); 
-            break;
-        default: 
-            await sock.sendMessage(adminUser.userId, { text: `Unknown command: ${command}\nType /help for a list of commands.` });
+        case '/reply': await replyToUser(args, collections, sock, adminUser); break;
+        case '/endchat': await endChat(args, collections, sock, adminUser); break;
+        case '/block': await blockUser(args, collections, sock, adminUser); break;
+        case '/unblock': await unblockUser(args, collections, sock, adminUser); break;
+        case '/setpass': await setPassword(args, collections, sock, adminUser); break;
+        case '/help': await showHelp(sock, adminUser); break;
+        default: await sock.sendMessage(adminUser.userId, { text: `Unknown command: ${command}\nType /help for a list of commands.` });
     }
 }

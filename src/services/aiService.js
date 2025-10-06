@@ -3,7 +3,7 @@ import * as accountingService from './accountingService.js';
 import * as reportService from './reportService.js';
 import * as authService from './authService.js';
 import * as liveChatService from './liveChatService.js';
-import * as advisorService from './advisorService.js'; // <-- NEW IMPORT
+import * as advisorService from './advisorService.js';
 
 // --- AI Client Initialization ---
 const deepseek = new OpenAI({
@@ -11,9 +11,8 @@ const deepseek = new OpenAI({
     baseURL: "https://api.deepseek.com/v1",
 });
 
-// --- AI Tool Definitions (UPDATED) ---
+// --- AI Tool Definitions ---
 const tools = [
-  // ... (all existing tools)
   { type: "function", function: { name: 'logSale', description: 'Logs a sale of a product from inventory.', parameters: { type: 'object', properties: { productName: { type: 'string' }, quantitySold: { type: 'number' }, totalAmount: { type: 'number' } }, required: ['productName', 'quantitySold', 'totalAmount'] } } },
   { type: "function", function: { name: 'logTransaction', description: 'Logs a generic income or expense (not a product sale).', parameters: { type: 'object', properties: { type: { type: 'string', enum: ['income', 'expense'] }, amount: { type: 'number' }, description: { type: 'string' }, category: { type: 'string' } }, required: ['type', 'amount', 'description'] } } },
   { type: "function", function: { name: 'addProduct', description: 'Adds new products to inventory.', parameters: { type: 'object', properties: { products: { type: 'array', items: { type: 'object', properties: { productName: { type: 'string' }, cost: { type: 'number' }, price: { type: 'number' }, stock: { type: 'number' } }, required: ['productName', 'cost', 'price', 'stock'] } } }, required: ['products'] } } },
@@ -25,55 +24,33 @@ const tools = [
   { type: "function", function: { name: 'generatePnLReport', description: 'Generates a professional Profit and Loss (P&L) PDF statement.', parameters: { type: 'object', properties: {} } } },
   { type: "function", function: { name: 'changeWebsitePassword', description: "Changes the user's password for the Fynax website dashboard.", parameters: { type: 'object', properties: { newPassword: { type: 'string', description: 'The new password. Must be at least 6 characters.' } }, required: ['newPassword'] } } },
   { type: "function", function: { name: 'requestLiveChat', description: "Connects the user to a human support agent.", parameters: { type: 'object', properties: { issue: { type: 'string', description: "A brief summary of the user's issue." } }, required: ['issue'] } } },
-  
-  // --- NEWLY ADDED TOOL ---
-  {
-    type: "function",
-    function: {
-      name: 'getFinancialDataForAnalysis',
-      description: "Fetches a complete snapshot of the user's monthly summary, top expenses, and inventory status. Use this tool when the user asks for 'advice', 'analysis', 'suggestions', or 'how to improve'.",
-      parameters: {
-        type: 'object',
-        properties: {}
-      }
-    }
-  }
+  { type: "function", function: { name: 'getFinancialDataForAnalysis', description: "Fetches a complete snapshot of the user's monthly summary, top expenses, and inventory status. Use this tool when the user asks for 'advice', 'analysis', 'suggestions', or 'how to improve'.", parameters: { type: 'object', properties: {} } } }
 ];
 
-// --- Tool Function Mapping (UPDATED) ---
+// --- Tool Function Mapping ---
 const availableTools = { 
-    // Accounting
     logSale: accountingService.logSale,
     logTransaction: accountingService.logTransaction, 
     addProduct: accountingService.addProduct, 
     setOpeningBalance: accountingService.setOpeningBalance, 
     getInventory: accountingService.getInventory, 
     getMonthlySummary: accountingService.getMonthlySummary, 
-    
-    // Reporting
     generateTransactionReport: reportService.generateTransactionReport, 
     generateInventoryReport: reportService.generateInventoryReport, 
     generatePnLReport: reportService.generatePnLReport,
-
-    // Auth
     changeWebsitePassword: authService.changePasswordFromBot,
-
-    // Live Chat
     requestLiveChat: liveChatService.requestLiveChat,
-
-    // --- NEWLY ADDED MAPPING ---
     getFinancialDataForAnalysis: advisorService.getFinancialDataForAnalysis
 };
 
-// --- Core AI Processing Function (UPDATED) ---
-export async function processMessageWithAI(text, collections, senderId, sock, user) {
+// --- Core AI Processing Function (MIGRATED) ---
+export async function processMessageWithAI(text, collections, senderId, user) {
     const { conversationsCollection } = collections;
     
     try {
         const conversation = await conversationsCollection.findOne({ userId: senderId });
         const savedHistory = conversation ? conversation.history : [];
         
-        // --- UPDATED SYSTEM PROMPT ---
         const systemInstruction = `You are 'Fynax Bookkeeper', an expert AI financial advisor. Your name is Fynax Bookkeeper. Follow these rules:
 1.  **Use Tools:** Your primary job is to use tools to perform actions (log sales, change passwords, etc.) or gather data.
 2.  **Stay in Scope:** Your abilities are: bookkeeping, inventory, reporting, password changes, live support, and **financial analysis**. Do not answer questions outside this scope.
@@ -111,7 +88,8 @@ export async function processMessageWithAI(text, collections, senderId, sock, us
                 const functionArgs = JSON.parse(toolCall.function.arguments);
                 const selectedTool = availableTools[functionName];
                 if (selectedTool) {
-                    const functionResult = await selectedTool(functionArgs, collections, senderId, sock, user);
+                    // The 'sock' object is no longer passed to the tools
+                    const functionResult = await selectedTool(functionArgs, collections, senderId, user);
                     return { tool_call_id: toolCall.id, role: "tool", name: functionName, content: JSON.stringify(functionResult) };
                 }
                 return null;
@@ -132,14 +110,7 @@ export async function processMessageWithAI(text, collections, senderId, sock, us
 
         newHistoryEntries.push(responseMessage);
 
-        if (responseMessage.content) {
-            const cleanContent = responseMessage.content.replace(/<\|.*?\|>/g, '').trim();
-            if (cleanContent) {
-                 await sock.sendMessage(senderId, { text: cleanContent });
-            }
-        }
-
-        // History pruning...
+        // History pruning logic
         const finalHistoryToSave = [...savedHistory, ...newHistoryEntries];
         const MAX_TURNS_TO_KEEP = 5;
         let userMessageCount = 0;
@@ -160,9 +131,20 @@ export async function processMessageWithAI(text, collections, senderId, sock, us
             { $set: { history: prunedHistory, updatedAt: new Date() } }, 
             { upsert: true }
         );
+
+        // --- THE KEY CHANGE ---
+        // We no longer send a message from here. We return the text.
+        if (responseMessage.content) {
+            const cleanContent = responseMessage.content.replace(/<\|.*?\|>/g, '').trim();
+            if (cleanContent) {
+                 return cleanContent;
+            }
+        }
         
     } catch (error) {
         console.error("Detailed error in AI message handler:", error);
         throw error;
     }
+
+    return null; // Return null if there's nothing to say
 }

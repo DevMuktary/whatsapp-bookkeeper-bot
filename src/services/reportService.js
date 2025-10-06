@@ -1,12 +1,12 @@
 import { ReportGenerators } from '../utils/reportGenerator.js';
+import { sendDocument } from './whatsappService.js';
 
 // ==================================================================
-// --- 1. NEW DATA-FETCHING FUNCTIONS (Internal) ---
-// These functions just get the data needed for the reports.
+// --- 1. DATA-FETCHING FUNCTIONS (Internal) ---
 // ==================================================================
 
 /**
- * --- (New) Fetches data for a Transaction Report ---
+ * --- Fetches data for a Transaction Report ---
  */
 async function getTransactionData(collections, userId) {
     const { transactionsCollection, usersCollection } = collections;
@@ -29,7 +29,7 @@ async function getTransactionData(collections, userId) {
 }
 
 /**
- * --- (New) Fetches data for an Inventory Report ---
+ * --- Fetches data for an Inventory Report ---
  */
 async function getInventoryData(collections, userId) {
     const { productsCollection, inventoryLogsCollection, usersCollection } = collections;
@@ -53,7 +53,7 @@ async function getInventoryData(collections, userId) {
 }
 
 /**
- * --- (New) Fetches data for a P&L Report ---
+ * --- Fetches data for a P&L Report ---
  */
 async function getPnLData(collections, userId) {
     const { transactionsCollection, inventoryLogsCollection, usersCollection } = collections;
@@ -102,9 +102,7 @@ async function getPnLData(collections, userId) {
 
 
 // ==================================================================
-// --- 2. API-FACING FUNCTIONS (NEW) ---
-// These functions are for the Admin API. They fetch data,
-// generate a PDF, and *return the PDF buffer*.
+// --- 2. API-FACING FUNCTIONS ---
 // ==================================================================
 
 export async function getTransactionReportAsBuffer(collections, userId) {
@@ -127,22 +125,20 @@ export async function getPnLReportAsBuffer(collections, userId) {
 
 
 // ==================================================================
-// --- 3. BOT-FACING FUNCTIONS (Refactored) ---
-// These are the original functions for the bot.
-// They now call our new data functions to avoid repeating code.
+// --- 3. BOT-FACING FUNCTIONS (MIGRATED) ---
 // ==================================================================
 
-export async function generateTransactionReport(args, collections, senderId, sock) {
+export async function generateTransactionReport(args, collections, senderId) {
     try {
         const { transactions, monthName, user } = await getTransactionData(collections, senderId);
         const pdfBuffer = await ReportGenerators.createMonthlyReportPDF(transactions, monthName, user);
         
-        await sock.sendMessage(senderId, { 
-            document: pdfBuffer, 
-            mimetype: 'application/pdf', 
-            fileName: `Financial_Report_${monthName.replace(/ /g, '_')}.pdf`, 
-            caption: `Here is your financial report for ${monthName}.` 
-        });
+        await sendDocument(
+            senderId, 
+            pdfBuffer, 
+            `Financial_Report_${monthName.replace(/ /g, '_')}.pdf`,
+            `Here is your financial report for ${monthName}.`
+        );
         return { success: true, message: "Transaction report has been sent." };
     } catch (error) {
         console.error('Error generating transaction report:', error);
@@ -150,17 +146,17 @@ export async function generateTransactionReport(args, collections, senderId, soc
     }
 }
 
-export async function generateInventoryReport(args, collections, senderId, sock) {
+export async function generateInventoryReport(args, collections, senderId) {
     try {
         const { products, logs, monthName, user } = await getInventoryData(collections, senderId);
         const pdfBuffer = await ReportGenerators.createInventoryReportPDF(products, logs, monthName, user);
         
-        await sock.sendMessage(senderId, { 
-            document: pdfBuffer, 
-            mimetype: 'application/pdf', 
-            fileName: `Inventory_Report_${monthName.replace(/ /g, '_')}.pdf`, 
-            caption: `Here is your inventory and profit report.` 
-        });
+        await sendDocument(
+            senderId,
+            pdfBuffer,
+            `Inventory_Report_${monthName.replace(/ /g, '_')}.pdf`,
+            `Here is your inventory and profit report.`
+        );
         return { success: true, message: "Inventory report has been sent." };
     } catch (error) {
         console.error('Error generating inventory report:', error);
@@ -168,17 +164,17 @@ export async function generateInventoryReport(args, collections, senderId, sock)
     }
 }
 
-export async function generatePnLReport(args, collections, senderId, sock) {
+export async function generatePnLReport(args, collections, senderId) {
     try {
         const { data, monthName, user } = await getPnLData(collections, senderId);
         const pdfBuffer = await ReportGenerators.createPnLReportPDF(data, monthName, user);
         
-        await sock.sendMessage(senderId, { 
-            document: pdfBuffer, 
-            mimetype: 'application/pdf', 
-            fileName: `P&L_Report_${monthName.replace(/ /g, '_')}.pdf`, 
-            caption: `Here is your Profit & Loss Statement.` 
-        });
+        await sendDocument(
+            senderId,
+            pdfBuffer,
+            `P&L_Report_${monthName.replace(/ /g, '_')}.pdf`,
+            `Here is your Profit & Loss Statement.`
+        );
         return { success: true, message: "P&L report has been sent." };
     } catch (error) {
         console.error('Error generating P&L report:', error);

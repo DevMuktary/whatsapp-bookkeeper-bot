@@ -1,5 +1,4 @@
 import { connectToDB } from './src/db.js';
-import { startBot } from './src/bot.js';
 import { startApi } from './src/api.js';
 
 // Railway provides the PORT environment variable
@@ -15,18 +14,15 @@ async function main() {
         const collections = await connectToDB();
 
         // 2. Start the API Server
+        // The API server now handles everything, including WhatsApp webhooks.
         console.log("Starting API server...");
         const app = startApi(collections);
         app.listen(PORT, () => {
-            console.log(`✅ API Server running on port ${PORT}`);
+            console.log(`✅ API Server is live and listening on port ${PORT}`);
         });
 
-        // 3. Start the WhatsApp Bot
-        // We pass the collections, so it doesn't have to connect.
-        await startBot(collections);
-
     } catch (error) {
-        console.error("Fatal error during startup:", error);
+        console.error("❌ Fatal error during startup:", error);
         process.exit(1);
     }
 }

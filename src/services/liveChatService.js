@@ -1,8 +1,11 @@
+import { sendMessage } from './whatsappService.js';
+
 /**
  * --- BOT TOOL: Request Live Chat ---
  * Sets the user's state to 'live' and notifies all admins.
+ * The 'sock' parameter is removed.
  */
-export async function requestLiveChat(args, collections, senderId, sock, user) {
+export async function requestLiveChat(args, collections, senderId, user) {
     const { conversationsCollection, usersCollection } = collections;
     const { issue = "No issue provided" } = args;
 
@@ -30,7 +33,7 @@ To reply, use the command:
 /reply ${senderId.split('@')[0]} [your message]`;
 
         for (const admin of admins) {
-            await sock.sendMessage(admin.userId, { text: adminMessage });
+            await sendMessage(admin.userId, adminMessage);
         }
 
         // 4. Confirm to user
@@ -45,11 +48,12 @@ To reply, use the command:
 /**
  * --- LIVE CHAT ROUTER: Forward User Message ---
  * Forwards a message from a 'live' user to all admins.
+ * The 'msg' (Baileys object) parameter is replaced with our simple 'message' object.
  */
-export async function forwardLiveMessage(sock, msg, collections, user) {
+export async function forwardLiveMessage(message, collections, user) {
     const { usersCollection } = collections;
-    const messageText = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
-    if (!messageText) return; // Not a text message
+    const messageText = message.text; // We now get text directly from our simple message object
+    if (!messageText) return;
 
     try {
         const admins = await usersCollection.find({ role: 'admin' }).toArray();
@@ -60,7 +64,7 @@ export async function forwardLiveMessage(sock, msg, collections, user) {
 ${messageText}`;
 
         for (const admin of admins) {
-            await sock.sendMessage(admin.userId, { text: forwardText });
+            await sendMessage(admin.userId, forwardText);
         }
     } catch (error) {
         console.error("Error in forwardLiveMessage:", error);

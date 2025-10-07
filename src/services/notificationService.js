@@ -1,20 +1,11 @@
-// The correct import is a "default" import, not a named one
 import Brevo from '@getbrevo/brevo';
 
-// --- Initialize Brevo API client (Corrected Syntax for @getbrevo/brevo) ---
-// 1. Get the default ApiClient instance from the default import
+// --- Initialize Brevo API client ---
 const defaultClient = Brevo.ApiClient.instance;
-
-// 2. Configure the API key on the default client
 const apiKey = defaultClient.authentications['api-key'];
 apiKey.apiKey = process.env.BREVO_API_KEY;
-
-// 3. Create a new instance of the API you want to use
 const apiInstance = new Brevo.TransactionalEmailsApi();
-// --- END OF FIX ---
 
-
-// --- Configure your sender details ---
 const SENDER_EMAIL = 'no-reply@fynaxtech.com';
 const SENDER_NAME = 'Fynax Bookkeeper';
 
@@ -22,10 +13,14 @@ const SENDER_NAME = 'Fynax Bookkeeper';
  * Sends a beautiful HTML email with an OTP for verification.
  */
 export async function sendOtpEmail(userEmail, otp, businessName) {
+    console.log("--- DEBUG: ENTERING 'sendOtpEmail' function. ---");
+
     if (!process.env.BREVO_API_KEY) {
-        console.error("Brevo API key is not set. Cannot send email.");
+        console.error("--- DEBUG: FAILED - Brevo API key is MISSING in environment variables. ---");
         return false;
     }
+
+    console.log("--- DEBUG: Brevo API key found. Preparing to send email. ---");
 
     const htmlContent = `
     <!DOCTYPE html>
@@ -68,7 +63,8 @@ export async function sendOtpEmail(userEmail, otp, businessName) {
     `;
 
     try {
-        console.log("Attempting to send email via Brevo...");
+        console.log("--- DEBUG: Calling Brevo's 'sendTransacEmail' function... ---");
+        
         const response = await apiInstance.sendTransacEmail({
             sender: { email: SENDER_EMAIL, name: SENDER_NAME },
             to: [{ email: userEmail }],
@@ -76,14 +72,19 @@ export async function sendOtpEmail(userEmail, otp, businessName) {
             htmlContent: htmlContent,
         });
 
-        console.log("Brevo API Response:", JSON.stringify(response, null, 2));
-
-        console.log(`OTP email sent successfully to ${userEmail}`);
+        console.log("--- DEBUG: Brevo API call FINISHED WITHOUT CRASHING. ---");
+        console.log("--- DEBUG: FULL BREVO RESPONSE: ---");
+        console.log(JSON.stringify(response, null, 2));
+        
+        console.log("--- DEBUG: Returning 'true' from notificationService. ---");
         return true;
 
     } catch (error) {
-        console.error("Full error object from Brevo:", JSON.stringify(error, null, 2));
-        console.error("Error sending OTP email via Brevo:", error.body || error.message);
+        console.error("--- DEBUG: Brevo API call FAILED with an error. ---");
+        console.error("--- DEBUG: FULL BREVO ERROR OBJECT: ---");
+        console.error(JSON.stringify(error, null, 2));
+        
+        console.error("--- DEBUG: Returning 'false' from notificationService. ---");
         return false;
     }
 }

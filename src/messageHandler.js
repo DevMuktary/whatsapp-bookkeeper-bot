@@ -1,6 +1,5 @@
 import bcrypt from 'bcrypt';
 import * as whatsappService from './services/whatsappService.js';
-import * as onboardingService from './services/onboardingService.js';
 import * as adminService from './services/adminService.js';
 import * as liveChatService from './services/liveChatService.js';
 import * as aiService from './services/aiService.js';
@@ -9,11 +8,10 @@ const ADMIN_NUMBERS = ['2348105294232', '2348146817448'];
 const SALT_ROUNDS = 10;
 
 /**
- * Main webhook handler.
- * This is called by api.js for every incoming webhook event.
+ * Main webhook handler. This is the entry point for all incoming messages from Meta.
  */
 export async function handleWebhook(body, collections) {
-    // Parse the message from the complex webhook payload
+    // Parse the complex webhook payload into a simple message object
     const message = whatsappService.parseWebhookMessage(body);
 
     // If it's not a text message we can handle, do nothing.
@@ -26,8 +24,8 @@ export async function handleWebhook(body, collections) {
         await _processIncomingMessage(message, collections);
     } catch (error) {
         console.error("Fatal error processing message:", error);
-        // Send a generic failure message to the user
-        await whatsappService.sendMessage(message.from, "Sorry, I encountered a critical error and was unable to process your request. Please try again later.");
+        // Send a generic failure message to the user if anything breaks
+        await whatsappService.sendMessage(message.from, "Sorry, I encountered a critical error. Please try again later.");
     }
 }
 
@@ -43,71 +41,68 @@ async function _processIncomingMessage(message, collections) {
     let user = await usersCollection.findOne({ userId: senderId });
     let conversation = await conversationsCollection.findOne({ userId: senderId });
 
-    // --- 1. New User Onboarding ---
+    // --- 1. Handle New Users ---
     if (!user) {
-        // Create new user
+        // Create the new user in the database
         const normalizedSenderId = senderId.split('@')[0];
         const isAdmin = ADMIN_NUMBERS.includes(normalizedSenderId);
         const role = isAdmin ? 'admin' : 'user';
         const tempPassword = `fynax@${Math.floor(Math.random() * 10000)}`;
         const hashedPassword = await bcrypt.hash(tempPassword, SALT_ROUNDS);
-        const newUser = {
+        
+        user = {
             userId: senderId,
             role: role,
             isBlocked: false,
             websitePassword: hashedPassword,
             createdAt: new Date(),
+            emailVerified: false,
         };
-        await usersCollection.insertOne(newUser);
-        user = newUser;
-
-        // Create new conversation
-        const newConversation = {
+        await usersCollection.insertOne(user);
+        
+        // Create their conversation and set the state to 'onboarding'
+        conversation = {
             userId: senderId,
-            state: 'awaiting_store_name',
+            state: 'onboarding',
             history: []
         };
-        await conversationsCollection.insertOne(newConversation);
-        conversation = newConversation;
+        await conversationsCollection.insertOne(conversation);
         
-        // Send welcome messages using the new service
-        await whatsappService.sendMessage(senderId, `👋 Welcome to Fynax Bookkeeper, your new AI Bookkeeping Assistant!\n\nTo get started, please tell me the name of your business or store.`);
-        if (isAdmin) {
-            await whatsappService.sendMessage(senderId, `🔑 *Admin Access Granted.*\nYour temporary web password is: \`${tempPassword}\`\nYou can change it with /setpass [your_phone] [new_pass]\nType /help for all commands.`);
-        }
-        return; // Stop here for new users
+        // Don't send a welcome message here. The onboarding AI will handle the greeting.
+        // We let the code fall through to the AI router below.
     }
 
-    // --- 2. Check for Admin Command ---
+    // --- 2. Check for Blocked User ---
+    // This is a high-priority check. If blocked, ignore everything.
+    if (user.isBlocked) {
+        return; // Ignore silently.
+    }
+
+    // --- 3. Check for Admin Command ---
     if (messageText.startsWith('/') && user.role === 'admin') {
         await adminService.handleAdminCommand(messageText, collections, user);
         return; // Admin command handled, stop.
     }
 
-    // --- 3. Check for Live Chat State ---
+    // --- 4. Check for Live Chat State ---
     if (conversation?.chatState === 'live') {
         await liveChatService.forwardLiveMessage(message, collections, user);
         return; // Bot is paused. Stop.
     }
+    
+    // --- 5. ROUTE TO THE CORRECT AI PROCESS (Onboarding vs. Main) ---
+    let aiResponseText;
 
-    // --- 4. Check for Onboarding State ---
-    if (conversation?.state) {
-        const isHandled = await onboardingService.handleOnboarding(messageText, collections, senderId, conversation.state);
-        if (isHandled) {
-            return; // Onboarding sent a reply and we stop.
-        }
+    if (conversation?.state?.startsWith('onboarding')) {
+        // If the user's state is 'onboarding' or 'onboarding_needs_currency',
+        // route them to the specialized onboarding AI.
+        aiResponseText = await aiService.processOnboardingMessage(messageText, collections, senderId, user, conversation);
+    } else {
+        // Otherwise, they are a regular user. Route them to the main AI.
+        aiResponseText = await aiService.processMessageWithAI(messageText, collections, senderId, user, conversation);
     }
     
-    // --- 5. Check for Blocked User ---
-    if (user?.isBlocked) {
-        return; // Ignore silently.
-    }
-
-    // --- 6. If all checks pass, process with AI ---
-    // The AI service now returns text instead of sending a message.
-    const aiResponseText = await aiService.processMessageWithAI(messageText, collections, senderId, user);
-    
-    // If the AI generated a response, send it.
+    // If the AI process generated a response, send it.
     if (aiResponseText) {
         await whatsappService.sendMessage(senderId, aiResponseText);
     }

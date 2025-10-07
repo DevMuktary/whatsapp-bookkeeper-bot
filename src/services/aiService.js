@@ -8,7 +8,7 @@ import * as onboardingService from './onboardingService.js';
 
 const deepseek = new OpenAI({ apiKey: process.env.DEEPSEEK_API_KEY, baseURL: "https://api.deepseek.com/v1" });
 
-// --- TOOL DEFINITIONS (These are correct and unchanged) ---
+// --- TOOL DEFINITIONS ---
 const onboardingTools = [
     { type: "function", function: { name: 'onboardUser', description: "Saves a new user's business name and email address. Generates and sends a 6-digit OTP to their email for verification.", parameters: { type: 'object', properties: { businessName: { type: 'string' }, email: { type: 'string' } }, required: ['businessName', 'email'] } } },
     { type: "function", function: { name: 'verifyEmailOTP', description: "Verifies the 6-digit OTP that the user provides from their email.", parameters: { type: 'object', properties: { otp: { type: 'string', description: "The 6-digit code from the user." } }, required: ['otp'] } } },
@@ -17,7 +17,7 @@ const onboardingTools = [
 const mainUserTools = [
     { type: "function", function: { name: 'logSale', description: 'Logs a sale of a product from inventory.', parameters: { type: 'object', properties: { productName: { type: 'string' }, quantitySold: { type: 'number' }, totalAmount: { type: 'number' } }, required: ['productName', 'quantitySold', 'totalAmount'] } } },
     { type: "function", function: { name: 'logTransaction', description: 'Logs a generic income or expense (not a product sale).', parameters: { type: 'object', properties: { type: { type: 'string', enum: ['income', 'expense'] }, amount: { type: 'number' }, description: { type: 'string' }, category: { type: 'string' } }, required: ['type', 'amount', 'description'] } } },
-    { type: "function", function: { name: 'addProduct', description: 'Adds new products to inventory.', parameters: { type: 'object', properties: { products: { type: 'array', items: { type: 'object', properties: { productName: { type: 'string' }, cost: { type: 'number' }, price: { type: 'number' }, stock: { type: 'number' } }, required: ['productName', 'cost', 'price', 'stock'] } } }, required: ['products'] } } },
+    { type: "function", function: { name: 'addProduct', description: 'Adds new products to inventory or sets opening balance.', parameters: { type: 'object', properties: { products: { type: 'array', items: { type: 'object', properties: { productName: { type: 'string' }, cost: { type: 'number' }, price: { type: 'number' }, stock: { type: 'number' } }, required: ['productName', 'cost', 'price', 'stock'] } } }, required: ['products'] } } },
     { type: "function", function: { name: 'getInventory', description: 'Retrieves a list of all products in inventory.', parameters: { type: 'object', properties: {} } } },
     { type: "function", function: { name: 'getMonthlySummary', description: 'Gets a quick text summary of finances for the current month.', parameters: { type: 'object', properties: {} } } },
     { type: "function", function: { name: 'generateTransactionReport', description: 'Generates a PDF file of all financial transactions.', parameters: { type: 'object', properties: {} } } },
@@ -31,7 +31,6 @@ const availableTools = {
     logSale: accountingService.logSale,
     logTransaction: accountingService.logTransaction, 
     addProduct: accountingService.addProduct, 
-    setOpeningBalance: accountingService.setOpeningBalance, 
     getInventory: accountingService.getInventory, 
     getMonthlySummary: accountingService.getMonthlySummary, 
     generateTransactionReport: reportService.generateTransactionReport, 
@@ -47,30 +46,35 @@ const availableTools = {
 
 // --- ONBOARDING AI PROCESS ---
 export async function processOnboardingMessage(text, collections, senderId, user, conversation) {
-    const onboardingSystemInstruction = `You are Fynax Bookkeeper's onboarding assistant...`; // (Full prompt)
+    const onboardingSystemInstruction = `You are Fynax Bookkeeper's onboarding assistant...`; // (Full prompt remains)
     const messages = [ { role: "system", content: onboardingSystemInstruction }, ...(conversation.history || []), { role: "user", content: text } ];
     return await runAiCycle(messages, onboardingTools, collections, senderId, user, conversation);
 }
 
 // --- MAIN AI PROCESS ---
 export async function processMessageWithAI(text, collections, senderId, user, conversation) {
-    const mainSystemInstruction = `You are 'Fynax Bookkeeper', an expert AI financial advisor...`; // (Full prompt)
+    const mainSystemInstruction = `You are 'Fynax Bookkeeper', an expert AI financial advisor...`; // (Full prompt remains)
     const messages = [ { role: "system", content: mainSystemInstruction }, ...(conversation.history || []), { role: "user", content: text } ];
     return await runAiCycle(messages, mainUserTools, collections, senderId, user, conversation);
 }
 
-// --- Reusable AI Cycle Function (UPDATED with THE PERMANENT FIX) ---
+// --- Reusable AI Cycle Function (PERMANENT FIX) ---
 async function runAiCycle(messages, tools, collections, senderId, user, conversation) {
     const { conversationsCollection } = collections;
-    const currentTurnMessages = [messages[messages.length - 1]]; // Start with just the user's message for this turn
-
+    
     try {
         // First API call - send the full history for context
         const response = await deepseek.chat.completions.create({ model: "deepseek-chat", messages, tools, tool_choice: "auto" });
         let responseMessage = response.choices[0].message;
 
-        currentTurnMessages.push(responseMessage); // Add assistant's response to this turn's messages
+        // --- THE PERMANENT FIX LOGIC ---
+        // We will build the history for this turn step-by-step
+        const currentTurnHistory = [
+            messages[messages.length-1], // User's message
+            responseMessage // Assistant's first response (may or may not have tool_calls)
+        ];
 
+        // Check if the AI wants to call a tool
         if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
             
             const toolExecutionPromises = responseMessage.tool_calls.map(async (toolCall) => {
@@ -84,37 +88,33 @@ async function runAiCycle(messages, tools, collections, senderId, user, conversa
                     }
                     return { tool_call_id: toolCall.id, role: "tool", name: functionName, content: JSON.stringify({ success: false, message: `Error: Tool '${functionName}' not found.` }) };
                 } catch (error) {
-                    console.error(`Error processing tool call ${toolCall.id}:`, error);
                     return { tool_call_id: toolCall.id, role: "tool", name: toolCall.function.name, content: JSON.stringify({ success: false, message: "There was an error processing the tool's arguments." }) };
                 }
             });
             
             const toolResponses = await Promise.all(toolExecutionPromises);
             
-            if (toolResponses.length > 0) {
-                // --- THE PERMANENT FIX ---
-                // We create a NEW, CLEAN array for the second call.
-                // It does NOT include the old history, only the messages from the current turn.
-                const messagesForSecondCall = [
-                    messages[0], // The System Prompt
-                    ...currentTurnMessages, // [user message, assistant_tool_calls]
-                    ...toolResponses      // [tool results]
-                ];
-                // --- END OF FIX ---
+            // Add the tool results to our main message array for the second call
+            messages.push(responseMessage, ...toolResponses);
+            
+            // Also add them to our history for this turn
+            currentTurnHistory.push(...toolResponses);
 
-                // Make the second call with the clean array, and NO tools.
-                const secondResponse = await deepseek.chat.completions.create({ model: "deepseek-chat", messages: messagesForSecondCall });
-                responseMessage = secondResponse.choices[0].message;
-            } else {
-                responseMessage = { role: 'assistant', content: "I encountered an issue. Could you please rephrase?" };
-            }
+            // Make the second call with the full, correct sequence
+            const secondResponse = await deepseek.chat.completions.create({ model: "deepseek-chat", messages });
+            responseMessage = secondResponse.choices[0].message;
+
+            // Add the final response to our history for this turn
+            currentTurnHistory.push(responseMessage);
         }
-
-        currentTurnMessages.push(responseMessage); // Add the final assistant message to this turn
         
-        // Save the history correctly
+        // --- END OF FIX LOGIC ---
+
+        // Save the history correctly by appending the messages from this turn
         const existingHistory = conversation.history || [];
-        const finalHistoryToSave = [...existingHistory, ...currentTurnMessages];
+        const finalHistoryToSave = [...existingHistory, ...currentTurnHistory];
+        
+        // Pruning logic
         const MAX_USER_TURNS = 5;
         let userMessageCount = 0;
         let startIndex = -1;

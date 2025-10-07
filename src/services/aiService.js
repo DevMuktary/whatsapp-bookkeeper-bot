@@ -1,15 +1,14 @@
 import { ChatOpenAI } from "@langchain/openai";
 import { DynamicTool } from "langchain/tools";
 import { createOpenAIFunctionsAgent, AgentExecutor } from "langchain/agents";
-import { ChatPromptTemplate, MessagesPlaceholder } from "@langchain/prompts";
+import { ChatPromptTemplate, MessagesPlaceholder } from "@langchain/core/prompts";
 import { MongoDBChatMessageHistory } from "@langchain/mongodb";
 import * as accountingService from './accountingService.js';
 import * as reportService from './reportService.js';
 import * as authService from './authService.js';
 import * as liveChatService from './liveChatService.js';
 import * as onboardingService from './onboardingService.js';
-// The advisorService is not used in the LangChain agent directly, but called by a tool.
-// We'll create the tool for it below.
+import * as advisorService from './advisorService.js';
 
 // --- 1. Initialize the AI Model ---
 const llm = new ChatOpenAI({

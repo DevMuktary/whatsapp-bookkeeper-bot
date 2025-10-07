@@ -1,10 +1,18 @@
-import * as Brevo from '@getbrevo/brevo';
+// The correct import is a "default" import, not a named one
+import Brevo from '@getbrevo/brevo';
 
-// --- Initialize Brevo API client ---
+// --- Initialize Brevo API client (Corrected Syntax for @getbrevo/brevo) ---
+// 1. Get the default ApiClient instance from the default import
 const defaultClient = Brevo.ApiClient.instance;
+
+// 2. Configure the API key on the default client
 const apiKey = defaultClient.authentications['api-key'];
 apiKey.apiKey = process.env.BREVO_API_KEY;
+
+// 3. Create a new instance of the API you want to use
 const apiInstance = new Brevo.TransactionalEmailsApi();
+// --- END OF FIX ---
+
 
 // --- Configure your sender details ---
 const SENDER_EMAIL = 'no-reply@fynaxtech.com';
@@ -61,7 +69,6 @@ export async function sendOtpEmail(userEmail, otp, businessName) {
 
     try {
         console.log("Attempting to send email via Brevo...");
-        // Capture the response from the API call
         const response = await apiInstance.sendTransacEmail({
             sender: { email: SENDER_EMAIL, name: SENDER_NAME },
             to: [{ email: userEmail }],
@@ -69,20 +76,13 @@ export async function sendOtpEmail(userEmail, otp, businessName) {
             htmlContent: htmlContent,
         });
 
-        // --- NEW DEBUGGING LOG ---
-        // This will print the full response from Brevo to the logs.
         console.log("Brevo API Response:", JSON.stringify(response, null, 2));
-        // --- END DEBUGGING LOG ---
 
         console.log(`OTP email sent successfully to ${userEmail}`);
         return true;
 
     } catch (error) {
-        // --- NEW DEBUGGING LOG ---
-        // This will print the full error object if the call fails.
         console.error("Full error object from Brevo:", JSON.stringify(error, null, 2));
-        // --- END DEBUGGING LOG ---
-        
         console.error("Error sending OTP email via Brevo:", error.body || error.message);
         return false;
     }

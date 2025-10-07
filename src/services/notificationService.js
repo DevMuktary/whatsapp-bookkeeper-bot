@@ -79,3 +79,4 @@ export async function sendOtpEmail(userEmail, otp, businessName) {
         return false;
     }
 }
+ 

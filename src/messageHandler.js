@@ -3,6 +3,7 @@ import * as whatsappService from './services/whatsappService.js';
 import * as adminService from './services/adminService.js';
 import * as liveChatService from './services/liveChatService.js';
 import * as aiService from './services/aiService.js';
+import { handleOnboardingStep } from './services/onboardingService.js';
 
 const ADMIN_NUMBERS = ['2348105294232', '2348146817448'];
 const SALT_ROUNDS = 10;
@@ -33,32 +34,32 @@ async function _processIncomingMessage(message, collections) {
         const role = isAdmin ? 'admin' : 'user';
         const tempPassword = `fynax@${Math.floor(Math.random() * 10000)}`;
         const hashedPassword = await bcrypt.hash(tempPassword, SALT_ROUNDS);
-        
-        user = {
-            userId: senderId,
-            role: role,
-            isBlocked: false,
-            websitePassword: hashedPassword,
-            createdAt: new Date(),
+        user = { 
+            userId: senderId, 
+            role, 
+            isBlocked: false, 
+            websitePassword: hashedPassword, 
+            createdAt: new Date(), 
             emailVerified: false,
+            // We don't set storeName or currency until onboarding is done
         };
         await usersCollection.insertOne(user);
         
-        conversation = {
+        conversation = { 
             userId: senderId,
-            sessionId: senderId,
-            state: 'onboarding',
-            history: []
+            sessionId: senderId, // For LangChain history
+            history: [] 
         };
         await conversationsCollection.insertOne(conversation);
     }
 
     if (user.isBlocked) {
-        return;
+        return; // Ignore blocked users
     }
 
     if (message.type === 'button_reply') {
         let aiTriggerText = '';
+        // Map the button ID to a natural language command for the AI
         switch (message.buttonId) {
             case 'log_sale':
                 aiTriggerText = 'I want to log a sale';
@@ -72,12 +73,13 @@ async function _processIncomingMessage(message, collections) {
         }
 
         if (aiTriggerText) {
+            // We send this text to the main AI as if the user typed it
             const aiResponseText = await aiService.processMessageWithAI(aiTriggerText, collections, senderId, user);
             if (aiResponseText) {
                 await whatsappService.sendMessage(senderId, aiResponseText);
             }
         }
-        return;
+        return; // Stop after handling button click
     }
 
     if (messageText.startsWith('/') && user.role === 'admin') {
@@ -90,13 +92,15 @@ async function _processIncomingMessage(message, collections) {
         return;
     }
     
-    let aiResponseText;
-    if (!user.emailVerified) {
-        aiResponseText = await aiService.processOnboardingMessage(messageText, collections, senderId, user);
-    } else {
-        aiResponseText = await aiService.processMessageWithAI(messageText, collections, senderId, user);
+    // --- NEW RELIABLE ONBOARDING ROUTER ---
+    // If the user hasn't finished onboarding (verified email and set currency), route them to the onboarding service.
+    if (!user.emailVerified || !user.currency) {
+        await handleOnboardingStep(message, collections, user, conversation);
+        return;
     }
-    
+
+    // --- If onboarding is complete, use the main AI ---
+    const aiResponseText = await aiService.processMessageWithAI(messageText, collections, senderId, user);
     if (aiResponseText) {
         await whatsappService.sendMessage(senderId, aiResponseText);
     }

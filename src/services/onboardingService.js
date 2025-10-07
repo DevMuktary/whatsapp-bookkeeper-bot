@@ -1,9 +1,8 @@
 import { sendOtpEmail } from './notificationService.js';
-import { sendOnboardingMenu } from './menuService.js';
+// We no longer import sendOnboardingMenu here
 
 /**
  * --- BOT TOOL: Onboard a New User ---
- * Saves user details, generates an OTP, and sends it via email.
  */
 export async function onboardUser(args, collections, senderId) {
     const { usersCollection, conversationsCollection } = collections;
@@ -26,7 +25,6 @@ export async function onboardUser(args, collections, senderId) {
             return { success: false, message: "I couldn't send the verification email. Please check the address and try again." };
         }
 
-        // This message is for the AI, which will then use it to formulate a user-facing response.
         return { success: true, message: `An OTP has been sent to ${email}.` };
     } catch (error) {
         console.error("Error in onboardUser tool:", error);
@@ -36,7 +34,6 @@ export async function onboardUser(args, collections, senderId) {
 
 /**
  * --- BOT TOOL: Verify Email OTP ---
- * Verifies the OTP provided by the user.
  */
 export async function verifyEmailOTP(args, collections, senderId) {
     const { usersCollection, conversationsCollection } = collections;
@@ -53,7 +50,7 @@ export async function verifyEmailOTP(args, collections, senderId) {
         }
         if (conversation.otp === otp.trim()) {
             await usersCollection.updateOne({ userId: senderId }, { $set: { emailVerified: true } });
-            await conversationsCollection.updateOne({ userId: senderId }, { $set: { state: 'onboarding_needs_currency' }, $unset: { otp: "", otpExpires: "" } });
+            await conversationsCollection.updateOne({ userId: senderId }, { $unset: { otp: "", otpExpires: "" } });
             return { success: true, message: "Email verified successfully! Now, to complete your setup, what is your *primary currency*? (e.g., Naira, Dollars)" };
         } else {
             return { success: false, message: "That code is incorrect. Please double-check your email and try again." };
@@ -66,7 +63,6 @@ export async function verifyEmailOTP(args, collections, senderId) {
 
 /**
  * --- BOT TOOL: Set User Currency ---
- * Sets the currency for the user's account.
  */
 export async function setCurrency(args, collections, senderId) {
     const { usersCollection, conversationsCollection } = collections;
@@ -74,12 +70,12 @@ export async function setCurrency(args, collections, senderId) {
 
     try {
         await usersCollection.updateOne({ userId: senderId }, { $set: { currency: currencyCode.toUpperCase() } });
+        // Onboarding is now complete, clear the onboarding state
         await conversationsCollection.updateOne({ userId: senderId }, { $unset: { state: "" } });
         
-        await sendOnboardingMenu(senderId);
-        
-        // This message is for the AI's context. The user will see the button menu, not this text.
-        return { success: true, message: `Onboarding complete. Welcome menu sent.` };
+        // --- THIS IS THE CHANGE ---
+        // Instead of sending the menu, we return a signal to the AI.
+        return { success: true, onboardingComplete: true };
     } catch (error) {
         console.error("Error in setCurrency tool:", error);
         return { success: false, message: "An error occurred while setting your currency." };

@@ -8,7 +8,7 @@ import * as onboardingService from './onboardingService.js';
 
 const deepseek = new OpenAI({ apiKey: process.env.DEEPSEEK_API_KEY, baseURL: "https://api.deepseek.com/v1" });
 
-// --- TOOL DEFINITIONS (Unchanged) ---
+// --- TOOL DEFINITIONS (These are correct and unchanged) ---
 const onboardingTools = [
     { type: "function", function: { name: 'onboardUser', description: "Saves a new user's business name and email address. Generates and sends a 6-digit OTP to their email for verification.", parameters: { type: 'object', properties: { businessName: { type: 'string' }, email: { type: 'string' } }, required: ['businessName', 'email'] } } },
     { type: "function", function: { name: 'verifyEmailOTP', description: "Verifies the 6-digit OTP that the user provides from their email.", parameters: { type: 'object', properties: { otp: { type: 'string', description: "The 6-digit code from the user." } }, required: ['otp'] } } },
@@ -47,14 +47,14 @@ const availableTools = {
 
 // --- ONBOARDING AI PROCESS ---
 export async function processOnboardingMessage(text, collections, senderId, user, conversation) {
-    const onboardingSystemInstruction = `You are Fynax Bookkeeper's onboarding assistant...`; // This prompt is fine
+    const onboardingSystemInstruction = `You are Fynax Bookkeeper's onboarding assistant...`; // (Full prompt)
     const messages = [ { role: "system", content: onboardingSystemInstruction }, ...(conversation.history || []), { role: "user", content: text } ];
     return await runAiCycle(messages, onboardingTools, collections, senderId, user, conversation);
 }
 
 // --- MAIN AI PROCESS ---
 export async function processMessageWithAI(text, collections, senderId, user, conversation) {
-    const mainSystemInstruction = `You are 'Fynax Bookkeeper', an expert AI financial advisor...`; // This prompt is fine
+    const mainSystemInstruction = `You are 'Fynax Bookkeeper', an expert AI financial advisor...`; // (Full prompt)
     const messages = [ { role: "system", content: mainSystemInstruction }, ...(conversation.history || []), { role: "user", content: text } ];
     return await runAiCycle(messages, mainUserTools, collections, senderId, user, conversation);
 }
@@ -62,16 +62,17 @@ export async function processMessageWithAI(text, collections, senderId, user, co
 // --- Reusable AI Cycle Function (UPDATED with THE PERMANENT FIX) ---
 async function runAiCycle(messages, tools, collections, senderId, user, conversation) {
     const { conversationsCollection } = collections;
-    let newHistoryEntries = [messages[messages.length - 1]];
+    const currentTurnMessages = [messages[messages.length - 1]]; // Start with just the user's message for this turn
 
     try {
+        // First API call - send the full history for context
         const response = await deepseek.chat.completions.create({ model: "deepseek-chat", messages, tools, tool_choice: "auto" });
         let responseMessage = response.choices[0].message;
 
-        if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
-            messages.push(responseMessage);
-            newHistoryEntries.push(responseMessage);
+        currentTurnMessages.push(responseMessage); // Add assistant's response to this turn's messages
 
+        if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
+            
             const toolExecutionPromises = responseMessage.tool_calls.map(async (toolCall) => {
                 try {
                     const functionName = toolCall.function.name;
@@ -83,7 +84,7 @@ async function runAiCycle(messages, tools, collections, senderId, user, conversa
                     }
                     return { tool_call_id: toolCall.id, role: "tool", name: functionName, content: JSON.stringify({ success: false, message: `Error: Tool '${functionName}' not found.` }) };
                 } catch (error) {
-                    console.error(`Error parsing or executing tool call ${toolCall.id}:`, error);
+                    console.error(`Error processing tool call ${toolCall.id}:`, error);
                     return { tool_call_id: toolCall.id, role: "tool", name: toolCall.function.name, content: JSON.stringify({ success: false, message: "There was an error processing the tool's arguments." }) };
                 }
             });
@@ -91,26 +92,29 @@ async function runAiCycle(messages, tools, collections, senderId, user, conversa
             const toolResponses = await Promise.all(toolExecutionPromises);
             
             if (toolResponses.length > 0) {
-                messages.push(...toolResponses);
-                newHistoryEntries.push(...toolResponses);
-
-                // --- THIS IS THE PERMANENT FIX ---
-                // We make the second call WITHOUT the 'tools' parameter.
-                // The AI's only job is to summarize, not call more tools.
-                const secondResponse = await deepseek.chat.completions.create({ model: "deepseek-chat", messages });
+                // --- THE PERMANENT FIX ---
+                // We create a NEW, CLEAN array for the second call.
+                // It does NOT include the old history, only the messages from the current turn.
+                const messagesForSecondCall = [
+                    messages[0], // The System Prompt
+                    ...currentTurnMessages, // [user message, assistant_tool_calls]
+                    ...toolResponses      // [tool results]
+                ];
                 // --- END OF FIX ---
 
+                // Make the second call with the clean array, and NO tools.
+                const secondResponse = await deepseek.chat.completions.create({ model: "deepseek-chat", messages: messagesForSecondCall });
                 responseMessage = secondResponse.choices[0].message;
             } else {
-                responseMessage = { role: 'assistant', content: "I encountered an issue while trying to process that request. Could you please try rephrasing?" };
+                responseMessage = { role: 'assistant', content: "I encountered an issue. Could you please rephrase?" };
             }
         }
 
-        newHistoryEntries.push(responseMessage);
+        currentTurnMessages.push(responseMessage); // Add the final assistant message to this turn
         
-        // Robust History Pruning
+        // Save the history correctly
         const existingHistory = conversation.history || [];
-        const finalHistoryToSave = [...existingHistory, ...newHistoryEntries];
+        const finalHistoryToSave = [...existingHistory, ...currentTurnMessages];
         const MAX_USER_TURNS = 5;
         let userMessageCount = 0;
         let startIndex = -1;
@@ -122,7 +126,7 @@ async function runAiCycle(messages, tools, collections, senderId, user, conversa
         await conversationsCollection.updateOne({ userId: senderId }, { $set: { history: prunedHistory } });
 
         if (responseMessage.content) {
-            return responseMessage.content.replace(/<\|.*?\|>/g, '').trim();
+            return responseMessage.content.trim();
         }
 
     } catch (error) {

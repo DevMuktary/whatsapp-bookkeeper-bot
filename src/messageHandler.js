@@ -60,20 +60,19 @@ async function _processIncomingMessage(message, collections) {
         };
         await usersCollection.insertOne(user);
         
-        // Create their conversation and set the state to 'onboarding'
+        // Create their conversation object for LangChain history and our state management
         conversation = {
-            userId: senderId,
-            state: 'onboarding',
-            history: []
+            userId: senderId, // For our own reference
+            sessionId: senderId, // This is what LangChain's MongoDBChatMessageHistory uses
+            state: 'onboarding', // For our router to know to use the onboarding AI
+            history: [] 
         };
         await conversationsCollection.insertOne(conversation);
         
-        // Don't send a welcome message here. The onboarding AI will handle the greeting.
-        // We let the code fall through to the AI router below.
+        // Let the code fall through to the AI router below, which will trigger the onboarding AI.
     }
 
     // --- 2. Check for Blocked User ---
-    // This is a high-priority check. If blocked, ignore everything.
     if (user.isBlocked) {
         return; // Ignore silently.
     }
@@ -93,13 +92,15 @@ async function _processIncomingMessage(message, collections) {
     // --- 5. ROUTE TO THE CORRECT AI PROCESS (Onboarding vs. Main) ---
     let aiResponseText;
 
-    if (conversation?.state?.startsWith('onboarding')) {
-        // If the user's state is 'onboarding' or 'onboarding_needs_currency',
-        // route them to the specialized onboarding AI.
-        aiResponseText = await aiService.processOnboardingMessage(messageText, collections, senderId, user, conversation);
+    // We check if the user has a verified email. If not, they are in the onboarding flow.
+    // This is more robust than using a state that we have to clear.
+    if (!user.emailVerified) {
+        // Route them to the specialized onboarding AI.
+        // We no longer pass 'conversation' as LangChain handles history.
+        aiResponseText = await aiService.processOnboardingMessage(messageText, collections, senderId, user);
     } else {
         // Otherwise, they are a regular user. Route them to the main AI.
-        aiResponseText = await aiService.processMessageWithAI(messageText, collections, senderId, user, conversation);
+        aiResponseText = await aiService.processMessageWithAI(messageText, collections, senderId, user);
     }
     
     // If the AI process generated a response, send it.

@@ -26,6 +26,7 @@ export async function onboardUser(args, collections, senderId) {
             return { success: false, message: "I couldn't send the verification email. Please check the address and try again." };
         }
 
+        // This message is for the AI, which will then use it to formulate a user-facing response.
         return { success: true, message: `An OTP has been sent to ${email}.` };
     } catch (error) {
         console.error("Error in onboardUser tool:", error);
@@ -77,6 +78,7 @@ export async function setCurrency(args, collections, senderId) {
         
         await sendOnboardingMenu(senderId);
         
+        // This message is for the AI's context. The user will see the button menu, not this text.
         return { success: true, message: `Onboarding complete. Welcome menu sent.` };
     } catch (error) {
         console.error("Error in setCurrency tool:", error);

@@ -3,6 +3,7 @@ import * as whatsappService from './services/whatsappService.js';
 import * as adminService from './services/adminService.js';
 import * as liveChatService from './services/liveChatService.js';
 import * as aiService from './services/aiService.js';
+import { handleOnboardingStep } from './services/onboardingService.js';
 
 const ADMIN_NUMBERS = ['2348105294232', '2348146817448'];
 const SALT_ROUNDS = 10;
@@ -34,47 +35,32 @@ async function _processIncomingMessage(message, collections) {
         const tempPassword = `fynax@${Math.floor(Math.random() * 10000)}`;
         const hashedPassword = await bcrypt.hash(tempPassword, SALT_ROUNDS);
         user = { 
-            userId: senderId, 
-            role, 
-            isBlocked: false, 
-            websitePassword: hashedPassword, 
-            createdAt: new Date(), 
-            emailVerified: false,
-            // storeName and currency will be set during onboarding
+            userId: senderId, role, isBlocked: false, 
+            websitePassword: hashedPassword, createdAt: new Date(), emailVerified: false 
         };
         await usersCollection.insertOne(user);
         
         conversation = { 
             userId: senderId,
-            sessionId: senderId, // For LangChain history
+            sessionId: senderId,
+            state: 'onboarding_started',
             history: [] 
         };
         await conversationsCollection.insertOne(conversation);
     }
 
-    if (user.isBlocked) {
-        return; // Ignore blocked users
-    }
+    if (user.isBlocked) return;
 
     if (message.type === 'button_reply') {
         let aiTriggerText = '';
         switch (message.buttonId) {
-            case 'log_sale':
-                aiTriggerText = 'I want to log a sale';
-                break;
-            case 'log_expense':
-                aiTriggerText = 'I want to log an expense';
-                break;
-            case 'add_stock':
-                aiTriggerText = 'I want to add new stock';
-                break;
+            case 'log_sale': aiTriggerText = 'I want to log a sale'; break;
+            case 'log_expense': aiTriggerText = 'I want to log an expense'; break;
+            case 'add_stock': aiTriggerText = 'I want to add new stock'; break;
         }
-
         if (aiTriggerText) {
             const aiResponseText = await aiService.processMessageWithAI(aiTriggerText, collections, senderId, user);
-            if (aiResponseText) {
-                await whatsappService.sendMessage(senderId, aiResponseText);
-            }
+            if (aiResponseText) await whatsappService.sendMessage(senderId, aiResponseText);
         }
         return;
     }
@@ -89,16 +75,15 @@ async function _processIncomingMessage(message, collections) {
         return;
     }
     
-    let aiResponseText;
-    // If the user hasn't finished onboarding (verified email and set currency), route them to the onboarding AI.
+    // --- The New Reliable Router ---
+    // If user isn't fully onboarded, hand off to the onboarding service.
     if (!user.emailVerified || !user.currency) {
-        aiResponseText = await aiService.processOnboardingMessage(messageText, collections, senderId, user);
+        await handleOnboardingStep(message, collections, user, conversation);
     } else {
-        // Otherwise, they are a regular user. Route them to the main AI.
-        aiResponseText = await aiService.processMessageWithAI(messageText, collections, senderId, user);
-    }
-    
-    if (aiResponseText) {
-        await whatsappService.sendMessage(senderId, aiResponseText);
+        // Otherwise, they are a regular user. Call the main AI.
+        const aiResponseText = await aiService.processMessageWithAI(messageText, collections, senderId, user);
+        if (aiResponseText) {
+            await whatsappService.sendMessage(senderId, aiResponseText);
+        }
     }
 }

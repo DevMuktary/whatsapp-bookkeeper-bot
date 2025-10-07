@@ -1,14 +1,17 @@
-import { TransactionalEmailsApi, ApiClient } from '@getbrevo/brevo';
+import Brevo from '@getbrevo/brevo';
 
-// --- Initialize Brevo API client (Corrected Syntax for @getbrevo/brevo) ---
-// 1. Get the default ApiClient instance
+// --- Initialize Brevo API client (Corrected for CommonJS module) ---
+// 1. Destructure the required classes from the default import
+const { TransactionalEmailsApi, ApiClient } = Brevo;
+
+// 2. Get the default ApiClient instance
 const defaultClient = ApiClient.instance;
 
-// 2. Configure the API key on the default client
+// 3. Configure the API key on the default client
 const apiKey = defaultClient.authentications['api-key'];
 apiKey.apiKey = process.env.BREVO_API_KEY;
 
-// 3. Create a new instance of the API you want to use
+// 4. Create a new instance of the API you want to use
 const apiInstance = new TransactionalEmailsApi();
 // --- END OF FIX ---
 
@@ -78,6 +81,7 @@ export async function sendOtpEmail(userEmail, otp, businessName) {
         console.log(`OTP email sent successfully to ${userEmail}`);
         return true;
     } catch (error) {
+        // Log a more detailed error from the Brevo SDK
         console.error("Error sending OTP email via Brevo:", error.body || error.message);
         return false;
     }

@@ -1,20 +1,10 @@
-import Brevo from '@getbrevo/brevo';
+import * as Brevo from '@getbrevo/brevo';
 
-// --- Initialize Brevo API client (Corrected for CommonJS module) ---
-// 1. Destructure the required classes from the default import
-const { TransactionalEmailsApi, ApiClient } = Brevo;
-
-// 2. Get the default ApiClient instance
-const defaultClient = ApiClient.instance;
-
-// 3. Configure the API key on the default client
+// --- Initialize Brevo API client ---
+const defaultClient = Brevo.ApiClient.instance;
 const apiKey = defaultClient.authentications['api-key'];
 apiKey.apiKey = process.env.BREVO_API_KEY;
-
-// 4. Create a new instance of the API you want to use
-const apiInstance = new TransactionalEmailsApi();
-// --- END OF FIX ---
-
+const apiInstance = new Brevo.TransactionalEmailsApi();
 
 // --- Configure your sender details ---
 const SENDER_EMAIL = 'no-reply@fynaxtech.com';
@@ -29,7 +19,6 @@ export async function sendOtpEmail(userEmail, otp, businessName) {
         return false;
     }
 
-    // --- Professional HTML Email Template (unchanged) ---
     const htmlContent = `
     <!DOCTYPE html>
     <html lang="en">
@@ -71,17 +60,29 @@ export async function sendOtpEmail(userEmail, otp, businessName) {
     `;
 
     try {
-        // Use the 'apiInstance' to send the email
-        await apiInstance.sendTransacEmail({
+        console.log("Attempting to send email via Brevo...");
+        // Capture the response from the API call
+        const response = await apiInstance.sendTransacEmail({
             sender: { email: SENDER_EMAIL, name: SENDER_NAME },
             to: [{ email: userEmail }],
             subject: `Your Fynax Bookkeeper Verification Code is ${otp}`,
             htmlContent: htmlContent,
         });
+
+        // --- NEW DEBUGGING LOG ---
+        // This will print the full response from Brevo to the logs.
+        console.log("Brevo API Response:", JSON.stringify(response, null, 2));
+        // --- END DEBUGGING LOG ---
+
         console.log(`OTP email sent successfully to ${userEmail}`);
         return true;
+
     } catch (error) {
-        // Log a more detailed error from the Brevo SDK
+        // --- NEW DEBUGGING LOG ---
+        // This will print the full error object if the call fails.
+        console.error("Full error object from Brevo:", JSON.stringify(error, null, 2));
+        // --- END DEBUGGING LOG ---
+        
         console.error("Error sending OTP email via Brevo:", error.body || error.message);
         return false;
     }

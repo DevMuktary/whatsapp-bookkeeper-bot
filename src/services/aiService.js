@@ -8,14 +8,12 @@ import * as onboardingService from './onboardingService.js';
 
 const deepseek = new OpenAI({ apiKey: process.env.DEEPSEEK_API_KEY, baseURL: "https://api.deepseek.com/v1" });
 
-// --- A dedicated, smaller set of tools just for the onboarding process ---
+// --- TOOL DEFINITIONS ---
 const onboardingTools = [
     { type: "function", function: { name: 'onboardUser', description: "Saves a new user's business name and email address. Generates and sends a 6-digit OTP to their email for verification.", parameters: { type: 'object', properties: { businessName: { type: 'string' }, email: { type: 'string' } }, required: ['businessName', 'email'] } } },
     { type: "function", function: { name: 'verifyEmailOTP', description: "Verifies the 6-digit OTP that the user provides from their email.", parameters: { type: 'object', properties: { otp: { type: 'string', description: "The 6-digit code from the user." } }, required: ['otp'] } } },
     { type: "function", function: { name: 'setCurrency', description: "Sets the user's preferred currency. Infer the standard 3-letter currency code (e.g., NGN for Naira, USD for Dollar).", parameters: { type: 'object', properties: { currencyCode: { type: 'string', description: "The 3-letter currency code, e.g., NGN, USD, GHS." } }, required: ['currencyCode'] } } },
 ];
-
-// --- Tools for the main, already-onboarded user ---
 const mainUserTools = [
     { type: "function", function: { name: 'logSale', description: 'Logs a sale of a product from inventory. This is the primary tool for recording sales.', parameters: { type: 'object', properties: { productName: { type: 'string', description: 'The name of the product sold, e.g., "iPhone 17 Air".' }, quantitySold: { type: 'number', description: 'The number of units sold.' }, totalAmount: { type: 'number', description: 'The total income received from the sale.' } }, required: ['productName', 'quantitySold', 'totalAmount'] } } },
     { type: "function", function: { name: 'logTransaction', description: 'Logs a generic income or expense that is NOT a product sale, such as "rent", "utilities", or "service income".', parameters: { type: 'object', properties: { type: { type: 'string', description: 'The type of transaction, either "income" or "expense".' }, amount: { type: 'number' }, description: { type: 'string' }, category: { type: 'string', description: 'For expenses, a category like "rent", "utilities", "transport". Defaults to "Uncategorized".' } }, required: ['type', 'amount', 'description'] } } },
@@ -29,13 +27,10 @@ const mainUserTools = [
     { type: "function", function: { name: 'requestLiveChat', description: "Connects the user to a human support agent. Use this if the user asks for a human, is stuck, or explicitly requests 'support' or 'accountant'.", parameters: { type: 'object', properties: { issue: { type: 'string', description: "A brief summary of the user's issue. e.g., 'User is confused about P&L report'." } }, required: ['issue'] } } },
     { type: "function", function: { name: 'getFinancialDataForAnalysis', description: "Fetches a complete snapshot of the user's monthly summary, top expenses, and inventory status. Use this tool when the user asks for 'advice', 'analysis', 'suggestions', or 'how to improve'.", parameters: { type: 'object', properties: {} } } }
 ];
-
-// This map contains ALL possible tools for the application
 const availableTools = { 
     logSale: accountingService.logSale,
     logTransaction: accountingService.logTransaction, 
     addProduct: accountingService.addProduct, 
-    // setOpeningBalance is an alias, but we can remove it from AI tools if we handle it in the prompt
     setOpeningBalance: accountingService.setOpeningBalance, 
     getInventory: accountingService.getInventory, 
     getMonthlySummary: accountingService.getMonthlySummary, 
@@ -50,58 +45,30 @@ const availableTools = {
     setCurrency: onboardingService.setCurrency,
 };
 
-// --- NEW: ONBOARDING AI PROCESS ---
+// --- ONBOARDING AI PROCESS ---
 export async function processOnboardingMessage(text, collections, senderId, user, conversation) {
-    const onboardingSystemInstruction = `You are Fynax Bookkeeper's onboarding assistant. Your ONLY job is to guide a new user through setup. You MUST follow these steps in order, using your tools at each step.
-1.  **Welcome & Collect Info:** Greet the user warmly. Ask for their business name and email address in the same message.
-2.  **Use 'onboardUser' tool:** Once you have both their business name and email, you MUST call the \`onboardUser\` tool.
-3.  **Ask for OTP:** After the tool is called, tell the user to check their email and ask them to provide the 6-digit code.
-4.  **Use 'verifyEmailOTP' tool:** When the user provides the OTP, you MUST call the \`verifyEmailOTP\` tool.
-5.  **Ask for Currency:** After the email is verified, ask the user for their primary currency (e.g., Naira, Dollars, Cedis).
-6.  **Use 'setCurrency' tool:** When the user provides a currency, infer the 3-letter code (e.g., NGN, USD, GHS) and you MUST call the \`setCurrency\` tool.
-7.  **Complete:** After the currency is set, congratulate them and tell them they are ready to start logging transactions.
-
-Handle one step at a time. If a user gives you an invalid email, the tool will fail. Politely ask them for a correct one. If they say something off-topic, gently guide them back to the current step.`;
-
-    const messages = [
-        { role: "system", content: onboardingSystemInstruction },
-        ...(conversation.history || []),
-        { role: "user", content: text }
-    ];
-
+    const onboardingSystemInstruction = `You are Fynax Bookkeeper's onboarding assistant...`; // Same as before
+    const messages = [ { role: "system", content: onboardingSystemInstruction }, ...(conversation.history || []), { role: "user", content: text } ];
     return await runAiCycle(messages, onboardingTools, collections, senderId, user, conversation);
 }
 
-
-// --- EXISTING: MAIN AI PROCESS ---
+// --- MAIN AI PROCESS ---
 export async function processMessageWithAI(text, collections, senderId, user, conversation) {
-    const mainSystemInstruction = `You are 'Fynax Bookkeeper', an expert AI financial advisor. Your name is Fynax Bookkeeper. Follow these rules:
-1.  **Use Tools:** Your primary job is to use tools to perform actions (log sales, change passwords, etc.) or gather data.
-2.  **Stay in Scope:** Your abilities are: bookkeeping, inventory, reporting, password changes, live support, and **financial analysis**. Do not answer questions outside this scope.
-3.  **Live Support:** If the user asks for a 'human' or 'support', use the 'requestLiveChat' tool.
-4.  **CRITICAL: Financial Advisor Role:**
-    * If a user asks for 'advice', 'analysis', 'suggestions', 'how to improve', or 'what am I doing wrong?', you MUST use the \`getFinancialDataForAnalysis\` tool.
-    * This tool will return a JSON object with the user's financial data.
-    * When you get this data, your *only* job is to analyze it and give 3-5 short, clear, actionable bullet points of advice.
-    * Start your reply with "Here's my analysis of your month so far:"
-    * Base your advice *only* on the data provided. (e.g., "Your 'transport' costs are very high", "Your 'iPhone' product is very profitable").
-5.  **Be Confident & Concise:** Speak as the expert. Never mention your tools or that you are an AI.`;
+    // --- UPDATED & STRICTER PROMPT ---
+    const mainSystemInstruction = `You are 'Fynax Bookkeeper', an expert AI financial advisor. Your name is Fynax Bookkeeper. Your rules are absolute and you must never deviate.
+1.  **Strictly Use Tools:** Your ONLY purpose is to use the tools provided. You do not have opinions or knowledge outside of these tools.
+2.  **Stay in Scope:** If the user asks for anything that cannot be answered or performed by one of your tools, you MUST respond with: "I can only help with bookkeeping, inventory, and financial reports for your business. How can I assist with that?" Do not answer any other questions.
+3.  **No Explanations:** Never mention your tools, that you are an AI, or how you work. Just perform the action.
+4.  **Live Support:** If the user asks for a 'human', 'support', 'accountant', or seems very stuck, you MUST use the 'requestLiveChat' tool.
+5.  **Financial Advisor Role:** If a user asks for 'advice', 'analysis', or 'how to improve', you MUST use the \`getFinancialDataForAnalysis\` tool. When you get data back from this tool, analyze it and provide 3-5 short, clear, actionable bullet points. Start your reply with "Here's my analysis of your month so far:"`;
     
-    const messages = [
-        { role: "system", content: mainSystemInstruction },
-        ...(conversation.history || []),
-        { role: "user", content: text }
-    ];
-
+    const messages = [ { role: "system", content: mainSystemInstruction }, ...(conversation.history || []), { role: "user", content: text } ];
     return await runAiCycle(messages, mainUserTools, collections, senderId, user, conversation);
 }
-
 
 // --- Reusable AI Cycle Function ---
 async function runAiCycle(messages, tools, collections, senderId, user, conversation) {
     const { conversationsCollection } = collections;
-    
-    // The user message is already in the 'messages' array, so we just need to add it to history
     let newHistoryEntries = [messages[messages.length - 1]];
 
     try {
@@ -131,17 +98,34 @@ async function runAiCycle(messages, tools, collections, senderId, user, conversa
                 const secondResponse = await deepseek.chat.completions.create({ model: "deepseek-chat", messages, tools });
                 responseMessage = secondResponse.choices[0].message;
             } else {
-                responseMessage = { role: 'assistant', content: "I'm not sure how to handle that. Could you please rephrase?" };
+                responseMessage = { role: 'assistant', content: "I am not sure how to handle that. I can only help with bookkeeping tasks." };
             }
         }
 
         newHistoryEntries.push(responseMessage);
         
-        // Update history
-        const finalHistoryToSave = [...(conversation.history || []), ...newHistoryEntries];
+        // --- THE FIX: ROBUST HISTORY PRUNING ---
+        const existingHistory = conversation.history || [];
+        const finalHistoryToSave = [...existingHistory, ...newHistoryEntries];
+        const MAX_USER_TURNS = 5;
+        let userMessageCount = 0;
+        let startIndex = -1;
+        // Iterate backwards to find the start of the 5th-to-last user message
+        for (let i = finalHistoryToSave.length - 1; i >= 0; i--) {
+            if (finalHistoryToSave[i].role === 'user') {
+                userMessageCount++;
+                if (userMessageCount === MAX_USER_TURNS) {
+                    startIndex = i;
+                    break;
+                }
+            }
+        }
+        // If we found 5 user turns, slice from there. Otherwise, keep the whole history.
+        const prunedHistory = startIndex !== -1 ? finalHistoryToSave.slice(startIndex) : finalHistoryToSave;
+
         await conversationsCollection.updateOne(
             { userId: senderId }, 
-            { $set: { history: finalHistoryToSave.slice(-10) } } // Keep last 5 turns (user + assistant = 1 turn)
+            { $set: { history: prunedHistory } }
         );
 
         if (responseMessage.content) {

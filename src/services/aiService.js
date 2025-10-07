@@ -9,121 +9,85 @@ import * as onboardingService from './onboardingService.js';
 const deepseek = new OpenAI({ apiKey: process.env.DEEPSEEK_API_KEY, baseURL: "https://api.deepseek.com/v1" });
 
 // --- TOOL DEFINITIONS (Unchanged) ---
-const onboardingTools = [
-    { type: "function", function: { name: 'onboardUser', /* ... */ } },
-    { type: "function", function: { name: 'verifyEmailOTP', /* ... */ } },
-    { type: "function", function: { name: 'setCurrency', /* ... */ } },
-];
-const mainUserTools = [
-    { type: "function", function: { name: 'logSale', /* ... */ } },
-    { type: "function", function: { name: 'logTransaction', /* ... */ } },
-    { type: "function", function: { name: 'addProduct', /* ... */ } },
-    { type: "function", function: { name: 'getInventory', /* ... */ } },
-    { type: "function", function: { name: 'getMonthlySummary', /* ... */ } },
-    { type: "function", function: { name: 'generateTransactionReport', /* ... */ } },
-    { type: "function", function: { name: 'generateInventoryReport', /* ... */ } },
-    { type: "function", function: { name: 'generatePnLReport', /* ... */ } },
-    { type: "function", function: { name: 'changeWebsitePassword', /* ... */ } },
-    { type: "function", function: { name: 'requestLiveChat', /* ... */ } },
-    { type: "function", function: { name: 'getFinancialDataForAnalysis', /* ... */ } },
-];
-const availableTools = { 
-    logSale: accountingService.logSale,
-    logTransaction: accountingService.logTransaction, 
-    addProduct: accountingService.addProduct, 
-    getInventory: accountingService.getInventory, 
-    getMonthlySummary: accountingService.getMonthlySummary, 
-    generateTransactionReport: reportService.generateTransactionReport, 
-    generateInventoryReport: reportService.generateInventoryReport, 
-    generatePnLReport: reportService.generatePnLReport,
-    changeWebsitePassword: authService.changePasswordFromBot,
-    requestLiveChat: liveChatService.requestLiveChat,
-    getFinancialDataForAnalysis: advisorService.getFinancialDataForAnalysis,
-    onboardUser: onboardingService.onboardUser,
-    verifyEmailOTP: onboardingService.verifyEmailOTP,
-    setCurrency: onboardingService.setCurrency,
-};
+const onboardingTools = [ { type: "function", function: { name: 'onboardUser', description: "Saves a new user's business name and email address. Generates and sends a 6-digit OTP to their email for verification.", parameters: { type: 'object', properties: { businessName: { type: 'string' }, email: { type: 'string' } }, required: ['businessName', 'email'] } } }, { type: "function", function: { name: 'verifyEmailOTP', description: "Verifies the 6-digit OTP that the user provides from their email.", parameters: { type: 'object', properties: { otp: { type: 'string', description: "The 6-digit code from the user." } }, required: ['otp'] } } }, { type: "function", function: { name: 'setCurrency', description: "Sets the user's preferred currency. Infer the standard 3-letter currency code (e.g., NGN for Naira, USD for Dollar).", parameters: { type: 'object', properties: { currencyCode: { type: 'string', description: "The 3-letter currency code, e.g., NGN, USD, GHS." } }, required: ['currencyCode'] } } }, ];
+const mainUserTools = [ { type: "function", function: { name: 'logSale', description: 'Logs a sale of a product from inventory.', parameters: { type: 'object', properties: { productName: { type: 'string' }, quantitySold: { type: 'number' }, totalAmount: { type: 'number' } }, required: ['productName', 'quantitySold', 'totalAmount'] } } }, { type: "function", function: { name: 'logTransaction', description: 'Logs a generic income or expense (not a product sale).', parameters: { type: 'object', properties: { type: { type: 'string', enum: ['income', 'expense'] }, amount: { type: 'number' }, description: { type: 'string' }, category: { type: 'string' } }, required: ['type', 'amount', 'description'] } } }, { type: "function", function: { name: 'addProduct', description: 'Adds new products to inventory or sets opening balance.', parameters: { type: 'object', properties: { products: { type: 'array', items: { type: 'object', properties: { productName: { type: 'string' }, cost: { type: 'number' }, price: { type: 'number' }, stock: { type: 'number' } }, required: ['productName', 'cost', 'price', 'stock'] } } }, required: ['products'] } } }, { type: "function", function: { name: 'getInventory', description: 'Retrieves a list of all products in inventory.', parameters: { type: 'object', properties: {} } } }, { type: "function", function: { name: 'getMonthlySummary', description: 'Gets a quick text summary of finances for the current month.', parameters: { type: 'object', properties: {} } } }, { type: "function", function: { name: 'generateTransactionReport', description: 'Generates a PDF file of all financial transactions.', parameters: { type: 'object', properties: {} } } }, { type: "function", function: { name: 'generateInventoryReport', description: 'Generates a PDF file of inventory, sales, and profit.', parameters: { type: 'object', properties: {} } } }, { type: "function", function: { name: 'generatePnLReport', description: 'Generates a professional Profit and Loss (P&L) PDF statement.', parameters: { type: 'object', properties: {} } } }, { type: "function", function: { name: 'changeWebsitePassword', description: "Changes the user's password for the Fynax website dashboard.", parameters: { type: 'object', properties: { newPassword: { type: 'string', description: 'The new password. Must be at least 6 characters.' } }, required: ['newPassword'] } } }, { type: "function", function: { name: 'requestLiveChat', description: "Connects the user to a human support agent.", parameters: { type: 'object', properties: { issue: { type: 'string', description: "A brief summary of the user's issue." } }, required: ['issue'] } } }, { type: "function", function: { name: 'getFinancialDataForAnalysis', description: "Fetches a complete snapshot of the user's monthly data for analysis.", parameters: { type: 'object', properties: {} } } } ];
+const availableTools = { logSale: accountingService.logSale, logTransaction: accountingService.logTransaction, addProduct: accountingService.addProduct, getInventory: accountingService.getInventory, getMonthlySummary: accountingService.getMonthlySummary, generateTransactionReport: reportService.generateTransactionReport, generateInventoryReport: reportService.generateInventoryReport, generatePnLReport: reportService.generatePnLReport, changeWebsitePassword: authService.changePasswordFromBot, requestLiveChat: liveChatService.requestLiveChat, getFinancialDataForAnalysis: advisorService.getFinancialDataForAnalysis, onboardUser: onboardingService.onboardUser, verifyEmailOTP: onboardingService.verifyEmailOTP, setCurrency: onboardingService.setCurrency };
 
 // --- ONBOARDING AI PROCESS ---
 export async function processOnboardingMessage(text, collections, senderId, user, conversation) {
-    const onboardingSystemInstruction = `You are Fynax Bookkeeper's onboarding assistant...`; // (Full prompt)
+    const onboardingSystemInstruction = `You are Fynax Bookkeeper's onboarding assistant...`; // Full prompt
     const messages = [ { role: "system", content: onboardingSystemInstruction }, ...(conversation.history || []), { role: "user", content: text } ];
     return await runAiCycle(messages, onboardingTools, collections, senderId, user, conversation);
 }
 
 // --- MAIN AI PROCESS ---
 export async function processMessageWithAI(text, collections, senderId, user, conversation) {
-    const mainSystemInstruction = `You are 'Fynax Bookkeeper', an expert AI financial advisor...`; // (Full prompt)
+    const mainSystemInstruction = `You are 'Fynax Bookkeeper', an expert AI financial advisor...`; // Full prompt
     const messages = [ { role: "system", content: mainSystemInstruction }, ...(conversation.history || []), { role: "user", content: text } ];
     return await runAiCycle(messages, mainUserTools, collections, senderId, user, conversation);
 }
 
-// --- Reusable AI Cycle Function (NEW RELIABLE VERSION) ---
+// --- Reusable AI Cycle Function (NEW, PERMANENTLY RELIABLE VERSION) ---
 async function runAiCycle(messages, tools, collections, senderId, user, conversation) {
     const { conversationsCollection } = collections;
-    
-    // We only save the user's message to history for now
-    const newHistoryEntries = [messages[messages.length-1]];
+    const newHistoryEntries = [messages[messages.length-1]]; // Start with the user's message
 
     try {
-        // First and ONLY call to the AI for this turn if a tool is used
+        // We only make ONE call to the AI.
         const response = await deepseek.chat.completions.create({ model: "deepseek-chat", messages, tools, tool_choice: "auto" });
         const responseMessage = response.choices[0].message;
 
-        // Add the AI's immediate response to our history
-        newHistoryEntries.push(responseMessage);
+        let finalContent;
 
         // Check if the AI wants to call a tool
         if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
-            
-            // --- NEW RELIABLE LOGIC ---
-            // Execute the tool, but DO NOT call the AI again.
-            // We will format the response ourselves.
-
-            const toolCall = responseMessage.tool_calls[0]; // We'll handle one tool call at a time for simplicity
+            const toolCall = responseMessage.tool_calls[0];
             const functionName = toolCall.function.name;
             const functionArgs = JSON.parse(toolCall.function.arguments);
             const selectedTool = availableTools[functionName];
 
             if (selectedTool) {
+                // Execute the tool
                 const functionResult = await selectedTool(functionArgs, collections, senderId, user);
-                
-                // Manually format the response instead of asking the AI
-                let toolResponseText = formatToolResponse(functionResult, functionName);
-
-                // Add the (pretend) tool result and final assistant message to history
-                newHistoryEntries.push(
-                    { role: 'tool', tool_call_id: toolCall.id, name: functionName, content: JSON.stringify(functionResult) },
-                    { role: 'assistant', content: toolResponseText }
-                );
-                
-                // Save history and return the formatted text
-                saveHistory(conversationsCollection, senderId, conversation.history, newHistoryEntries);
-                return toolResponseText;
+                // Manually format the result into a user-friendly string
+                finalContent = formatToolResponse(functionResult, functionName);
+            } else {
+                finalContent = "Sorry, I can't do that right now.";
             }
+            // Add the final, human-readable response to the history
+            newHistoryEntries.push({ role: 'assistant', content: finalContent });
+
+        } else {
+            // If no tool was called, the final content is just the AI's direct response.
+            finalContent = responseMessage.content;
+            newHistoryEntries.push(responseMessage);
         }
 
-        // If no tool was called, just return the AI's text response
-        if (responseMessage.content) {
-            saveHistory(conversationsCollection, senderId, conversation.history, newHistoryEntries);
-            return responseMessage.content.trim();
+        // Save the clean history (user message + final assistant response)
+        saveHistory(conversationsCollection, senderId, conversation.history, newHistoryEntries);
+
+        if (finalContent) {
+            return finalContent.trim();
         }
 
     } catch (error) {
         console.error("Error in AI cycle:", error);
-        throw error;
+        throw error; // Let the main handler catch it and send a generic error message
     }
 
     return null;
 }
 
-// --- NEW HELPER: Manually formats tool results into user-friendly text ---
+// --- HELPER: Manually formats tool results into user-friendly text ---
 function formatToolResponse(result, functionName) {
-    if (!result || !result.success) {
+    if (!result) {
+        return "Sorry, there was an error processing your request.";
+    }
+    if (!result.success) {
         return result.message || "Sorry, I couldn't complete that request.";
     }
 
-    // Simple success messages
+    // Simple success messages are returned directly
     if (result.message) {
         return result.message;
     }
@@ -134,6 +98,9 @@ function formatToolResponse(result, functionName) {
             return `Here is your summary for ${result.month}:\n\n- Total Income: *${result.currency} ${result.income.toLocaleString()}*\n- Total Expenses: *${result.currency} ${result.expense.toLocaleString()}*\n- Net Balance: *${result.currency} ${result.net.toLocaleString()}*`;
         
         case 'getInventory':
+            if (!result.products || result.products.length === 0) {
+                return "You have no products in your inventory.";
+            }
             let inventoryText = "Here is your current inventory:\n\n";
             result.products.forEach(p => {
                 inventoryText += `- *${p.name}:* ${p.stock} units @ ${result.currency} ${p.price.toLocaleString()}\n`;
@@ -145,7 +112,7 @@ function formatToolResponse(result, functionName) {
     }
 }
 
-// --- NEW HELPER: Saves conversation history ---
+// --- HELPER: Saves conversation history ---
 async function saveHistory(conversationsCollection, senderId, existingHistory = [], newHistoryEntries = []) {
     const finalHistoryToSave = [...existingHistory, ...newHistoryEntries];
     const MAX_USER_TURNS = 5;

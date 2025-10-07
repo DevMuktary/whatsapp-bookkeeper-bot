@@ -40,6 +40,7 @@ async function _processIncomingMessage(message, collections) {
             websitePassword: hashedPassword, 
             createdAt: new Date(), 
             emailVerified: false,
+            // storeName and currency will be set during onboarding
         };
         await usersCollection.insertOne(user);
         

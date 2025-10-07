@@ -1,12 +1,12 @@
 import * as Brevo from '@getbrevo/brevo';
 
-// --- Initialize Brevo API client ---
-const apiClient = new Brevo.ApiClient();
-apiClient.authentications['api-key'].apiKey = process.env.BREVO_API_KEY;
+// --- Initialize Brevo API client (Corrected Syntax) ---
+const apiInstance = new Brevo.TransactionalEmailsApi();
+// Configure API key authorization
+const apiKey = apiInstance.authentications['api-key'];
+apiKey.apiKey = process.env.BREVO_API_KEY;
 
-const transactionalEmailsApi = new Brevo.TransactionalEmailsApi(apiClient);
-
-// --- IMPORTANT: Configure your sender details ---
+// --- Configure your sender details ---
 // This email MUST be a validated sender in your Brevo account.
 const SENDER_EMAIL = 'no-reply@fynaxtech.com';
 const SENDER_NAME = 'Fynax Bookkeeper';
@@ -66,7 +66,8 @@ export async function sendOtpEmail(userEmail, otp, businessName) {
     `;
 
     try {
-        await transactionalEmailsApi.sendTransacEmail({
+        // Use the new 'apiInstance' to send the email
+        await apiInstance.sendTransacEmail({
             sender: { email: SENDER_EMAIL, name: SENDER_NAME },
             to: [{ email: userEmail }],
             subject: `Your Fynax Bookkeeper Verification Code is ${otp}`,
@@ -75,7 +76,8 @@ export async function sendOtpEmail(userEmail, otp, businessName) {
         console.log(`OTP email sent successfully to ${userEmail}`);
         return true;
     } catch (error) {
-        console.error("Error sending OTP email via Brevo:", error);
+        // Log a more detailed error from the Brevo SDK
+        console.error("Error sending OTP email via Brevo:", error.body || error.message);
         return false;
     }
 }

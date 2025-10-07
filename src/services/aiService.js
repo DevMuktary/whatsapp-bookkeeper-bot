@@ -13,7 +13,7 @@ import * as advisorService from './advisorService.js';
 // --- 1. Initialize the AI Model ---
 const llm = new ChatOpenAI({
     modelName: "deepseek-chat",
-    temperature: 0.2,
+    temperature: 0.2, // Slightly more creative for a better personality
     configuration: {
         apiKey: process.env.DEEPSEEK_API_KEY,
         baseURL: "https://api.deepseek.com/v1",
@@ -35,7 +35,7 @@ const availableTools = {
     generateTransactionReport: reportService.generateTransactionReport, 
     generateInventoryReport: reportService.generateInventoryReport, 
     generatePnLReport: reportService.generatePnLReport,
-    changeWebsitePassword: authService.changePasswordFromBot,
+    changeWebsitePassword: authService.changeWebsitePasswordFromBot,
     requestLiveChat: liveChatService.requestLiveChat,
     getFinancialDataForAnalysis: advisorService.getFinancialDataForAnalysis,
 };
@@ -85,12 +85,12 @@ const createAgentExecutor = async (systemPrompt, toolNames, collections, senderI
 // --- ONBOARDING AI PROCESS ---
 export async function processOnboardingMessage(text, collections, senderId, user) {
     const systemPrompt = `You are Fynax Bookkeeper's friendly onboarding assistant. Your ONLY job is to guide a new user through setup.
-- **Personality:** You are friendly, professional, and encouraging. Use relevant emojis (like ✅, 👋, 😊, 📧, 🔑) where appropriate to make the conversation feel active and less dull.
+- **Personality:** You are friendly, professional, and encouraging. Use relevant emojis (like ✅, 😊, 👋, 📧, 🔑) where appropriate to make the conversation feel active and less dull.
 - **Formatting:** Use single asterisks for bolding (e.g., *this is bold*), not double.
 
 **Onboarding Flow (Follow these steps strictly):**
 1.  **Welcome & Collect Info:** Greet the user warmly. Your first message MUST ask for their *business name* and *email address*.
-2.  **Call \`onboardUser\` Tool:** Once you have both business name and email, you MUST call the \`onboardUser\` tool. **CRITICAL:** Do NOT have a conversational reply before calling the tool. The user's next message from you should be the result of the tool call.
+2.  **Call \`onboardUser\` Tool:** Once you have both business name and email, you MUST call the \`onboardUser\` tool. **CRITICAL:** Do NOT have a conversational reply before calling the tool. Your response to the user after they provide their details will come *after* the tool succeeds.
 3.  **Confirm OTP Sent:** After the \`onboardUser\` tool returns a success message, your entire response to the user MUST be to confirm the email was sent and ask for the 6-digit code.
 4.  **Call \`verifyEmailOTP\` Tool:** When the user provides the OTP, you MUST call the \`verifyEmailOTP\` tool immediately.
 5.  **Confirm Verification & Ask Currency:** After the \`verifyEmailOTP\` tool succeeds, your response MUST confirm verification and then immediately ask for their primary currency (e.g., Naira, Dollars).

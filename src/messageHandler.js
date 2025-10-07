@@ -7,32 +7,18 @@ import * as aiService from './services/aiService.js';
 const ADMIN_NUMBERS = ['2348105294232', '2348146817448'];
 const SALT_ROUNDS = 10;
 
-/**
- * Main webhook handler. This is the entry point for all incoming messages from Meta.
- */
 export async function handleWebhook(body, collections) {
-    // Parse the complex webhook payload into a simple message object
     const message = whatsappService.parseWebhookMessage(body);
-
-    // If it's not a text message we can handle, do nothing.
-    if (!message) {
-        return;
-    }
+    if (!message) return;
 
     try {
-        // Process the extracted message
         await _processIncomingMessage(message, collections);
     } catch (error) {
         console.error("Fatal error processing message:", error);
-        // Send a generic failure message to the user if anything breaks
         await whatsappService.sendMessage(message.from, "Sorry, I encountered a critical error. Please try again later.");
     }
 }
 
-/**
- * Internal function to route and process a validated message.
- * This is the "brain" of the bot.
- */
 async function _processIncomingMessage(message, collections) {
     const { usersCollection, conversationsCollection } = collections;
     const senderId = message.from;
@@ -41,9 +27,7 @@ async function _processIncomingMessage(message, collections) {
     let user = await usersCollection.findOne({ userId: senderId });
     let conversation = await conversationsCollection.findOne({ userId: senderId });
 
-    // --- 1. Handle New Users ---
     if (!user) {
-        // Create the new user in the database
         const normalizedSenderId = senderId.split('@')[0];
         const isAdmin = ADMIN_NUMBERS.includes(normalizedSenderId);
         const role = isAdmin ? 'admin' : 'user';
@@ -60,50 +44,59 @@ async function _processIncomingMessage(message, collections) {
         };
         await usersCollection.insertOne(user);
         
-        // Create their conversation object for LangChain history and our state management
         conversation = {
-            userId: senderId, // For our own reference
-            sessionId: senderId, // This is what LangChain's MongoDBChatMessageHistory uses
-            state: 'onboarding', // For our router to know to use the onboarding AI
-            history: [] 
+            userId: senderId,
+            sessionId: senderId,
+            state: 'onboarding',
+            history: []
         };
         await conversationsCollection.insertOne(conversation);
-        
-        // Let the code fall through to the AI router below, which will trigger the onboarding AI.
     }
 
-    // --- 2. Check for Blocked User ---
     if (user.isBlocked) {
-        return; // Ignore silently.
+        return;
     }
 
-    // --- 3. Check for Admin Command ---
+    if (message.type === 'button_reply') {
+        let aiTriggerText = '';
+        switch (message.buttonId) {
+            case 'log_sale':
+                aiTriggerText = 'I want to log a sale';
+                break;
+            case 'log_expense':
+                aiTriggerText = 'I want to log an expense';
+                break;
+            case 'add_stock':
+                aiTriggerText = 'I want to add new stock';
+                break;
+        }
+
+        if (aiTriggerText) {
+            const aiResponseText = await aiService.processMessageWithAI(aiTriggerText, collections, senderId, user);
+            if (aiResponseText) {
+                await whatsappService.sendMessage(senderId, aiResponseText);
+            }
+        }
+        return;
+    }
+
     if (messageText.startsWith('/') && user.role === 'admin') {
         await adminService.handleAdminCommand(messageText, collections, user);
-        return; // Admin command handled, stop.
-    }
-
-    // --- 4. Check for Live Chat State ---
-    if (conversation?.chatState === 'live') {
-        await liveChatService.forwardLiveMessage(message, collections, user);
-        return; // Bot is paused. Stop.
+        return;
     }
     
-    // --- 5. ROUTE TO THE CORRECT AI PROCESS (Onboarding vs. Main) ---
+    if (conversation?.chatState === 'live') {
+        await liveChatService.forwardLiveMessage(message, collections, user);
+        return;
+    }
+    
     let aiResponseText;
-
-    // We check if the user has a verified email. If not, they are in the onboarding flow.
-    // This is more robust than using a state that we have to clear.
     if (!user.emailVerified) {
-        // Route them to the specialized onboarding AI.
-        // We no longer pass 'conversation' as LangChain handles history.
         aiResponseText = await aiService.processOnboardingMessage(messageText, collections, senderId, user);
     } else {
-        // Otherwise, they are a regular user. Route them to the main AI.
         aiResponseText = await aiService.processMessageWithAI(messageText, collections, senderId, user);
     }
     
-    // If the AI process generated a response, send it.
     if (aiResponseText) {
         await whatsappService.sendMessage(senderId, aiResponseText);
     }

@@ -13,14 +13,14 @@ import * as advisorService from './advisorService.js';
 // --- 1. Initialize the AI Model ---
 const llm = new ChatOpenAI({
     modelName: "deepseek-chat",
-    temperature: 0.2, // Slightly more creative for a better personality
+    temperature: 0.2,
     configuration: {
         apiKey: process.env.DEEPSEEK_API_KEY,
         baseURL: "https://api.deepseek.com/v1",
     },
 });
 
-// --- 2. Define All Available Tools for LangChain (Unchanged) ---
+// --- 2. Define All Available Tools for LangChain ---
 const availableTools = { 
     onboardUser: onboardingService.onboardUser,
     verifyEmailOTP: onboardingService.verifyEmailOTP,
@@ -67,7 +67,12 @@ const createAgentExecutor = async (systemPrompt, toolNames, collections, senderI
         description: toolDescriptions[name],
         func: async (argsString) => {
             const args = argsString ? JSON.parse(argsString) : {};
+            
+            console.log(`--- DEBUG: LangChain is executing tool: '${name}' with args:`, argsString);
             const result = await availableTools[name](args, collections, senderId, user);
+            console.log(`--- DEBUG: The '${name}' tool returned the following result to the AI: ---`);
+            console.log(JSON.stringify(result, null, 2));
+
             return JSON.stringify(result);
         }
     }));
@@ -77,12 +82,10 @@ const createAgentExecutor = async (systemPrompt, toolNames, collections, senderI
 
 // --- ONBOARDING AI PROCESS ---
 export async function processOnboardingMessage(text, collections, senderId, user) {
-    // --- NEW, MORE DIRECT PROMPT ---
     const systemPrompt = `You are Fynax Bookkeeper's friendly onboarding assistant. Your ONLY job is to guide a new user through setup.
-- **Personality:** You are friendly, professional, and encouraging. Use relevant emojis (like ✅, 😊, 👋, 📧, 🔑) where appropriate to make the conversation feel active and less dull.
+- **Personality:** You are friendly, professional, and encouraging. Use relevant emojis (like ✅, 👋, 📧, 🔑) where appropriate to make the conversation feel active and less dull.
 - **Formatting:** Use single asterisks for bolding (e.g., *this is bold*), not double.
-
-**Onboarding Flow (Follow these steps strictly):**
+- **Onboarding Flow (Follow these steps strictly):**
 1.  **Welcome & Collect Info:** Greet the user warmly. Your first message MUST ask for their *business name* and *email address*.
 2.  **Call \`onboardUser\` Tool:** Once you have both business name and email, you MUST call the \`onboardUser\` tool. **CRITICAL:** Do NOT have a conversation before calling the tool. Your response to the user after they provide their details will come *after* the tool succeeds.
 3.  **Confirm OTP Sent:** After the \`onboardUser\` tool returns a success message, your response to the user MUST be to confirm the email was sent and ask for the 6-digit code.
@@ -90,7 +93,6 @@ export async function processOnboardingMessage(text, collections, senderId, user
 5.  **Confirm Verification & Ask Currency:** After the \`verifyEmailOTP\` tool succeeds, your response MUST confirm verification and then immediately ask for their primary currency (e.g., Naira, Dollars).
 6.  **Call \`setCurrency\` Tool:** When the user provides a currency, infer the 3-letter code (e.g., NGN, USD, GHS) and you MUST call the \`setCurrency\` tool.
 7.  **Complete:** The \`setCurrency\` tool will trigger the final welcome menu. Your job is done.
-
 If a tool fails, politely inform the user of the error message and ask them to try again.`;
     
     const toolNames = ['onboardUser', 'verifyEmailOTP', 'setCurrency'];
@@ -109,9 +111,8 @@ If a tool fails, politely inform the user of the error message and ask them to t
 
 // --- MAIN AI PROCESS ---
 export async function processMessageWithAI(text, collections, senderId, user) {
-    // --- NEW, MORE DETAILED PROMPT ---
     const systemPrompt = `You are 'Fynax Bookkeeper', an expert AI financial advisor.
-- **Personality:** You are friendly, professional, and confident. Use relevant emojis (like 😊, ✅, 💰, 📦, 📄) where appropriate to make the conversation feel active and less dull.
+- **Personality:** You are friendly, professional, and confident. Use relevant emojis (like ✅, 💰, 📦, 📄) where appropriate to make the conversation feel active and less dull.
 - **Formatting:** Use single asterisks for bolding (e.g., *this is bold*), not double.
 - **Your rules are absolute and you must never deviate:**
 1.  **Strictly Use Tools:** Your ONLY purpose is to use the tools provided. You do not have opinions or knowledge outside of these tools.

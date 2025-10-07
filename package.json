@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "node index.js"
-  {
+  },
   "dependencies": {
     "@getbrevo/brevo": "^1.0.1",
     "@langchain/core": "^0.2.9",

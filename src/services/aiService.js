@@ -1,32 +1,33 @@
-import OpenAI from 'openai';
+import { ChatOpenAI } from "@langchain/openai";
+import { DynamicTool } from "langchain/tools";
+import { createOpenAIFunctionsAgent, AgentExecutor } from "langchain/agents";
+import { ChatPromptTemplate, MessagesPlaceholder } from "@langchain/prompts";
+import { MongoDBChatMessageHistory } from "@langchain/mongodb";
 import * as accountingService from './accountingService.js';
 import * as reportService from './reportService.js';
 import * as authService from './authService.js';
 import * as liveChatService from './liveChatService.js';
-import * as advisorService from './advisorService.js';
 import * as onboardingService from './onboardingService.js';
+// The advisorService is not used in the LangChain agent directly, but called by a tool.
+// We'll create the tool for it below.
 
-const deepseek = new OpenAI({ apiKey: process.env.DEEPSEEK_API_KEY, baseURL: "https://api.deepseek.com/v1" });
+// --- 1. Initialize the AI Model ---
+const llm = new ChatOpenAI({
+    modelName: "deepseek-chat",
+    temperature: 0,
+    configuration: {
+        apiKey: process.env.DEEPSEEK_API_KEY,
+        baseURL: "https://api.deepseek.com/v1",
+    },
+});
 
-// --- Simplified Tool Definitions ---
-const onboardingTools = [
-    { type: "function", function: { name: 'onboardUser', description: "Saves a new user's business name and email address. Generates and sends a 6-digit OTP to their email for verification.", parameters: { type: 'object', properties: { businessName: { type: 'string' }, email: { type: 'string' } }, required: ['businessName', 'email'] } } },
-    { type: "function", function: { name: 'verifyEmailOTP', description: "Verifies the 6-digit OTP that the user provides from their email.", parameters: { type: 'object', properties: { otp: { type: 'string', description: "The 6-digit code from the user." } }, required: ['otp'] } } },
-    { type: "function", function: { name: 'setCurrency', description: "Sets the user's preferred currency. Infer the standard 3-letter currency code (e.g., NGN for Naira, USD for Dollar).", parameters: { type: 'object', properties: { currencyCode: { type: 'string', description: "The 3-letter currency code, e.g., NGN, USD, GHS." } }, required: ['currencyCode'] } } },
-];
-const mainUserTools = [
-    { type: "function", function: { name: 'logSale', description: 'Logs a sale of a product from inventory.', parameters: { type: 'object', properties: { productName: { type: 'string' }, quantitySold: { type: 'number' }, totalAmount: { type: 'number' } }, required: ['productName', 'quantitySold', 'totalAmount'] } } },
-    { type: "function", function: { name: 'logTransaction', description: 'Logs a generic income or expense (not a product sale).', parameters: { type: 'object', properties: { type: { type: 'string', enum: ['income', 'expense'] }, amount: { type: 'number' }, description: { type: 'string' }, category: { type: 'string' } }, required: ['type', 'amount', 'description'] } } },
-    { type: "function", function: { name: 'addProduct', description: 'Adds new products to inventory or sets opening balance.', parameters: { type: 'object', properties: { products: { type: 'array', items: { type: 'object', properties: { productName: { type: 'string' }, cost: { type: 'number' }, price: { type: 'number' }, stock: { type: 'number' } }, required: ['productName', 'cost', 'price', 'stock'] } } }, required: ['products'] } } },
-    { type: "function", function: { name: 'getInventory', description: 'Retrieves a list of all products in inventory.', parameters: { type: 'object', properties: {} } } },
-    { type: "function", function: { name: 'getMonthlySummary', description: 'Gets a quick text summary of finances for the current month.', parameters: { type: 'object', properties: {} } } },
-    { type: "function", function: { name: 'generateTransactionReport', description: 'Generates a PDF file of all financial transactions.', parameters: { type: 'object', properties: {} } } },
-    { type: "function", function: { name: 'generateInventoryReport', description: 'Generates a PDF file of inventory and profit.', parameters: { type: 'object', properties: {} } } },
-    { type: "function", function: { name: 'generatePnLReport', description: 'Generates a Profit and Loss (P&L) PDF statement.', parameters: { type: 'object', properties: {} } } },
-    { type: "function", function: { name: 'changeWebsitePassword', description: "Changes the user's password for the Fynax website dashboard.", parameters: { type: 'object', properties: { newPassword: { type: 'string' } }, required: ['newPassword'] } } },
-    { type: "function", function: { name: 'requestLiveChat', description: "Connects the user to a human support agent.", parameters: { type: 'object', properties: { issue: { type: 'string' } }, required: ['issue'] } } },
-];
+// --- 2. Define All Available Tools for LangChain ---
+
+// A map of all our functions that the AI can call
 const availableTools = { 
+    onboardUser: onboardingService.onboardUser,
+    verifyEmailOTP: onboardingService.verifyEmailOTP,
+    setCurrency: onboardingService.setCurrency,
     logSale: accountingService.logSale,
     logTransaction: accountingService.logTransaction, 
     addProduct: accountingService.addProduct, 
@@ -37,111 +38,110 @@ const availableTools = {
     generatePnLReport: reportService.generatePnLReport,
     changeWebsitePassword: authService.changePasswordFromBot,
     requestLiveChat: liveChatService.requestLiveChat,
-    onboardUser: onboardingService.onboardUser,
-    verifyEmailOTP: onboardingService.verifyEmailOTP,
-    setCurrency: onboardingService.setCurrency,
+    getFinancialDataForAnalysis: advisorService.getFinancialDataForAnalysis,
+};
+
+// A map of descriptions for each tool, which the AI uses to decide which one to call
+const toolDescriptions = {
+    onboardUser: "Saves a new user's business name and email address. Generates and sends a 6-digit OTP to their email for verification.",
+    verifyEmailOTP: "Verifies the 6-digit OTP that the user provides from their email.",
+    setCurrency: "Sets the user's preferred currency. Infer the standard 3-letter currency code (e.g., NGN for Naira, USD for Dollar).",
+    logSale: "Logs a sale of a product from inventory.",
+    logTransaction: "Logs a generic income or expense (not a product sale).",
+    addProduct: "Adds new products to inventory or sets opening balance.",
+    getInventory: "Retrieves a list of all products in inventory.",
+    getMonthlySummary: "Gets a quick text summary of finances for the current month.",
+    generateTransactionReport: "Generates a PDF file of all financial transactions.",
+    generateInventoryReport: "Generates a PDF file of inventory and profit.",
+    generatePnLReport: "Generates a Profit and Loss (P&L) PDF statement.",
+    changeWebsitePassword: "Changes the user's password for the Fynax website dashboard.",
+    requestLiveChat: "Connects the user to a human support agent.",
+    getFinancialDataForAnalysis: "Fetches a complete snapshot of the user's monthly data. Use this when asked for 'advice' or 'analysis'."
+};
+
+// Helper to create a LangChain agent with a specific prompt and set of tools
+const createAgentExecutor = async (systemPrompt, toolNames, collections, senderId, user) => {
+    const prompt = ChatPromptTemplate.fromMessages([
+        ["system", systemPrompt],
+        new MessagesPlaceholder("chat_history"),
+        ["human", "{input}"],
+        new MessagesPlaceholder("agent_scratchpad"),
+    ]);
+
+    // Create LangChain tool objects only from the names we need
+    const tools = toolNames.map(name => new DynamicTool({
+        name,
+        description: toolDescriptions[name],
+        // The 'func' for LangChain needs to be an async function that takes a string argument
+        func: async (argsString) => {
+            // LangChain sometimes sends an empty string for tools with no arguments
+            const args = argsString ? JSON.parse(argsString) : {};
+            // Call our actual service function with all the context it needs
+            const result = await availableTools[name](args, collections, senderId, user);
+            // Return the result as a string for the AI
+            return JSON.stringify(result);
+        }
+    }));
+
+    const agent = await createOpenAIFunctionsAgent({ llm, tools, prompt });
+    
+    return new AgentExecutor({ agent, tools, verbose: false });
 };
 
 // --- ONBOARDING AI PROCESS ---
-export async function processOnboardingMessage(text, collections, senderId, user, conversation) {
-    const onboardingSystemInstruction = `You are Fynax Bookkeeper's onboarding assistant...`; // (Full prompt is fine)
-    const messages = [ { role: "system", content: onboardingSystemInstruction }, ...(conversation.history || []), { role: "user", content: text } ];
-    return await runAiCycle(messages, onboardingTools, collections, senderId, user, conversation);
+export async function processOnboardingMessage(text, collections, senderId, user) {
+    const systemPrompt = `You are Fynax Bookkeeper's onboarding assistant. Your ONLY job is to guide a new user through setup. You MUST follow these steps in order, using your tools at each step.
+1.  **Welcome & Collect Info:** Greet the user warmly. Ask for their business name and email address in the same message.
+2.  **Use 'onboardUser' tool:** Once you have both their business name and email, you MUST call the \`onboardUser\` tool.
+3.  **Ask for OTP:** After the tool is called, tell the user to check their email and ask them to provide the 6-digit code.
+4.  **Use 'verifyEmailOTP' tool:** When the user provides the OTP, you MUST call the \`verifyEmailOTP\` tool.
+5.  **Ask for Currency:** After the email is verified, ask the user for their primary currency (e.g., Naira, Dollars, Cedis).
+6.  **Use 'setCurrency' tool:** When the user provides a currency, infer the 3-letter code (e.g., NGN, USD, GHS) and you MUST call the \`setCurrency\` tool.
+7.  **Complete:** After the currency is set, congratulate them and tell them they are ready to start logging transactions.
+
+Handle one step at a time. If a user gives you an invalid email, the tool will fail. Politely ask them for a correct one. If they say something off-topic, gently guide them back to the current step.`;
+    
+    const toolNames = ['onboardUser', 'verifyEmailOTP', 'setCurrency'];
+    
+    const agentExecutor = await createAgentExecutor(systemPrompt, toolNames, collections, senderId, user);
+    const history = new MongoDBChatMessageHistory({ collection: collections.conversationsCollection, sessionId: senderId });
+
+    const result = await agentExecutor.invoke({
+        input: text,
+        chat_history: await history.getMessages(),
+    });
+
+    await history.addUserMessage(text);
+    await history.addAIMessage(result.output);
+
+    return result.output;
 }
 
 // --- MAIN AI PROCESS ---
-export async function processMessageWithAI(text, collections, senderId, user, conversation) {
-    const mainSystemInstruction = `You are 'Fynax Bookkeeper', an expert AI assistant...`; // (Full prompt is fine)
-    const messages = [ { role: "system", content: mainSystemInstruction }, ...(conversation.history || []), { role: "user", content: text } ];
-    return await runAiCycle(messages, mainUserTools, collections, senderId, user, conversation);
-}
+export async function processMessageWithAI(text, collections, senderId, user) {
+    const systemPrompt = `You are 'Fynax Bookkeeper', an expert AI financial advisor. Your rules are absolute and you must never deviate.
+1.  **Strictly Use Tools:** Your ONLY purpose is to use the tools provided. You do not have opinions or knowledge outside of these tools.
+2.  **Stay in Scope:** If the user asks for anything that cannot be answered or performed by one of your tools, you MUST respond with: "I can only help with bookkeeping, inventory, and financial reports for your business. How can I assist with that?" Do not answer any other questions.
+3.  **No Explanations:** Never mention your tools, that you are an AI, or how you work. Just perform the action.
+4.  **Live Support:** If the user asks for a 'human', 'support', 'accountant', or seems very stuck, you MUST use the 'requestLiveChat' tool.
+5.  **Financial Advisor Role:** If a user asks for 'advice', 'analysis', or 'how to improve', you MUST use the \`getFinancialDataForAnalysis\` tool. When you get data back from this tool, analyze it and provide 3-5 short, clear, actionable bullet points. Start your reply with "Here's my analysis of your month so far:"`;
 
-// --- Reusable AI Cycle Function (PERMANENTLY RELIABLE VERSION) ---
-async function runAiCycle(messages, tools, collections, senderId, user, conversation) {
-    const { conversationsCollection } = collections;
-    const userMessageForHistory = messages[messages.length-1];
+    const toolNames = [
+        'logSale', 'logTransaction', 'addProduct', 'getInventory', 'getMonthlySummary',
+        'generateTransactionReport', 'generateInventoryReport', 'generatePnLReport',
+        'changeWebsitePassword', 'requestLiveChat', 'getFinancialDataForAnalysis'
+    ];
+    
+    const agentExecutor = await createAgentExecutor(systemPrompt, toolNames, collections, senderId, user);
+    const history = new MongoDBChatMessageHistory({ collection: collections.conversationsCollection, sessionId: senderId });
 
-    try {
-        // We only make ONE call to the AI.
-        const response = await deepseek.chat.completions.create({ model: "deepseek-chat", messages, tools, tool_choice: "auto" });
-        const responseMessage = response.choices[0].message;
+    const result = await agentExecutor.invoke({
+        input: text,
+        chat_history: await history.getMessages(),
+    });
 
-        let finalContent;
+    await history.addUserMessage(text);
+    await history.addAIMessage(result.output);
 
-        // Check if the AI wants to call a tool
-        if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
-            const toolCall = responseMessage.tool_calls[0];
-            const functionName = toolCall.function.name;
-            const functionArgs = JSON.parse(toolCall.function.arguments);
-            const selectedTool = availableTools[functionName];
-
-            if (selectedTool) {
-                const functionResult = await selectedTool(functionArgs, collections, senderId, user);
-                // Manually format the result into a user-friendly string
-                finalContent = formatToolResponse(functionResult, functionName);
-            } else {
-                finalContent = "Sorry, an unknown tool was requested.";
-            }
-        } else {
-            // If no tool was called, the final content is just the AI's direct response.
-            finalContent = responseMessage.content;
-        }
-
-        // --- THE PERMANENT FIX: CLEAN HISTORY ---
-        // We ONLY save the user's message and the final assistant response.
-        // We DO NOT save the complex tool_calls objects.
-        const newHistoryEntries = [
-            userMessageForHistory,
-            { role: 'assistant', content: finalContent }
-        ];
-        saveHistory(conversationsCollection, senderId, conversation.history, newHistoryEntries);
-        // --- END OF FIX ---
-
-        if (finalContent) {
-            return finalContent.trim();
-        }
-
-    } catch (error) {
-        console.error("Error in AI cycle:", error);
-        throw error;
-    }
-
-    return null;
-}
-
-// --- HELPER: Manually formats tool results into user-friendly text ---
-function formatToolResponse(result, functionName) {
-    if (!result) {
-        return "Sorry, there was an error processing your request.";
-    }
-    // For both success and failure, if a 'message' property exists, use it.
-    if (result.message) {
-        return result.message;
-    }
-    // If it was successful but has no message, provide a generic success.
-    if (result.success) {
-        return "Your request has been processed successfully.";
-    }
-
-    // Fallback for unexpected errors
-    return "Sorry, I couldn't complete that request.";
-}
-
-// --- HELPER: Saves conversation history ---
-async function saveHistory(conversationsCollection, senderId, existingHistory = [], newHistoryEntries = []) {
-    const finalHistoryToSave = [...existingHistory, ...newHistoryEntries];
-    const MAX_USER_TURNS = 5;
-    let userMessageCount = 0;
-    let startIndex = -1;
-    for (let i = finalHistoryToSave.length - 1; i >= 0; i--) {
-        if (finalHistoryToSave[i].role === 'user') { 
-            userMessageCount++; 
-            if (userMessageCount === MAX_USER_TURNS) { 
-                startIndex = i; 
-                break; 
-            } 
-        }
-    }
-    const prunedHistory = startIndex !== -1 ? finalHistoryToSave.slice(startIndex) : finalHistoryToSave;
-    await conversationsCollection.updateOne({ userId: senderId }, { $set: { history: prunedHistory } });
+    return result.output;
 }

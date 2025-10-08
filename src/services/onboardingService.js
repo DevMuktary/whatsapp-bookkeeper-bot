@@ -23,17 +23,12 @@ export async function handleOnboardingStep(message, collections, user, conversat
             break;
 
         case 'onboarding_collecting_details':
-            // Use the new conversational AI to handle the back-and-forth
             const aiResponse = await aiService.processOnboardingMessage(messageText, collections, senderId);
 
             if (aiResponse.includes(ONBOARDING_COMPLETE_SIGNAL)) {
-                // AI signals that it has collected all details.
-                const cleanResponse = aiResponse.replace(ONBOARDING_COMPLETE_SIGNAL, "").trim();
-                if (cleanResponse) {
-                    await sendMessage(senderId, cleanResponse);
-                }
-
-                // Now, extract details from the entire conversation history
+                // AI signals completion. We take over from here.
+                
+                // Extract details from the entire conversation history
                 const history = new MongoDBChatMessageHistory({
                     collection: collections.conversationsCollection,
                     sessionId: senderId,
@@ -44,11 +39,11 @@ export async function handleOnboardingStep(message, collections, user, conversat
                 const extractedDetails = await aiService.extractOnboardingDetails(fullConversationText);
 
                 if (extractedDetails.businessName && extractedDetails.email) {
+                    // Extraction successful!
                     await usersCollection.updateOne({ userId: senderId }, { $set: { storeName: extractedDetails.businessName, email: extractedDetails.email } });
                     
-                    // --- Transition to OTP Verification ---
                     const otp = Math.floor(100000 + Math.random() * 900000).toString();
-                    const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes expiry
+                    const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
                     
                     await conversationsCollection.updateOne(
                         { userId: senderId }, 
@@ -56,14 +51,19 @@ export async function handleOnboardingStep(message, collections, user, conversat
                     );
                     
                     const emailSent = await sendOtpEmail(extractedDetails.email, otp, extractedDetails.businessName);
+
+                    // --- NEW SINGLE MESSAGE LOGIC ---
                     if (emailSent) {
-                        await sendMessage(senderId, `Perfect! 📧 A 6-digit verification code has been sent to *${extractedDetails.email}*. Please check your inbox (and spam folder) and enter the code here to continue.`);
+                        const successMessage = `Perfect! I have your business name as *${extractedDetails.businessName}* and your email as *${extractedDetails.email}*.\n\n📧 A 6-digit verification code has been sent to your inbox. Please enter the code here to continue.`;
+                        await sendMessage(senderId, successMessage);
                     } else {
-                        await sendMessage(senderId, `I tried to send an email to *${extractedDetails.email}*, but it failed. Please double-check and provide a correct email address.`);
+                        // Email failed, but we still confirm the details we have.
+                        const failureMessage = `Great, I've saved your details! However, I had trouble sending the verification email to *${extractedDetails.email}*.\n\nPlease check that it's correct. You can provide a new email address to try again.`;
+                        await sendMessage(senderId, failureMessage);
                         await usersCollection.updateOne({ userId: senderId }, { $unset: { email: "" } }); 
                     }
                 } else {
-                    // This is a fallback in case extraction fails
+                    // Fallback in case final extraction fails.
                     await sendMessage(senderId, "I seem to have had a little trouble processing your details. Could we try one more time? Please tell me your business name and email.");
                 }
 

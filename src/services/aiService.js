@@ -58,14 +58,14 @@ export async function processOnboardingMessage(text, collections, senderId) {
 // --- AI FUNCTIONS FOR EXTRACTION (Still needed for the final step) ---
 const extractionFunctionSchema = {
     name: "extractOnboardingDetails",
-    description: "Extracts business name and email from a user's message during a sign-up process.",
+    description: "Extracts business name and email from a body of text.",
     parameters: {
         type: "object",
         properties: {
             businessName: { type: "string", description: "The user's business or store name." },
             email: { type: "string", description: "The user's email address." },
         },
-        required: ["businessName", "email"]
+        // REMOVED: "required" field to make extraction more flexible.
     },
 };
 const llmWithDetailsExtractor = llm.bind({ functions: [extractionFunctionSchema], function_call: { name: "extractOnboardingDetails" } });
@@ -166,4 +166,3 @@ export async function processMessageWithAI(text, collections, senderId, user) {
     await history.addAIMessage(result.output);
     return result.output;
 }
-

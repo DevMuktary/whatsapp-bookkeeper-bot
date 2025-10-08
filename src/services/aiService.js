@@ -12,22 +12,23 @@ import * as liveChatService from './liveChatService.js';
 
 const llm = new ChatOpenAI({
     modelName: "deepseek-chat",
-    temperature: 0.1, // Slightly more creative for conversation
+    temperature: 0.1,
     configuration: {
         apiKey: process.env.DEEPSEEK_API_KEY,
         baseURL: "https://api.deepseek.com/v1",
     },
 });
 
-// --- ONBOARDING CONVERSATIONAL AI ---
-const ONBOARDING_COMPLETE_SIGNAL = "[ONBOARDING_DETAILS_COLLECTED]";
+// --- ONBOARDING CONVERSATIONAL AI (FINAL VERSION) ---
 
-const onboardingSystemPrompt = `You are a friendly and helpful onboarding assistant for 'Fynax Bookkeeper'.
-Your SOLE GOAL is to collect two pieces of information from the user: their business name and their email address.
-- Be conversational and natural.
-- You can ask for them one at a time or handle both if the user provides them.
-- If the user asks unrelated questions, gently guide them back to the task of providing their details.
-- Once you are confident you have BOTH the business name AND a valid email address, and only then, you MUST end your final response with the special signal: ${ONBOARDING_COMPLETE_SIGNAL}`;
+const onboardingSystemPrompt = `You are an onboarding assistant for 'Fynax Bookkeeper'.
+Your SOLE GOAL is to collect a business name and a valid email address from the user.
+- Be conversational and friendly.
+- You can ask for the details one at a time.
+- If the user provides an invalid email, ask them for a correct one.
+- Once you are confident that you have successfully collected BOTH a business name AND a valid email address, your FINAL response MUST BE ONLY a raw JSON object with the collected data.
+- The JSON object should look like this: {"businessName": "Example Inc.", "email": "user@example.com"}
+- DO NOT add any other text, greetings, or markdown formatting to the final JSON response. Just the raw JSON.`;
 
 const onboardingPrompt = ChatPromptTemplate.fromMessages([
     ["system", onboardingSystemPrompt],
@@ -48,42 +49,24 @@ export async function processOnboardingMessage(text, collections, senderId) {
         chat_history: await history.getMessages(),
     });
 
-    await history.addUserMessage(text);
-    await history.addAIMessage(aiResponse);
+    // Check if the AI is giving a JSON response before saving to history
+    // This prevents the final JSON from being part of future conversations
+    try {
+        JSON.parse(aiResponse);
+        // If it parses, it's the final JSON object. We don't add it to the chat history.
+    } catch (e) {
+        // If it's not JSON, it's a regular message, so we save it.
+        await history.addUserMessage(text);
+        await history.addAIMessage(aiResponse);
+    }
 
     return aiResponse;
 }
 
 
-// --- AI FUNCTIONS FOR EXTRACTION (Still needed for the final step) ---
-const extractionFunctionSchema = {
-    name: "extractOnboardingDetails",
-    description: "Extracts business name and email from a body of text.",
-    parameters: {
-        type: "object",
-        properties: {
-            businessName: { type: "string", description: "The user's business or store name." },
-            email: { type: "string", description: "The user's email address." },
-        },
-        // REMOVED: "required" field to make extraction more flexible.
-    },
-};
-const llmWithDetailsExtractor = llm.bind({ functions: [extractionFunctionSchema], function_call: { name: "extractOnboardingDetails" } });
+// --- CURRENCY EXTRACTION and MAIN AI AGENT ---
+// (The old 'extractOnboardingDetails' function is now removed)
 
-export async function extractOnboardingDetails(text) {
-    try {
-        const result = await llmWithDetailsExtractor.invoke([ new HumanMessage(text) ]);
-        if (result.additional_kwargs.function_call?.arguments) {
-            return JSON.parse(result.additional_kwargs.function_call.arguments);
-        }
-        return {};
-    } catch (error) { 
-        console.error("Error in extractOnboardingDetails from history:", error); 
-        return {}; 
-    }
-}
-
-// ... (The rest of the file remains the same)
 const currencyExtractionFunctionSchema = {
     name: "extractCurrency",
     description: "Extracts a 3-letter currency code from a user's message.",
@@ -166,3 +149,4 @@ export async function processMessageWithAI(text, collections, senderId, user) {
     await history.addAIMessage(result.output);
     return result.output;
 }
+

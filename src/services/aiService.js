@@ -19,7 +19,7 @@ const llm = new ChatOpenAI({
     },
 });
 
-// --- ONBOARDING CONVERSATIONAL AI (FINAL VERSION w/ FIX) ---
+// --- ONBOARDING CONVERSATIONAL AI ---
 
 const onboardingSystemPrompt = `You are an onboarding assistant for 'Fynax Bookkeeper'.
 Your SOLE GOAL is to collect a business name and a valid email address from the user.
@@ -60,24 +60,35 @@ export async function processOnboardingMessage(text, collections, senderId) {
 }
 
 
-// --- CURRENCY EXTRACTION and MAIN AI AGENT ---
+// --- CURRENCY EXTRACTION (FINAL VERSION) ---
 
-const currencyExtractionFunctionSchema = {
-    name: "extractCurrency",
-    description: "Extracts a 3-letter currency code from a user's message.",
-    parameters: { type: "object", properties: { currencyCode: { type: "string", description: "The standard 3-letter currency code, e.g., NGN, USD, GHS." } }, required: ["currencyCode"] },
-};
-const llmWithCurrencyExtractor = llm.bind({ functions: [currencyExtractionFunctionSchema], function_call: { name: "extractCurrency" } });
+const currencySystemPrompt = `You are an expert currency identifier. Your only task is to identify the official 3-letter ISO 4217 currency code from the user's text.
+The user might provide the currency name (e.g., 'Naira', 'Dollars'), a symbol (e.g., '₦', '$'), or slang (e.g., 'bucks').
+If you can confidently identify the currency, respond with ONLY the 3-letter code (e.g., NGN, USD, GHS).
+If you cannot identify a currency, respond with the single word: UNKNOWN.`;
+
+const currencyPrompt = ChatPromptTemplate.fromMessages([
+    ["system", currencySystemPrompt],
+    ["human", "{text}"],
+]);
+
+const currencyChain = currencyPrompt.pipe(llm).pipe(new StringOutputParser());
+
 export async function extractCurrency(text) {
     try {
-        const result = await llmWithCurrencyExtractor.invoke([ new HumanMessage(`Infer the 3-letter currency code from this text: "${text}"`) ]);
-        if (result.additional_kwargs.function_call?.arguments) {
-            const args = JSON.parse(result.additional_kwargs.function_call.arguments);
-            return args.currencyCode || null;
+        const result = await currencyChain.invoke({ text });
+        if (result && result.trim().toUpperCase() !== 'UNKNOWN' && result.trim().length === 3) {
+            return result.trim().toUpperCase();
         }
         return null;
-    } catch (error) { console.error("Error in extractCurrency:", error); return null; }
+    } catch (error) {
+        console.error("Error in extractCurrency:", error);
+        return null;
+    }
 }
+
+
+// --- MAIN AI AGENT ---
 const availableTools = { 
     logSale: accountingService.logSale,
     logTransaction: accountingService.logTransaction, 

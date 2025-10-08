@@ -4,6 +4,7 @@ import { createOpenAIFunctionsAgent, AgentExecutor } from "langchain/agents";
 import { ChatPromptTemplate, MessagesPlaceholder } from "@langchain/core/prompts";
 import { MongoDBChatMessageHistory } from "@langchain/mongodb";
 import { DynamicTool } from "langchain/tools";
+import { StringOutputParser } from "@langchain/core/output_parsers";
 import * as accountingService from './accountingService.js';
 import * as reportService from './reportService.js';
 import * as authService from './authService.js';
@@ -11,15 +12,50 @@ import * as liveChatService from './liveChatService.js';
 
 const llm = new ChatOpenAI({
     modelName: "deepseek-chat",
-    temperature: 0,
+    temperature: 0.1, // Slightly more creative for conversation
     configuration: {
         apiKey: process.env.DEEPSEEK_API_KEY,
         baseURL: "https://api.deepseek.com/v1",
     },
 });
 
-// --- AI FUNCTIONS FOR EXTRACTION ---
+// --- ONBOARDING CONVERSATIONAL AI ---
+const ONBOARDING_COMPLETE_SIGNAL = "[ONBOARDING_DETAILS_COLLECTED]";
 
+const onboardingSystemPrompt = `You are a friendly and helpful onboarding assistant for 'Fynax Bookkeeper'.
+Your SOLE GOAL is to collect two pieces of information from the user: their business name and their email address.
+- Be conversational and natural.
+- You can ask for them one at a time or handle both if the user provides them.
+- If the user asks unrelated questions, gently guide them back to the task of providing their details.
+- Once you are confident you have BOTH the business name AND a valid email address, and only then, you MUST end your final response with the special signal: ${ONBOARDING_COMPLETE_SIGNAL}`;
+
+const onboardingPrompt = ChatPromptTemplate.fromMessages([
+    ["system", onboardingSystemPrompt],
+    new MessagesPlaceholder("chat_history"),
+    ["human", "{input}"],
+]);
+
+const onboardingChain = onboardingPrompt.pipe(llm).pipe(new StringOutputParser());
+
+export async function processOnboardingMessage(text, collections, senderId) {
+    const history = new MongoDBChatMessageHistory({
+        collection: collections.conversationsCollection,
+        sessionId: senderId,
+    });
+    
+    const aiResponse = await onboardingChain.invoke({
+        input: text,
+        chat_history: await history.getMessages(),
+    });
+
+    await history.addUserMessage(text);
+    await history.addAIMessage(aiResponse);
+
+    return aiResponse;
+}
+
+
+// --- AI FUNCTIONS FOR EXTRACTION (Still needed for the final step) ---
 const extractionFunctionSchema = {
     name: "extractOnboardingDetails",
     description: "Extracts business name and email from a user's message during a sign-up process.",
@@ -29,35 +65,31 @@ const extractionFunctionSchema = {
             businessName: { type: "string", description: "The user's business or store name." },
             email: { type: "string", description: "The user's email address." },
         },
+        required: ["businessName", "email"]
     },
 };
 const llmWithDetailsExtractor = llm.bind({ functions: [extractionFunctionSchema], function_call: { name: "extractOnboardingDetails" } });
 
 export async function extractOnboardingDetails(text) {
     try {
-        // --- IMPROVED PROMPT ---
-        // We add more context to help the AI understand the task better.
-        const prompt = `A new user is providing their business name and/or email address as part of a sign-up process. Extract the business name and email address from the following message. Text: "${text}"`;
-        const result = await llmWithDetailsExtractor.invoke([ new HumanMessage(prompt) ]);
-        
+        const result = await llmWithDetailsExtractor.invoke([ new HumanMessage(text) ]);
         if (result.additional_kwargs.function_call?.arguments) {
             return JSON.parse(result.additional_kwargs.function_call.arguments);
         }
-        console.log("AI failed to extract onboarding details from text:", text);
         return {};
     } catch (error) { 
-        console.error("Error in extractOnboardingDetails:", error); 
+        console.error("Error in extractOnboardingDetails from history:", error); 
         return {}; 
     }
 }
 
+// ... (The rest of the file remains the same)
 const currencyExtractionFunctionSchema = {
     name: "extractCurrency",
     description: "Extracts a 3-letter currency code from a user's message.",
     parameters: { type: "object", properties: { currencyCode: { type: "string", description: "The standard 3-letter currency code, e.g., NGN, USD, GHS." } }, required: ["currencyCode"] },
 };
 const llmWithCurrencyExtractor = llm.bind({ functions: [currencyExtractionFunctionSchema], function_call: { name: "extractCurrency" } });
-
 export async function extractCurrency(text) {
     try {
         const result = await llmWithCurrencyExtractor.invoke([ new HumanMessage(`Infer the 3-letter currency code from this text: "${text}"`) ]);
@@ -68,9 +100,6 @@ export async function extractCurrency(text) {
         return null;
     } catch (error) { console.error("Error in extractCurrency:", error); return null; }
 }
-
-
-// --- MAIN AI PROCESS (For Regular, Onboarded Users) ---
 const availableTools = { 
     logSale: accountingService.logSale,
     logTransaction: accountingService.logTransaction, 
@@ -95,7 +124,6 @@ const toolDescriptions = {
     changeWebsitePassword: "Changes the user's password for the Fynax website dashboard.",
     requestLiveChat: "Connects the user to a human support agent.",
 };
-
 const createMainAgentExecutor = async (collections, senderId, user) => {
     const systemPrompt = `You are 'Fynax Bookkeeper', an expert AI assistant.
 - Personality: You are friendly, professional, and confident. Use relevant emojis (like ✅, 💰, 📦, 📄).
@@ -121,10 +149,9 @@ const createMainAgentExecutor = async (collections, senderId, user) => {
             return JSON.stringify(result);
         }
     }));
-    const agent = await createOpenAIFunctionsAgent({ llm, tools, prompt });
+    const agent = await createOpenAIFunctionsAgent({ llm: llm.bind({ temperature: 0 }), tools, prompt });
     return new AgentExecutor({ agent, tools, verbose: false });
 };
-
 export async function processMessageWithAI(text, collections, senderId, user) {
     const agentExecutor = await createMainAgentExecutor(collections, senderId, user);
     const history = new MongoDBChatMessageHistory({
@@ -139,3 +166,4 @@ export async function processMessageWithAI(text, collections, senderId, user) {
     await history.addAIMessage(result.output);
     return result.output;
 }
+

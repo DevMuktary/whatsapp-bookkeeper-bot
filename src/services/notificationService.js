@@ -1,4 +1,6 @@
-import { TransactionalEmailsApi, ApiClient } from '@getbrevo/brevo';
+// Correct syntax for importing a CommonJS module ('@getbrevo/brevo') into an ES Module project.
+import Brevo from '@getbrevo/brevo';
+const { TransactionalEmailsApi, ApiClient } = Brevo;
 
 // --- Initialize Brevo API client ---
 // 1. Get the default ApiClient singleton instance
@@ -29,7 +31,6 @@ export async function sendOtpEmail(userEmail, otp, businessName) {
         return false;
     }
 
-    // --- Professional HTML Email Template ---
     const htmlContent = `
     <!DOCTYPE html>
     <html lang="en">
@@ -80,7 +81,6 @@ export async function sendOtpEmail(userEmail, otp, businessName) {
         console.log(`✅ OTP email sent successfully to ${userEmail}`);
         return true;
     } catch (error) {
-        // Log the detailed error message from Brevo for debugging
         console.error("❌ Error sending OTP email via Brevo:", error.body || error.message);
         return false;
     }

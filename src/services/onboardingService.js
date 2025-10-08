@@ -2,9 +2,6 @@ import { sendOtpEmail } from './notificationService.js';
 import { sendOnboardingMenu } from './menuService.js';
 import * as aiService from './aiService.js';
 import { sendMessage } from './whatsappService.js';
-import { MongoDBChatMessageHistory } from "@langchain/mongodb";
-
-const ONBOARDING_COMPLETE_SIGNAL = "[ONBOARDING_DETAILS_COLLECTED]";
 
 /**
  * Manages the multi-step onboarding process for new users.
@@ -24,23 +21,13 @@ export async function handleOnboardingStep(message, collections, user, conversat
 
         case 'onboarding_collecting_details':
             const aiResponse = await aiService.processOnboardingMessage(messageText, collections, senderId);
-
-            if (aiResponse.includes(ONBOARDING_COMPLETE_SIGNAL)) {
-                // AI signals completion. We take over from here.
+            
+            try {
+                const details = JSON.parse(aiResponse);
+                // If this succeeds, the AI has finished and sent us the data.
                 
-                // Extract details from the entire conversation history
-                const history = new MongoDBChatMessageHistory({
-                    collection: collections.conversationsCollection,
-                    sessionId: senderId,
-                });
-                const messages = await history.getMessages();
-                const fullConversationText = messages.map(msg => msg.content).join('\n');
-                
-                const extractedDetails = await aiService.extractOnboardingDetails(fullConversationText);
-
-                if (extractedDetails.businessName && extractedDetails.email) {
-                    // Extraction successful!
-                    await usersCollection.updateOne({ userId: senderId }, { $set: { storeName: extractedDetails.businessName, email: extractedDetails.email } });
+                if (details.businessName && details.email) {
+                    await usersCollection.updateOne({ userId: senderId }, { $set: { storeName: details.businessName, email: details.email } });
                     
                     const otp = Math.floor(100000 + Math.random() * 900000).toString();
                     const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
@@ -50,25 +37,24 @@ export async function handleOnboardingStep(message, collections, user, conversat
                         { $set: { otp, otpExpires, state: 'onboarding_verifying_otp' } }
                     );
                     
-                    const emailSent = await sendOtpEmail(extractedDetails.email, otp, extractedDetails.businessName);
+                    const emailSent = await sendOtpEmail(details.email, otp, details.businessName);
 
-                    // --- NEW SINGLE MESSAGE LOGIC ---
                     if (emailSent) {
-                        const successMessage = `Perfect! I have your business name as *${extractedDetails.businessName}* and your email as *${extractedDetails.email}*.\n\n📧 A 6-digit verification code has been sent to your inbox. Please enter the code here to continue.`;
+                        const successMessage = `Perfect! I have your business name as *${details.businessName}* and your email as *${details.email}*.\n\n📧 A 6-digit verification code has been sent to your inbox. Please enter the code here to continue.`;
                         await sendMessage(senderId, successMessage);
                     } else {
-                        // Email failed, but we still confirm the details we have.
-                        const failureMessage = `Great, I've saved your details! However, I had trouble sending the verification email to *${extractedDetails.email}*.\n\nPlease check that it's correct. You can provide a new email address to try again.`;
+                        const failureMessage = `Great, I've saved your details! However, I had trouble sending the verification email to *${details.email}*.\n\nPlease check that it's correct. You can provide a new email address to try again.`;
                         await sendMessage(senderId, failureMessage);
                         await usersCollection.updateOne({ userId: senderId }, { $unset: { email: "" } }); 
                     }
                 } else {
-                    // Fallback in case final extraction fails.
-                    await sendMessage(senderId, "I seem to have had a little trouble processing your details. Could we try one more time? Please tell me your business name and email.");
+                    // This is a fallback if the JSON is malformed.
+                    throw new Error("JSON from AI is missing required fields.");
                 }
 
-            } else {
-                // The conversation is still ongoing, just send the AI's response.
+            } catch (error) {
+                // If JSON.parse fails, it's a regular conversational message.
+                // We just send it back to the user.
                 await sendMessage(senderId, aiResponse);
             }
             break;

@@ -19,7 +19,7 @@ const llm = new ChatOpenAI({
     },
 });
 
-// --- ONBOARDING CONVERSATIONAL AI (FINAL VERSION) ---
+// --- ONBOARDING CONVERSATIONAL AI (FINAL VERSION w/ FIX) ---
 
 const onboardingSystemPrompt = `You are an onboarding assistant for 'Fynax Bookkeeper'.
 Your SOLE GOAL is to collect a business name and a valid email address from the user.
@@ -27,7 +27,7 @@ Your SOLE GOAL is to collect a business name and a valid email address from the 
 - You can ask for the details one at a time.
 - If the user provides an invalid email, ask them for a correct one.
 - Once you are confident that you have successfully collected BOTH a business name AND a valid email address, your FINAL response MUST BE ONLY a raw JSON object with the collected data.
-- The JSON object should look like this: {"businessName": "Example Inc.", "email": "user@example.com"}
+- The JSON object should look like this: {{\"businessName\": \"Example Inc.\", \"email\": \"user@example.com\"}}
 - DO NOT add any other text, greetings, or markdown formatting to the final JSON response. Just the raw JSON.`;
 
 const onboardingPrompt = ChatPromptTemplate.fromMessages([
@@ -49,13 +49,9 @@ export async function processOnboardingMessage(text, collections, senderId) {
         chat_history: await history.getMessages(),
     });
 
-    // Check if the AI is giving a JSON response before saving to history
-    // This prevents the final JSON from being part of future conversations
     try {
         JSON.parse(aiResponse);
-        // If it parses, it's the final JSON object. We don't add it to the chat history.
     } catch (e) {
-        // If it's not JSON, it's a regular message, so we save it.
         await history.addUserMessage(text);
         await history.addAIMessage(aiResponse);
     }
@@ -65,7 +61,6 @@ export async function processOnboardingMessage(text, collections, senderId) {
 
 
 // --- CURRENCY EXTRACTION and MAIN AI AGENT ---
-// (The old 'extractOnboardingDetails' function is now removed)
 
 const currencyExtractionFunctionSchema = {
     name: "extractCurrency",
@@ -149,4 +144,3 @@ export async function processMessageWithAI(text, collections, senderId, user) {
     await history.addAIMessage(result.output);
     return result.output;
 }
-

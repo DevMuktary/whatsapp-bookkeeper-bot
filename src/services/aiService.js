@@ -8,7 +8,6 @@ import * as accountingService from './accountingService.js';
 import * as reportService from './reportService.js';
 import * as authService from './authService.js';
 import * as liveChatService from './liveChatService.js';
-// Onboarding service is no longer called from here
 
 const llm = new ChatOpenAI({
     modelName: "deepseek-chat",
@@ -23,11 +22,11 @@ const llm = new ChatOpenAI({
 
 const extractionFunctionSchema = {
     name: "extractOnboardingDetails",
-    description: "Extracts business name and email from a user's message.",
+    description: "Extracts business name and email from a user's message during a sign-up process.",
     parameters: {
         type: "object",
         properties: {
-            businessName: { type: "string", description: "The user's business name." },
+            businessName: { type: "string", description: "The user's business or store name." },
             email: { type: "string", description: "The user's email address." },
         },
     },
@@ -36,12 +35,20 @@ const llmWithDetailsExtractor = llm.bind({ functions: [extractionFunctionSchema]
 
 export async function extractOnboardingDetails(text) {
     try {
-        const result = await llmWithDetailsExtractor.invoke([ new HumanMessage(text) ]);
+        // --- IMPROVED PROMPT ---
+        // We add more context to help the AI understand the task better.
+        const prompt = `A new user is providing their business name and/or email address as part of a sign-up process. Extract the business name and email address from the following message. Text: "${text}"`;
+        const result = await llmWithDetailsExtractor.invoke([ new HumanMessage(prompt) ]);
+        
         if (result.additional_kwargs.function_call?.arguments) {
             return JSON.parse(result.additional_kwargs.function_call.arguments);
         }
+        console.log("AI failed to extract onboarding details from text:", text);
         return {};
-    } catch (error) { console.error("Error in extractOnboardingDetails:", error); return {}; }
+    } catch (error) { 
+        console.error("Error in extractOnboardingDetails:", error); 
+        return {}; 
+    }
 }
 
 const currencyExtractionFunctionSchema = {

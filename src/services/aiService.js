@@ -19,7 +19,7 @@ const llm = new ChatOpenAI({
     },
 });
 
-// --- ONBOARDING CONVERSATIONAL AI (No changes here) ---
+// --- ONBOARDING CONVERSATIONAL AI ---
 
 const onboardingSystemPrompt = `You are an onboarding assistant for 'Fynax Bookkeeper'.
 Your SOLE GOAL is to collect a business name and a valid email address from the user.
@@ -60,7 +60,7 @@ export async function processOnboardingMessage(text, collections, senderId) {
 }
 
 
-// --- CURRENCY EXTRACTION (No changes here) ---
+// --- CURRENCY EXTRACTION ---
 
 const currencySystemPrompt = `You are an expert currency identifier. Your only task is to identify the official 3-letter ISO 4217 currency code from the user's text.
 The user might provide the currency name (e.g., 'Naira', 'Dollars'), a symbol (e.g., '₦', '$'), or slang (e.g., 'bucks').
@@ -88,36 +88,42 @@ export async function extractCurrency(text) {
 }
 
 
-// --- MAIN AI AGENT (UPGRADED) ---
+// --- MAIN AI AGENT (UPGRADED WITH NEW TOOL) ---
 const availableTools = { 
+    // Accounting Tools
     logSale: accountingService.logSale,
     logTransaction: accountingService.logTransaction, 
     addProduct: accountingService.addProduct, 
     getInventory: accountingService.getInventory, 
     getMonthlySummary: accountingService.getMonthlySummary, 
+    // Report Tools
+    generateSalesReport: reportService.generateSalesReport, // <-- NEW TOOL ADDED
     generateTransactionReport: reportService.generateTransactionReport, 
     generateInventoryReport: reportService.generateInventoryReport, 
     generatePnLReport: reportService.generatePnLReport,
+    // Other Tools
     changeWebsitePassword: authService.changePasswordFromBot,
     requestLiveChat: liveChatService.requestLiveChat,
 };
 
-// --- UPDATED TOOL DESCRIPTIONS ---
 const toolDescriptions = {
+    // Accounting
     logSale: "Use this to log a customer sale. You must first collect all of the following details: customer name, product name, units sold, total amount, date of sale, and the sale type (cash or credit).",
     logTransaction: "Use this to log a general business expense. You must first collect all of the following details: date of the expense, the expense type (e.g., transport, supplies), the total amount, and an optional description.",
     addProduct: "Use this to add a new product to the inventory. You must first collect all of the following details: product name, opening balance (quantity), cost price per unit, and selling price per unit.",
     getInventory: "Retrieves a list of all products in inventory.",
     getMonthlySummary: "Gets a quick text summary of finances for the current month.",
-    generateTransactionReport: "Generates a PDF file of all financial transactions.",
-    generateInventoryReport: "Generates a PDF file of inventory and profit.",
-    generatePnLReport: "Generates a Profit and Loss (P&L) PDF statement.",
+    // Reporting
+    generateSalesReport: "Generates a PDF report of all sales (income transactions). It requires a 'timeFrame' argument, such as 'today', 'yesterday', 'this week', 'last week', or 'this month'.", // <-- NEW DESCRIPTION
+    generateTransactionReport: "Generates a PDF file of all financial transactions (both income and expenses) for the current month only.",
+    generateInventoryReport: "Generates a PDF file of inventory and profit for the current month.",
+    generatePnLReport: "Generates a Profit and Loss (P&L) PDF statement for the current month.",
+    // Other
     changeWebsitePassword: "Changes the user's password for the Fynax website dashboard.",
     requestLiveChat: "Connects the user to a human support agent.",
 };
 
 const createMainAgentExecutor = async (collections, senderId, user) => {
-    // --- NEW, MORE DETAILED SYSTEM PROMPT ---
     const systemPrompt = `You are 'Fynax Bookkeeper', a friendly and expert AI assistant.
 - Your primary goal is to help users log transactions or add inventory by having a natural conversation to collect the necessary details.
 - Formatting: Use single asterisks for bolding (*bold*). Do not use double asterisks.
@@ -150,21 +156,34 @@ const createMainAgentExecutor = async (collections, senderId, user) => {
         }
     }));
 
-    const agent = await createOpenAIFunctionsAgent({ llm: llm.bind({ temperature: 0 }), tools, prompt });
-    return new AgentExecutor({ agent, tools, verbose: false });
+    const agent = await createOpenAIFunctionsAgent({
+        llm: llm.bind({ temperature: 0 }),
+        tools,
+        prompt
+    });
+
+    return new AgentExecutor({
+        agent,
+        tools,
+        verbose: false
+    });
 };
 
 export async function processMessageWithAI(text, collections, senderId, user) {
     const agentExecutor = await createMainAgentExecutor(collections, senderId, user);
+    
     const history = new MongoDBChatMessageHistory({
         collection: collections.conversationsCollection,
         sessionId: senderId,
     });
+    
     const result = await agentExecutor.invoke({
         input: text,
         chat_history: await history.getMessages(),
     });
+
     await history.addUserMessage(text);
     await history.addAIMessage(result.output);
+    
     return result.output;
 }

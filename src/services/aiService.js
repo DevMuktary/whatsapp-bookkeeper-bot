@@ -1,132 +1,160 @@
 import { ChatOpenAI } from "@langchain/openai";
-import { HumanMessage, SystemMessage } from "@langchain/core/messages";
-import { createOpenAIFunctionsAgent, AgentExecutor } from "langchain/agents";
 import { ChatPromptTemplate, MessagesPlaceholder } from "@langchain/core/prompts";
 import { MongoDBChatMessageHistory } from "@langchain/mongodb";
-import { DynamicTool } from "langchain/tools";
 import { StringOutputParser } from "@langchain/core/output_parsers";
-import * as accountingService from './accountingService.js';
-import * as reportService from './reportService.js';
-import * as authService from './authService.js';
-import * as liveChatService from './liveChatService.js';
+import { RunnableSequence } from "@langchain/core/runnables";
 
+// --- Main LLM Configuration ---
 const llm = new ChatOpenAI({
     modelName: "deepseek-chat",
-    temperature: 0.1,
+    temperature: 0.2,
     configuration: {
         apiKey: process.env.DEEPSEEK_API_KEY,
         baseURL: "https://api.deepseek.com/v1",
     },
 });
 
-// --- ONBOARDING & CURRENCY EXTRACTION (No changes here) ---
+// --- Onboarding & Currency AIs (Unchanged - They already work perfectly) ---
 const onboardingSystemPrompt = `You are an onboarding assistant for 'Fynax Bookkeeper'. Your SOLE GOAL is to collect a business name and a valid email address from the user. - Be conversational and friendly. - You can ask for the details one at a time. - If the user provides an invalid email, ask them for a correct one. - Once you are confident that you have successfully collected BOTH a business name AND a valid email address, your FINAL response MUST BE ONLY a raw JSON object with the collected data. - The JSON object should look like this: {{\"businessName\": \"Example Inc.\", \"email\": \"user@example.com\"}} - DO NOT add any other text, greetings, or markdown formatting to the final JSON response. Just the raw JSON.`;
 const onboardingPrompt = ChatPromptTemplate.fromMessages([["system", onboardingSystemPrompt], new MessagesPlaceholder("chat_history"), ["human", "{input}"]]);
 const onboardingChain = onboardingPrompt.pipe(llm).pipe(new StringOutputParser());
-export async function processOnboardingMessage(text, collections, senderId) {
+export async function processOnboardingMessage(text, collections, senderId) { /* ... unchanged ... */ }
+const currencySystemPrompt = `You are an expert currency identifier. Your only task is to identify the official 3-letter ISO 4217 currency code from the user's text. The user might provide the currency name (e.g., 'Naira', 'Dollars'), a symbol (e.g., '₦', '$'), or slang (e.g., 'bucks'). If you can confidently identify the currency, respond with ONLY the 3-letter code (e.g., NGN, USD, GHS). If you cannot identify a currency, respond with the single word: UNKNOWN.`;
+const currencyPrompt = ChatPromptTemplate.fromMessages([["system", currencySystemPrompt], ["human", "{text}"]]);
+const currencyChain = currencyPrompt.pipe(llm).pipe(new StringOutputParser());
+export async function extractCurrency(text) { /* ... unchanged ... */ }
+// Placeholder functions to keep the file structure consistent
+processOnboardingMessage = async function(text, collections, senderId) {
     const history = new MongoDBChatMessageHistory({ collection: collections.conversationsCollection, sessionId: senderId });
     const aiResponse = await onboardingChain.invoke({ input: text, chat_history: await history.getMessages() });
     try { JSON.parse(aiResponse); } catch (e) { await history.addUserMessage(text); await history.addAIMessage(aiResponse); }
     return aiResponse;
-}
-const currencySystemPrompt = `You are an expert currency identifier. Your only task is to identify the official 3-letter ISO 4217 currency code from the user's text. The user might provide the currency name (e.g., 'Naira', 'Dollars'), a symbol (e.g., '₦', '$'), or slang (e.g., 'bucks'). If you can confidently identify the currency, respond with ONLY the 3-letter code (e.g., NGN, USD, GHS). If you cannot identify a currency, respond with the single word: UNKNOWN.`;
-const currencyPrompt = ChatPromptTemplate.fromMessages([["system", currencySystemPrompt], ["human", "{text}"]]);
-const currencyChain = currencyPrompt.pipe(llm).pipe(new StringOutputParser());
-export async function extractCurrency(text) {
+};
+extractCurrency = async function(text) {
     try {
         const result = await currencyChain.invoke({ text });
-        if (result && result.trim().toUpperCase() !== 'UNKNOWN' && result.trim().length === 3) {
-            return result.trim().toUpperCase();
-        }
+        if (result && result.trim().toUpperCase() !== 'UNKNOWN' && result.trim().length === 3) { return result.trim().toUpperCase(); }
         return null;
     } catch (error) { console.error("Error in extractCurrency:", error); return null; }
+};
+
+// --- A map defining all tools and their required arguments for the new system ---
+const toolSchemas = {
+    'addProduct': {
+        description: "Adds a new product to inventory.",
+        args: {
+            productName: "string",
+            quantity: "number",
+            costPrice: "number",
+            sellingPrice: "number"
+        }
+    },
+    'logSale': {
+        description: "Logs a customer sale.",
+        args: {
+            productName: "string",
+            unitsSold: "number",
+            amount: "number",
+            customerName: "string (optional)",
+            date: "string (e.g., today, yesterday)",
+            saleType: "string (either 'cash' or 'credit')"
+        }
+    },
+    'logTransaction': {
+        description: "Logs a general business expense.",
+        args: {
+            expenseType: "string (e.g., 'transport', 'supplies')",
+            amount: "number",
+            date: "string (e.g., today, yesterday)",
+            description: "string (optional)"
+        }
+    },
+    'getInventory': {
+        description: "Retrieves a list of all products in inventory.",
+        args: {}
+    },
+    'generateSalesReport': {
+        description: "Generates a PDF report of sales.",
+        args: {
+            timeFrame: "string (e.g., 'today', 'this week', 'last week')"
+        }
+    }
+    // Add other report tools here if they need arguments
+};
+
+
+// --- 1. The New Router AI ---
+const routerSystemPrompt = `You are a smart router for a bookkeeping bot. Your only job is to analyze the user's message and determine which, if any, of the available tools they want to use.
+The available tools are: ${Object.keys(toolSchemas).join(', ')}.
+If the user's intent matches one of the tools, respond with a JSON object like: {"tool": "toolName"}.
+If the user's intent is unclear, a general question, or a greeting, respond with a JSON object like: {"tool": null, "responseText": "A friendly, helpful response"}.
+For example, if the user says 'add new stock', you respond with '{"tool": "addProduct"}'.
+If the user says 'how are you', you respond with '{"tool": null, "responseText": "I'm doing great, ready to help with your bookkeeping!"}'.
+If the user says 'what's my inventory', you can directly respond with '{"tool": "getInventory"}' since it needs no further details.`;
+
+export async function routeUserIntent(text, collections, senderId) {
+    const prompt = ChatPromptTemplate.fromMessages([
+        ["system", routerSystemPrompt],
+        ["human", "{input}"]
+    ]);
+    const chain = prompt.pipe(llm).pipe(new StringOutputParser());
+    const response = await chain.invoke({ input: text });
+    try {
+        return JSON.parse(response);
+    } catch (error) {
+        console.error("Router AI failed to produce valid JSON:", response);
+        return { tool: null, responseText: "I'm sorry, I had a little trouble understanding that. How can I help with your bookkeeping?" };
+    }
 }
 
+// --- 2. The New Worker AI ---
+const workerSystemPrompt = `You are a conversational data collection assistant. Your only goal is to have a natural conversation with a user to collect the information needed for a specific task.
+You will be told the task and the specific arguments you need to collect.
+- Ask for the details one by one in a friendly, conversational manner.
+- If the user provides multiple details at once, acknowledge them and only ask for what's still missing.
+- Once you are confident you have collected ALL the required arguments, your FINAL response MUST be ONLY a raw JSON object containing the collected data.
+- DO NOT add any other text to the final JSON response.
 
-// --- MAIN AI AGENT (FINAL VERSION) ---
-const availableTools = { 
-    logSale: accountingService.logSale,
-    logTransaction: accountingService.logTransaction, 
-    addProduct: accountingService.addProduct, 
-    getInventory: accountingService.getInventory, 
-    getMonthlySummary: accountingService.getMonthlySummary, 
-    generateSalesReport: reportService.generateSalesReport,
-    generateTransactionReport: reportService.generateTransactionReport, 
-    generateInventoryReport: reportService.generateInventoryReport, 
-    generatePnLReport: reportService.generatePnLReport,
-    changeWebsitePassword: authService.changePasswordFromBot,
-    requestLiveChat: liveChatService.requestLiveChat,
-};
+TASK: You need to collect the arguments for the '{toolName}' tool.
+ARGUMENTS TO COLLECT: {argsString}`;
 
-// --- TOOL DESCRIPTIONS SYNCED WITH ACCOUNTING SERVICE ---
-const toolDescriptions = {
-    logSale: "Logs a customer sale. You need the following arguments: customerName, productName, unitsSold, amount, date, and saleType (cash or credit).",
-    logTransaction: "Logs a general business expense. You need the following arguments: date, expenseType, amount, and an optional description.",
-    addProduct: "Adds a new product to inventory. You must have all four of the following arguments: productName, quantity, costPrice (per unit), and sellingPrice (per unit).",
-    getInventory: "Retrieves a list of all products in inventory as a text message.",
-    getMonthlySummary: "Gets a quick text summary of finances for the current month.",
-    generateSalesReport: "Generates a PDF report of sales for a specific 'timeFrame' (e.g., 'today', 'this week').",
-    generateTransactionReport: "Generates a PDF file of all financial transactions for the current month.",
-    generateInventoryReport: "Generates a PDF file of inventory and profit for the current month.",
-    generatePnLReport: "Generates a Profit & Loss (P&L) PDF statement for the current month.",
-    changeWebsitePassword: "Changes the user's password for the Fynax website dashboard.",
-    requestLiveChat: "Connects the user to a human support agent for help.",
-};
-
-const createMainAgentExecutor = async (collections, senderId, user) => {
-    const systemPrompt = `You are 'Fynax Bookkeeper', a friendly and professional AI bookkeeping assistant.
-- Your main purpose is to help users manage their business finances by calling the tools you have been given.
-- If you are missing required arguments for a tool, you MUST ask the user for the missing information.
-- Before executing a tool that writes data (like logging a sale or adding a product), you MUST briefly summarize the details and ask for the user's confirmation. Only call the tool after the user agrees.
-- Use single asterisks for bolding (*bold*) and relevant emojis (like ✅, 💰, 📦, 📄).`;
+export async function processTaskMessage(text, toolName, collections, senderId) {
+    const schema = toolSchemas[toolName];
+    if (!schema) throw new Error(`Unknown tool: ${toolName}`);
+    
+    const argsString = JSON.stringify(schema.args);
 
     const prompt = ChatPromptTemplate.fromMessages([
-        ["system", systemPrompt],
+        ["system", workerSystemPrompt],
         new MessagesPlaceholder("chat_history"),
-        ["human", "{input}"],
-        new MessagesPlaceholder("agent_scratchpad"),
+        ["human", "{input}"]
     ]);
 
-    const toolNames = Object.keys(availableTools);
-    const tools = toolNames.map(name => new DynamicTool({
-        name,
-        description: toolDescriptions[name],
-        func: async (argsString) => {
-            const args = argsString ? JSON.parse(argsString) : {};
-            const result = await availableTools[name](args, collections, senderId, user);
-            return JSON.stringify(result);
-        }
-    }));
+    const chain = RunnableSequence.from([
+        prompt,
+        llm,
+        new StringOutputParser()
+    ]);
 
-    const agent = await createOpenAIFunctionsAgent({
-        llm: llm.bind({ temperature: 0 }),
-        tools,
-        prompt
-    });
-
-    return new AgentExecutor({
-        agent,
-        tools,
-        // Set to true for extremely detailed debugging in your Railway logs
-        verbose: false 
-    });
-};
-
-export async function processMessageWithAI(text, collections, senderId, user) {
-    const agentExecutor = await createMainAgentExecutor(collections, senderId, user);
-    
     const history = new MongoDBChatMessageHistory({
         collection: collections.conversationsCollection,
         sessionId: senderId,
     });
-    
-    const result = await agentExecutor.invoke({
+
+    const aiResponse = await chain.invoke({
+        toolName: toolName,
+        argsString: argsString,
         input: text,
-        chat_history: await history.getMessages(),
+        chat_history: await history.getMessages()
     });
 
-    await history.addUserMessage(text);
-    await history.addAIMessage(result.output);
+    // We only add to history if it's NOT the final JSON response.
+    try {
+        JSON.parse(aiResponse);
+    } catch (e) {
+        await history.addUserMessage(text);
+        await history.addAIMessage(aiResponse);
+    }
     
-    return result.output;
+    return aiResponse;
 }

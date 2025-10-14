@@ -21,10 +21,7 @@ function generateFooter(doc) {
     const pageCount = doc.bufferedPageRange().count;
     for (let i = 0; i < pageCount; i++) {
         doc.switchToPage(i);
-        
-        // This check prevents a footer from being added to a completely empty overflow page
         if (doc.x === doc.page.margins.left && doc.y === doc.page.margins.top) continue;
-
         const genDate = new Date().toLocaleString('en-GB');
         doc.fontSize(8)
            .fillColor('#AAAAAA')
@@ -38,9 +35,9 @@ function generateHr(doc, y) {
     doc.strokeColor("#E5E7EB").lineWidth(1).moveTo(50, y).lineTo(550, y).stroke();
 }
 
+// (Existing PDF functions: createMonthlyReportPDF, createInventoryReportPDF, createPnLReportPDF remain unchanged)
 function createMonthlyReportPDF(transactions, monthName, user) {
     return new Promise((resolve) => {
-        // Increased bottom margin to create a safe zone for the footer
         const doc = new PDFDocument({ margins: { top: 50, bottom: 75, left: 50, right: 50 }, bufferPages: true });
         const stream = new PassThrough();
         const currency = user.currency || 'CUR';
@@ -88,13 +85,8 @@ function createMonthlyReportPDF(transactions, monthName, user) {
                 rowY = doc.page.margins.top;
             }
             if (i % 2 === 1) doc.rect(50, rowY, 500, rowHeight).fill(lightGrey);
-            
             const formattedDate = t.createdAt.toLocaleDateString('en-GB');
-            
-            // --- THIS IS THE FIX for blurry/faint text ---
-            // Reset text color to black for every row to ensure visibility
             doc.fillColor('black').font(font).fontSize(10);
-               
             doc.text(formattedDate, 60, rowY + 8, { width: 70 })
                .text(t.description, 140, rowY + 8, { width: 150 })
                .text(t.category, 300, rowY + 8, { width: 100 })
@@ -181,10 +173,7 @@ function createPnLReportPDF(data, monthName, user) {
 
         const drawRow = (label, amount, isBold = false, isSub = false) => {
             const y = doc.y;
-            doc.font(isBold ? fontBold : font)
-               .fontSize(isBold ? 11 : 10)
-               .text(label, 50 + (isSub ? 15 : 0), y, { align: 'left' })
-               .text(amount, 350, y, { width: 190, align: 'right' });
+            doc.font(isBold ? fontBold : font).fontSize(isBold ? 11 : 10).text(label, 50 + (isSub ? 15 : 0), y, { align: 'left' }).text(amount, 350, y, { width: 190, align: 'right' });
             doc.moveDown(isBold ? 1.2 : 1);
         };
         
@@ -200,7 +189,6 @@ function createPnLReportPDF(data, monthName, user) {
         doc.moveDown(2);
 
         if (doc.y + 100 > (doc.page.height - doc.page.margins.bottom)) doc.addPage();
-
         doc.fontSize(11).font(fontBold).text('Operating Expenses', 50, doc.y);
         generateHr(doc, doc.y);
         doc.moveDown();
@@ -220,7 +208,6 @@ function createPnLReportPDF(data, monthName, user) {
         doc.moveDown(2);
         
         if (doc.y + 40 > (doc.page.height - doc.page.margins.bottom)) doc.addPage();
-
         const netProfitY = doc.y;
         doc.rect(50, netProfitY, 500, 30).fill(brandColor);
         doc.font(fontBold).fontSize(12).fillColor('white');
@@ -235,8 +222,70 @@ function createPnLReportPDF(data, monthName, user) {
     });
 }
 
+// --- NEW SALES REPORT PDF GENERATOR ---
+function createSalesReportPDF(sales, dateRangeString, user) {
+    return new Promise((resolve) => {
+        const doc = new PDFDocument({ margins: { top: 50, bottom: 75, left: 50, right: 50 }, bufferPages: true });
+        const stream = new PassThrough();
+        const currency = user.currency || 'CUR';
+        doc.pipe(stream);
+
+        generateHeader(doc, user);
+        doc.fillColor('#444444').fontSize(12).font(font).text('Sales Report', { align: 'left' });
+        doc.fontSize(10).text(dateRangeString, { align: 'left' });
+        doc.moveDown(2);
+
+        const totalSales = sales.reduce((sum, s) => sum + s.amount, 0);
+        
+        doc.font(fontBold).text('Summary', { underline: true });
+        doc.moveDown();
+        doc.fontSize(10).font(font).text('Total Sales:', 50, doc.y, { continued: true }).text(`${currency} ${totalSales.toLocaleString()}`, { align: 'right' });
+        doc.text('Number of Sales:', 50, doc.y, { continued: true }).text(sales.length, { align: 'right' });
+        doc.moveDown(3);
+
+        if (sales.length > 0) {
+            doc.font(fontBold).text('Detailed Sales Log', { underline: true });
+            doc.moveDown();
+            
+            const tableTop = doc.y;
+            const rowHeight = 25;
+            doc.rect(50, tableTop, 500, rowHeight).fill(brandColor);
+            doc.fontSize(10).font(fontBold).fillColor('white');
+            doc.text('Date', 60, tableTop + 8, { width: 70 });
+            doc.text('Customer', 140, tableTop + 8, { width: 150 });
+            doc.text('Description', 300, tableTop + 8, { width: 150 });
+            doc.text('Amount', 460, tableTop + 8, { width: 80, align: 'right' });
+            
+            let rowY = tableTop + rowHeight;
+            
+            sales.forEach((s, i) => {
+                if ((rowY + rowHeight) > (doc.page.height - doc.page.margins.bottom)) { 
+                    doc.addPage(); 
+                    rowY = doc.page.margins.top;
+                }
+                if (i % 2 === 1) doc.rect(50, rowY, 500, rowHeight).fill(lightGrey);
+                
+                const formattedDate = s.createdAt.toLocaleDateString('en-GB');
+                doc.fillColor('black').font(font).fontSize(10);
+                doc.text(formattedDate, 60, rowY + 8, { width: 70 });
+                doc.text(s.customerName || 'N/A', 140, rowY + 8, { width: 150 });
+                doc.text(s.description, 300, rowY + 8, { width: 150 });
+                doc.text(s.amount.toLocaleString(), 460, rowY + 8, { width: 80, align: 'right' });
+                rowY += rowHeight;
+            });
+        }
+
+        generateFooter(doc);
+        doc.end();
+        const buffers = [];
+        stream.on('data', chunk => buffers.push(chunk));
+        stream.on('end', () => resolve(Buffer.concat(buffers)));
+    });
+}
+
 export const ReportGenerators = {
     createMonthlyReportPDF,
     createInventoryReportPDF,
     createPnLReportPDF,
+    createSalesReportPDF, // <-- Export the new function
 };

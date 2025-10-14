@@ -35,7 +35,6 @@ function generateHr(doc, y) {
     doc.strokeColor("#E5E7EB").lineWidth(1).moveTo(50, y).lineTo(550, y).stroke();
 }
 
-// (Existing PDF functions: createMonthlyReportPDF, createInventoryReportPDF, createPnLReportPDF remain unchanged)
 function createMonthlyReportPDF(transactions, monthName, user) {
     return new Promise((resolve) => {
         const doc = new PDFDocument({ margins: { top: 50, bottom: 75, left: 50, right: 50 }, bufferPages: true });
@@ -124,7 +123,10 @@ function createInventoryReportPDF(products, logs, monthName, user) {
         products.forEach((product) => {
             if (doc.y > (doc.page.height - doc.page.margins.bottom - 150)) doc.addPage();
 
-            const productLogs = logs.filter(log => log.productId.equals(product._id));
+            // --- THE FIX IS HERE ---
+            // We add a check `log.productId &&` to prevent a crash if productId is missing.
+            const productLogs = logs.filter(log => log.productId && log.productId.equals(product._id));
+            
             const unitsSold = productLogs.filter(l => l.type === 'sale').reduce((sum, l) => sum - l.quantityChange, 0);
             const revenue = unitsSold * product.price;
             const costOfGoodsSold = unitsSold * product.cost;
@@ -222,7 +224,6 @@ function createPnLReportPDF(data, monthName, user) {
     });
 }
 
-// --- NEW SALES REPORT PDF GENERATOR ---
 function createSalesReportPDF(sales, dateRangeString, user) {
     return new Promise((resolve) => {
         const doc = new PDFDocument({ margins: { top: 50, bottom: 75, left: 50, right: 50 }, bufferPages: true });
@@ -287,5 +288,5 @@ export const ReportGenerators = {
     createMonthlyReportPDF,
     createInventoryReportPDF,
     createPnLReportPDF,
-    createSalesReportPDF, // <-- Export the new function
+    createSalesReportPDF,
 };

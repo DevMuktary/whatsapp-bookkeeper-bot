@@ -19,7 +19,7 @@ const llm = new ChatOpenAI({
     },
 });
 
-// --- ONBOARDING CONVERSATIONAL AI ---
+// --- ONBOARDING CONVERSATIONAL AI (No changes here) ---
 
 const onboardingSystemPrompt = `You are an onboarding assistant for 'Fynax Bookkeeper'.
 Your SOLE GOAL is to collect a business name and a valid email address from the user.
@@ -60,7 +60,7 @@ export async function processOnboardingMessage(text, collections, senderId) {
 }
 
 
-// --- CURRENCY EXTRACTION (FINAL VERSION) ---
+// --- CURRENCY EXTRACTION (No changes here) ---
 
 const currencySystemPrompt = `You are an expert currency identifier. Your only task is to identify the official 3-letter ISO 4217 currency code from the user's text.
 The user might provide the currency name (e.g., 'Naira', 'Dollars'), a symbol (e.g., '₦', '$'), or slang (e.g., 'bucks').
@@ -88,7 +88,7 @@ export async function extractCurrency(text) {
 }
 
 
-// --- MAIN AI AGENT ---
+// --- MAIN AI AGENT (UPGRADED) ---
 const availableTools = { 
     logSale: accountingService.logSale,
     logTransaction: accountingService.logTransaction, 
@@ -101,10 +101,12 @@ const availableTools = {
     changeWebsitePassword: authService.changePasswordFromBot,
     requestLiveChat: liveChatService.requestLiveChat,
 };
+
+// --- UPDATED TOOL DESCRIPTIONS ---
 const toolDescriptions = {
-    logSale: "Logs a sale of a product from inventory.",
-    logTransaction: "Logs a generic income or expense (not a product sale).",
-    addProduct: "Adds new products to inventory or sets opening balance.",
+    logSale: "Use this to log a customer sale. You must first collect all of the following details: customer name, product name, units sold, total amount, date of sale, and the sale type (cash or credit).",
+    logTransaction: "Use this to log a general business expense. You must first collect all of the following details: date of the expense, the expense type (e.g., transport, supplies), the total amount, and an optional description.",
+    addProduct: "Use this to add a new product to the inventory. You must first collect all of the following details: product name, opening balance (quantity), cost price per unit, and selling price per unit.",
     getInventory: "Retrieves a list of all products in inventory.",
     getMonthlySummary: "Gets a quick text summary of finances for the current month.",
     generateTransactionReport: "Generates a PDF file of all financial transactions.",
@@ -113,14 +115,22 @@ const toolDescriptions = {
     changeWebsitePassword: "Changes the user's password for the Fynax website dashboard.",
     requestLiveChat: "Connects the user to a human support agent.",
 };
+
 const createMainAgentExecutor = async (collections, senderId, user) => {
-    const systemPrompt = `You are 'Fynax Bookkeeper', an expert AI assistant.
-- Personality: You are friendly, professional, and confident. Use relevant emojis (like ✅, 💰, 📦, 📄).
-- Formatting: Use single asterisks for bolding (*bold*).
-- Rules:
-1.  **Use Tools:** Your ONLY purpose is to use the tools provided.
-2.  **Stay in Scope:** If a user's request cannot be handled by a tool, you MUST respond with: "I can only help with bookkeeping, inventory, and financial reports for your business. How can I assist with that?"
-3.  **Live Support:** If a user asks for a 'human' or 'support', use the 'requestLiveChat' tool.`;
+    // --- NEW, MORE DETAILED SYSTEM PROMPT ---
+    const systemPrompt = `You are 'Fynax Bookkeeper', a friendly and expert AI assistant.
+- Your primary goal is to help users log transactions or add inventory by having a natural conversation to collect the necessary details.
+- Formatting: Use single asterisks for bolding (*bold*). Do not use double asterisks.
+- Personality: Be friendly, professional, and confident. Use relevant emojis (like ✅, 💰, 📦, 📄).
+
+**Your Core Workflow (CRITICAL):**
+1.  **Initiate:** When a user expresses intent (e.g., "log a sale"), start a conversation by asking for the information required by the corresponding tool.
+2.  **Collect:** Gather the details from the user's responses. They might provide it all at once or one piece at a time. Handle this gracefully.
+3.  **Confirm:** Once you believe you have all the necessary details for a tool, you MUST summarize them clearly for the user and ask for their confirmation with a direct question (e.g., "Is this all correct?", "Should I go ahead and log this?").
+4.  **Correct:** If the user says no or corrects a detail, update the information you have and re-confirm the new details.
+5.  **Execute:** ONLY after getting a clear confirmation (e.g., "yes", "correct", "proceed") should you call the appropriate tool with the collected information.
+6.  **Stay in Scope:** If a user's request cannot be handled by a tool, you MUST respond with: "I can only help with bookkeeping, inventory, and financial reports. How can I assist with that?"
+7.  **Live Support:** If a user asks for a 'human' or 'support', use the 'requestLiveChat' tool immediately.`;
 
     const prompt = ChatPromptTemplate.fromMessages([
         ["system", systemPrompt],
@@ -128,6 +138,7 @@ const createMainAgentExecutor = async (collections, senderId, user) => {
         ["human", "{input}"],
         new MessagesPlaceholder("agent_scratchpad"),
     ]);
+
     const toolNames = Object.keys(availableTools);
     const tools = toolNames.map(name => new DynamicTool({
         name,
@@ -138,9 +149,11 @@ const createMainAgentExecutor = async (collections, senderId, user) => {
             return JSON.stringify(result);
         }
     }));
+
     const agent = await createOpenAIFunctionsAgent({ llm: llm.bind({ temperature: 0 }), tools, prompt });
     return new AgentExecutor({ agent, tools, verbose: false });
 };
+
 export async function processMessageWithAI(text, collections, senderId, user) {
     const agentExecutor = await createMainAgentExecutor(collections, senderId, user);
     const history = new MongoDBChatMessageHistory({

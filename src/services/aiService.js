@@ -43,7 +43,7 @@ export async function extractCurrency(text) {
 }
 
 
-// --- MAIN AI AGENT (FINAL VERSION WITH CONFIRMATION FIX) ---
+// --- MAIN AI AGENT (FINAL VERSION) ---
 const availableTools = { 
     logSale: accountingService.logSale,
     logTransaction: accountingService.logTransaction, 
@@ -58,14 +58,14 @@ const availableTools = {
     requestLiveChat: liveChatService.requestLiveChat,
 };
 
-// --- UPDATED TOOL DESCRIPTIONS WITH 'userConfirmed' ARGUMENT ---
+// --- TOOL DESCRIPTIONS SYNCED WITH ACCOUNTING SERVICE ---
 const toolDescriptions = {
-    logSale: "Logs a customer sale. You MUST collect all of the following details first: customer name, product name, units sold, total amount, date of sale, the sale type (cash or credit), and a final boolean 'userConfirmed' which must be true. You must ask the user for confirmation before setting this value.",
-    logTransaction: "Logs a general business expense. You MUST collect all of the following details first: date of the expense, the expense type, the total amount, an optional description, and a final boolean 'userConfirmed' which must be true. You must ask the user for confirmation before setting this value.",
-    addProduct: "Adds a new product to inventory. You MUST collect all four of the following details first: the productName, the openingBalance (quantity), the costPrice per unit, the sellingPrice per unit, and a final boolean 'userConfirmed' which must be true. You must ask the user for confirmation before setting this value.",
+    logSale: "Logs a customer sale. You need the following arguments: customerName, productName, unitsSold, amount, date, and saleType (cash or credit).",
+    logTransaction: "Logs a general business expense. You need the following arguments: date, expenseType, amount, and an optional description.",
+    addProduct: "Adds a new product to inventory. You must have all four of the following arguments: productName, quantity, costPrice (per unit), and sellingPrice (per unit).",
     getInventory: "Retrieves a list of all products in inventory as a text message.",
     getMonthlySummary: "Gets a quick text summary of finances for the current month.",
-    generateSalesReport: "Generates a PDF report of all sales for a specific 'timeFrame' (e.g., 'today', 'this week').",
+    generateSalesReport: "Generates a PDF report of sales for a specific 'timeFrame' (e.g., 'today', 'this week').",
     generateTransactionReport: "Generates a PDF file of all financial transactions for the current month.",
     generateInventoryReport: "Generates a PDF file of inventory and profit for the current month.",
     generatePnLReport: "Generates a Profit & Loss (P&L) PDF statement for the current month.",
@@ -74,11 +74,10 @@ const toolDescriptions = {
 };
 
 const createMainAgentExecutor = async (collections, senderId, user) => {
-    // --- SIMPLIFIED SYSTEM PROMPT ---
     const systemPrompt = `You are 'Fynax Bookkeeper', a friendly and professional AI bookkeeping assistant.
-- Your main purpose is to help users manage their business by calling the tools you have been given.
-- If you are missing any required arguments for a tool, you MUST ask the user for the missing information.
-- You must get the user's confirmation before calling any tool that writes data.
+- Your main purpose is to help users manage their business finances by calling the tools you have been given.
+- If you are missing required arguments for a tool, you MUST ask the user for the missing information.
+- Before executing a tool that writes data (like logging a sale or adding a product), you MUST briefly summarize the details and ask for the user's confirmation. Only call the tool after the user agrees.
 - Use single asterisks for bolding (*bold*) and relevant emojis (like ✅, 💰, 📦, 📄).`;
 
     const prompt = ChatPromptTemplate.fromMessages([
@@ -108,7 +107,8 @@ const createMainAgentExecutor = async (collections, senderId, user) => {
     return new AgentExecutor({
         agent,
         tools,
-        verbose: false // Set to true for detailed debugging in logs
+        // Set to true for extremely detailed debugging in your Railway logs
+        verbose: false 
     });
 };
 

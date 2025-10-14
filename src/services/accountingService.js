@@ -6,8 +6,8 @@ import { ObjectId } from 'mongodb';
 export async function logSale(args, collections, senderId) {
     try {
         const { transactionsCollection, productsCollection, inventoryLogsCollection } = collections;
-        // Acknowledges the new 'userConfirmed' argument
-        const { customerName, productName, unitsSold, amount, date, saleType, userConfirmed } = args;
+        // THE FIX: Use natural argument names the AI generates
+        const { customerName, productName, unitsSold, amount, date, saleType } = args;
 
         if (!productName || !unitsSold || !amount) {
             return { success: false, message: "Missing key details: product name, units sold, and amount are required." };
@@ -18,12 +18,8 @@ export async function logSale(args, collections, senderId) {
             productName: { $regex: new RegExp(`^${productName}$`, "i") } 
         });
 
-        if (!product) {
-            return { success: false, message: `I couldn't find a product named *${productName}*. Please add it to your stock first.` };
-        }
-        if (product.stock < unitsSold) {
-            return { success: false, message: `Not enough stock for *${productName}*. You have ${product.stock}, but tried to sell ${unitsSold}.` };
-        }
+        if (!product) return { success: false, message: `I couldn't find *${productName}*. Please add it to your stock first.` };
+        if (product.stock < unitsSold) return { success: false, message: `Not enough stock for *${productName}*. You have ${product.stock}, but tried to sell ${unitsSold}.` };
 
         const transactionDate = date ? new Date(date) : new Date();
 
@@ -44,7 +40,6 @@ export async function logSale(args, collections, senderId) {
         }
 
         await productsCollection.updateOne({ _id: product._id }, { $inc: { stock: -unitsSold } });
-
         await inventoryLogsCollection.insertOne({
             userId: senderId, productId: product._id, type: 'sale',
             quantityChange: -unitsSold,
@@ -57,7 +52,7 @@ export async function logSale(args, collections, senderId) {
 
     } catch (error) {
         console.error('CRITICAL ERROR in logSale:', error);
-        return { success: false, message: 'A critical error occurred while trying to log the sale. I have notified the developers.' };
+        return { success: false, message: 'A critical error occurred while trying to log the sale.' };
     }
 }
 
@@ -67,8 +62,8 @@ export async function logSale(args, collections, senderId) {
 export async function logTransaction(args, collections, senderId) {
     try {
         const { transactionsCollection } = collections;
-        // Acknowledges the new 'userConfirmed' argument
-        const { date, expenseType, amount, description, userConfirmed } = args;
+        // THE FIX: Use natural argument names
+        const { date, expenseType, amount, description } = args;
 
         const transactionDate = date ? new Date(date) : new Date();
         await transactionsCollection.insertOne({ 
@@ -82,7 +77,7 @@ export async function logTransaction(args, collections, senderId) {
         return { success: true, message: `✅ Expense logged! I've recorded an expense of ${amount} for *${expenseType}*.` };
     } catch (error) {
         console.error('CRITICAL ERROR in logTransaction:', error);
-        return { success: false, message: 'A critical error occurred while trying to log the expense. I have notified the developers.' };
+        return { success: false, message: 'A critical error occurred while trying to log the expense.' };
     }
 }
 
@@ -92,47 +87,40 @@ export async function logTransaction(args, collections, senderId) {
 export async function addProduct(args, collections, senderId) {
     try {
         const { productsCollection, inventoryLogsCollection } = collections;
-        // Acknowledges the new 'userConfirmed' argument
-        const { productName, openingBalance, costPrice, sellingPrice, userConfirmed } = args;
+        // THE FIX: Use natural argument names and map them to our database fields
+        const { productName, quantity, costPrice, sellingPrice } = args;
 
-        if (!productName || openingBalance === undefined || costPrice === undefined || sellingPrice === undefined) {
-             return { success: false, message: "Missing key details. I need a product name, opening balance, cost price, and selling price." };
+        if (!productName || quantity === undefined || costPrice === undefined || sellingPrice === undefined) {
+             return { success: false, message: "Missing key details. I need a product name, quantity, cost price, and selling price." };
         }
-
-        const stockToAdd = openingBalance;
-        const cost = costPrice;
-        const price = sellingPrice;
 
         const result = await productsCollection.updateOne(
             { userId: senderId, productName: { $regex: new RegExp(`^${productName}$`, "i") } },
             { 
-                $set: { cost, price }, 
-                $inc: { stock: stockToAdd }, 
+                $set: { cost: costPrice, price: sellingPrice }, 
+                $inc: { stock: quantity }, 
                 $setOnInsert: { userId: senderId, productName, createdAt: new Date() } 
             },
             { upsert: true }
         );
 
         const doc = await productsCollection.findOne({ userId: senderId, productName: { $regex: new RegExp(`^${productName}$`, "i") } });
-        if (!doc) {
-             throw new Error("Failed to find or create the product document after upsert.");
-        }
-        const productId = doc._id;
-
+        if (!doc) throw new Error("Failed to find or create product after upsert.");
+        
         await inventoryLogsCollection.insertOne({ 
             userId: senderId, 
-            productId: productId, 
+            productId: doc._id, 
             type: result.upsertedId ? 'initial_stock' : 'purchase', 
-            quantityChange: stockToAdd, 
-            notes: result.upsertedId ? `Product '${productName}' created.` : `Added ${stockToAdd} units of stock.`, 
+            quantityChange: quantity, 
+            notes: result.upsertedId ? `Product '${productName}' created.` : `Added ${quantity} units of stock.`, 
             createdAt: new Date() 
         });
         
-        console.log(`SUCCESS: Product '${productName}' added/updated.`);
+        console.log(`SUCCESS: Product '${productName}' added/updated in DB.`);
         return { success: true, message: `✅ Done! I've successfully added *${productName}* to your inventory.` };
     } catch (error) {
         console.error('CRITICAL ERROR in addProduct:', error);
-        return { success: false, message: 'A critical error occurred while trying to add the product. I have notified the developers.' };
+        return { success: false, message: 'A critical error occurred while trying to add the product.' };
     }
 }
 
@@ -143,13 +131,10 @@ export async function addProduct(args, collections, senderId) {
 export async function getInventory(args, collections, senderId) {
     try {
         const { productsCollection } = collections;
-        
         const products = await productsCollection.find({ userId: senderId }).sort({ productName: 1 }).toArray();
-        
         if (products.length === 0) {
             return { success: true, message: "You don't have any products in your inventory yet." };
         }
-        
         const inventoryList = products.map(p => `*${p.productName}* - Stock: ${p.stock}, Price: ${p.price}`).join('\n');
         return { success: true, message: `Here is your current inventory:\n\n${inventoryList}` };
     } catch (error) {
@@ -164,7 +149,6 @@ export async function getInventory(args, collections, senderId) {
 export async function getMonthlySummary(args, collections, senderId) {
     try {
         const { transactionsCollection, usersCollection } = collections;
-        
         const user = await usersCollection.findOne({ userId: senderId });
         const currency = user?.currency || 'NGN';
         const now = new Date();
@@ -191,7 +175,8 @@ export async function getMonthlySummary(args, collections, senderId) {
             success: true, 
             message: `Here is your financial summary for *${monthName}*:\n\n💰 Total Income: *${currency} ${formattedIncome}*\n💸 Total Expenses: *${currency} ${formattedExpense}*\n\n📊 Net Profit: *${currency} ${formattedNet}*`
         };
-    } catch (error) {
+    } catch (error)
+    {
         console.error('CRITICAL ERROR in getMonthlySummary:', error);
         return { success: false, message: 'I had trouble generating your monthly summary.' };
     }

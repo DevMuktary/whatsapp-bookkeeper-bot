@@ -19,12 +19,10 @@ export function parseWebhookMessage(body) {
         const message = body.entry[0].changes[0].value.messages[0];
         const from = message.from;
 
-        // Check for a regular text message
         if (message.type === 'text') {
             return { from, text: message.text.body, type: 'text' };
         }
         
-        // Check for an interactive button reply
         if (message.type === 'interactive' && message.interactive?.type === 'button_reply') {
             return { from, text: message.interactive.button_reply.title, buttonId: message.interactive.button_reply.id, type: 'button_reply' };
         }
@@ -38,92 +36,103 @@ export function parseWebhookMessage(body) {
 export async function sendMessage(to, text) {
     if (!WHATSAPP_TOKEN) return console.error("Cannot send message: WhatsApp token not configured.");
     try {
-        await axios({
-            method: 'POST',
-            url: `${GRAPH_API_URL}/${WHATSAPP_PHONE_NUMBER_ID}/messages`,
-            headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}` },
-            data: { messaging_product: 'whatsapp', to: to, type: 'text', text: { body: text } }
-        });
+        await axios.post(
+            `${GRAPH_API_URL}/${WHATSAPP_PHONE_NUMBER_ID}/messages`,
+            {
+                messaging_product: 'whatsapp',
+                recipient_type: 'individual', // BEST PRACTICE: Added for clarity and compliance
+                to: to,
+                type: 'text',
+                text: { body: text }
+            },
+            { headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}` } }
+        );
     } catch (error) {
-        console.error("Error sending message:", error.response?.data);
+        console.error("Error sending message:", error.response?.data?.error?.message || error.message);
     }
 }
 
 /**
- * NEW: Sends an interactive message with up to 3 buttons.
- * @param {string} to - The recipient's WhatsApp number.
- * @param {string} bodyText - The main text of the message.
- * @param {Array<{id: string, title: string}>} buttons - An array of button objects. Max 3.
+ * Sends an interactive message with up to 3 buttons.
  */
 export async function sendInteractiveMessage(to, bodyText, buttons) {
     if (!WHATSAPP_TOKEN) return console.error("Cannot send interactive message: WhatsApp token not configured.");
-    
-    // WhatsApp allows a maximum of 3 buttons.
-    if (buttons.length > 3) {
-        console.error("Cannot send interactive message: A maximum of 3 buttons is allowed.");
-        return;
-    }
+    if (buttons.length > 3) return console.error("Cannot send interactive message: A maximum of 3 buttons is allowed.");
 
     try {
-        await axios({
-            method: 'POST',
-            url: `${GRAPH_API_URL}/${WHATSAPP_PHONE_NUMBER_ID}/messages`,
-            headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}` },
-            data: {
+        await axios.post(
+            `${GRAPH_API_URL}/${WHATSAPP_PHONE_NUMBER_ID}/messages`,
+            {
                 messaging_product: 'whatsapp',
+                recipient_type: 'individual', // BEST PRACTICE: Added for clarity and compliance
                 to: to,
                 type: 'interactive',
                 interactive: {
                     type: 'button',
-                    body: {
-                        text: bodyText
-                    },
+                    body: { text: bodyText },
                     action: {
                         buttons: buttons.map(btn => ({
                             type: 'reply',
-                            reply: {
-                                id: btn.id,
-                                title: btn.title
-                            }
+                            reply: { id: btn.id, title: btn.title }
                         }))
                     }
                 }
-            }
-        });
+            },
+            { headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}` } }
+        );
     } catch (error) {
-        console.error("Error sending interactive message:", error.response?.data);
+        console.error("Error sending interactive message:", error.response?.data?.error?.message || error.message);
     }
 }
 
 
 /**
- * Sends a PDF document.
+ * Sends a PDF document by first uploading it to get a media ID.
  */
 export async function sendDocument(to, documentBuffer, fileName, caption) {
-    // ... This function is unchanged, but should be present in your file.
     if (!WHATSAPP_TOKEN) return console.error("Cannot send document: WhatsApp token not configured.");
+
     try {
+        // --- Step 1: Upload the media ---
         const form = new FormData();
         form.append('messaging_product', 'whatsapp');
-        form.append('file', documentBuffer, { filename: fileName, contentType: 'application/pdf' });
+        form.append('file', documentBuffer, {
+            filename: fileName,
+            contentType: 'application/pdf',
+        });
+
         const uploadResponse = await axios.post(
             `${GRAPH_API_URL}/${WHATSAPP_PHONE_NUMBER_ID}/media`,
             form,
             { headers: { ...form.getHeaders(), 'Authorization': `Bearer ${WHATSAPP_TOKEN}` } }
         );
+
         const mediaId = uploadResponse.data.id;
-        await axios({
-            method: 'POST',
-            url: `${GRAPH_API_URL}/${WHATSAPP_PHONE_NUMBER_ID}/messages`,
-            headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' },
-            data: {
+        console.log(`✅ Successfully uploaded document. Media ID: ${mediaId}`);
+
+        // --- Step 2: Send the document message using the media ID ---
+        await axios.post(
+            `${GRAPH_API_URL}/${WHATSAPP_PHONE_NUMBER_ID}/messages`,
+            {
                 messaging_product: 'whatsapp',
+                recipient_type: 'individual', // THE FIX: This field is crucial for sending media messages.
                 to: to,
                 type: 'document',
-                document: { id: mediaId, filename: fileName, caption: caption }
-            }
-        });
+                document: {
+                    id: mediaId,
+                    filename: fileName,
+                    caption: caption
+                }
+            },
+            { headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}` } }
+        );
+        console.log(`✅ Successfully sent document to ${to}`);
     } catch (error) {
-        console.error("Error sending document:", error.response ? error.response.data.error : error.message);
+        // More detailed error logging
+        if (error.response) {
+            console.error("Error sending document:", JSON.stringify(error.response.data, null, 2));
+        } else {
+            console.error("Error sending document:", error.message);
+        }
     }
 }

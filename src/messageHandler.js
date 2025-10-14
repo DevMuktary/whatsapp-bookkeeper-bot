@@ -4,6 +4,7 @@ import * as adminService from './services/adminService.js';
 import * as liveChatService from './services/liveChatService.js';
 import * as aiService from './services/aiService.js';
 import { handleOnboardingStep } from './services/onboardingService.js';
+import { handleTaskStep } from './taskHandler.js'; // The new, dedicated task manager
 
 const ADMIN_NUMBERS = ['2348105294232', '2348146817448'];
 const SALT_ROUNDS = 10;
@@ -16,18 +17,18 @@ export async function handleWebhook(body, collections) {
         await _processIncomingMessage(message, collections);
     } catch (error) {
         console.error("Fatal error processing message:", error);
-        await whatsappService.sendMessage(message.from, "Sorry, I encountered a critical error. Please try again later.");
+        await whatsappService.sendMessage(message.from, "Sorry, I encountered a critical error. The developers have been notified.");
     }
 }
 
 async function _processIncomingMessage(message, collections) {
     const { usersCollection, conversationsCollection } = collections;
     const senderId = message.from;
-    const messageText = message.text;
-
+    
     let user = await usersCollection.findOne({ userId: senderId });
     let conversation = await conversationsCollection.findOne({ userId: senderId });
 
+    // --- New User Creation (Unchanged) ---
     if (!user) {
         const normalizedSenderId = senderId.split('@')[0];
         const isAdmin = ADMIN_NUMBERS.includes(normalizedSenderId);
@@ -41,49 +42,52 @@ async function _processIncomingMessage(message, collections) {
         await usersCollection.insertOne(user);
         
         conversation = { 
-            userId: senderId,
-            sessionId: senderId,
-            state: 'onboarding_started',
-            history: [] 
+            userId: senderId, sessionId: senderId,
+            state: 'onboarding_started', history: [] 
         };
         await conversationsCollection.insertOne(conversation);
     }
 
     if (user.isBlocked) return;
 
-    if (message.type === 'button_reply') {
-        let aiTriggerText = '';
-        switch (message.buttonId) {
-            case 'log_sale': aiTriggerText = 'I want to log a sale'; break;
-            case 'log_expense': aiTriggerText = 'I want to log an expense'; break;
-            case 'add_stock': aiTriggerText = 'I want to add new stock'; break;
-        }
-        if (aiTriggerText) {
-            const aiResponseText = await aiService.processMessageWithAI(aiTriggerText, collections, senderId, user);
-            if (aiResponseText) await whatsappService.sendMessage(senderId, aiResponseText);
-        }
-        return;
+    // --- High-Level Router ---
+    // These are checked first, as they override any other state.
+    if (message.text && message.text.startsWith('/') && user.role === 'admin') {
+        return await adminService.handleAdminCommand(message.text, collections, user);
+    }
+    if (conversation?.chatState === 'live') {
+        return await liveChatService.forwardLiveMessage(message, collections, user);
     }
 
-    if (messageText.startsWith('/') && user.role === 'admin') {
-        await adminService.handleAdminCommand(messageText, collections, user);
-        return;
-    }
-    
-    if (conversation?.chatState === 'live') {
-        await liveChatService.forwardLiveMessage(message, collections, user);
-        return;
-    }
-    
-    // --- The New Reliable Router ---
-    // If user isn't fully onboarded, hand off to the onboarding service.
-    if (!user.emailVerified || !user.currency) {
+    // --- THE NEW STATE MACHINE ---
+    const currentState = conversation?.state || 'idle';
+
+    if (!user.emailVerified || !user.currency || currentState.startsWith('onboarding_')) {
+        // 1. If user is in any stage of onboarding, send them to the onboarding service.
         await handleOnboardingStep(message, collections, user, conversation);
+
+    } else if (currentState.startsWith('collecting_')) {
+        // 2. If user is in the middle of a specific task, send them to the task handler.
+        await handleTaskStep(message, collections, user, conversation);
+
     } else {
-        // Otherwise, they are a regular user. Call the main AI.
-        const aiResponseText = await aiService.processMessageWithAI(messageText, collections, senderId, user);
-        if (aiResponseText) {
-            await whatsappService.sendMessage(senderId, aiResponseText);
+        // 3. Otherwise, this is a new, neutral request. Use the Router AI to determine intent.
+        // We use the button payload directly if it exists, otherwise we use the message text.
+        const intentText = message.buttonId ? message.buttonId : message.text;
+        const intent = await aiService.routeUserIntent(intentText, collections, senderId);
+
+        if (intent.tool) {
+            // The Router AI identified a specific task.
+            // Set the state and pass control to the task handler to start the process.
+            const newState = `collecting_${intent.tool}_details`;
+            await conversationsCollection.updateOne({ userId: senderId }, { $set: { state: newState } });
+            
+            // We need to refetch the conversation to pass the new state to the handler.
+            const updatedConversation = await conversationsCollection.findOne({ userId: senderId });
+            await handleTaskStep(message, collections, user, updatedConversation, true); // `true` indicates this is the first step.
+        } else {
+            // The AI couldn't determine a specific task, so it provides a general response.
+            await whatsappService.sendMessage(senderId, intent.responseText);
         }
     }
 }

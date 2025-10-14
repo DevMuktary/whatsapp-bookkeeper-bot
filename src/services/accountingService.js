@@ -6,7 +6,8 @@ import { ObjectId } from 'mongodb';
 export async function logSale(args, collections, senderId) {
     try {
         const { transactionsCollection, productsCollection, inventoryLogsCollection } = collections;
-        const { customerName, productName, unitsSold, amount, date, saleType } = args;
+        // Acknowledges the new 'userConfirmed' argument
+        const { customerName, productName, unitsSold, amount, date, saleType, userConfirmed } = args;
 
         if (!productName || !unitsSold || !amount) {
             return { success: false, message: "Missing key details: product name, units sold, and amount are required." };
@@ -66,9 +67,10 @@ export async function logSale(args, collections, senderId) {
 export async function logTransaction(args, collections, senderId) {
     try {
         const { transactionsCollection } = collections;
-        const { date, expenseType, amount, description } = args;
+        // Acknowledges the new 'userConfirmed' argument
+        const { date, expenseType, amount, description, userConfirmed } = args;
 
-        const transactionDate = date ? new Date(date) : new "new date"();
+        const transactionDate = date ? new Date(date) : new Date();
         await transactionsCollection.insertOne({ 
             userId: senderId, type: 'expense', amount, 
             description: description || expenseType, 
@@ -86,14 +88,12 @@ export async function logTransaction(args, collections, senderId) {
 
 /**
  * Adds a SINGLE product to the inventory.
- * This function is now corrected to handle the AI's data format.
  */
 export async function addProduct(args, collections, senderId) {
     try {
         const { productsCollection, inventoryLogsCollection } = collections;
-        // THE FIX: The AI sends a single product object, not an array.
-        // We now handle that object directly.
-        const { productName, openingBalance, costPrice, sellingPrice } = args;
+        // Acknowledges the new 'userConfirmed' argument
+        const { productName, openingBalance, costPrice, sellingPrice, userConfirmed } = args;
 
         if (!productName || openingBalance === undefined || costPrice === undefined || sellingPrice === undefined) {
              return { success: false, message: "Missing key details. I need a product name, opening balance, cost price, and selling price." };

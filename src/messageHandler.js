@@ -4,7 +4,7 @@ import * as adminService from './services/adminService.js';
 import * as liveChatService from './services/liveChatService.js';
 import * as aiService from './services/aiService.js';
 import { handleOnboardingStep } from './services/onboardingService.js';
-import { handleTaskStep } from './taskHandler.js'; // The new, dedicated task manager
+import { handleTaskStep } from './taskHandler.js';
 
 const ADMIN_NUMBERS = ['2348105294232', '2348146817448'];
 const SALT_ROUNDS = 10;
@@ -28,7 +28,6 @@ async function _processIncomingMessage(message, collections) {
     let user = await usersCollection.findOne({ userId: senderId });
     let conversation = await conversationsCollection.findOne({ userId: senderId });
 
-    // --- New User Creation (Unchanged) ---
     if (!user) {
         const normalizedSenderId = senderId.split('@')[0];
         const isAdmin = ADMIN_NUMBERS.includes(normalizedSenderId);
@@ -50,8 +49,6 @@ async function _processIncomingMessage(message, collections) {
 
     if (user.isBlocked) return;
 
-    // --- High-Level Router ---
-    // These are checked first, as they override any other state.
     if (message.text && message.text.startsWith('/') && user.role === 'admin') {
         return await adminService.handleAdminCommand(message.text, collections, user);
     }
@@ -59,34 +56,29 @@ async function _processIncomingMessage(message, collections) {
         return await liveChatService.forwardLiveMessage(message, collections, user);
     }
 
-    // --- THE NEW STATE MACHINE ---
     const currentState = conversation?.state || 'idle';
 
     if (!user.emailVerified || !user.currency || currentState.startsWith('onboarding_')) {
-        // 1. If user is in any stage of onboarding, send them to the onboarding service.
         await handleOnboardingStep(message, collections, user, conversation);
 
     } else if (currentState.startsWith('collecting_')) {
-        // 2. If user is in the middle of a specific task, send them to the task handler.
         await handleTaskStep(message, collections, user, conversation);
 
     } else {
-        // 3. Otherwise, this is a new, neutral request. Use the Router AI to determine intent.
-        // We use the button payload directly if it exists, otherwise we use the message text.
-        const intentText = message.buttonId ? message.buttonId : message.text;
+        const intentText = message.buttonId ? `I want to ${message.buttonId.replace('_', ' ')}` : message.text;
         const intent = await aiService.routeUserIntent(intentText, collections, senderId);
 
         if (intent.tool) {
-            // The Router AI identified a specific task.
-            // Set the state and pass control to the task handler to start the process.
-            const newState = `collecting_${intent.tool}_details`;
-            await conversationsCollection.updateOne({ userId: senderId }, { $set: { state: newState } });
-            
-            // We need to refetch the conversation to pass the new state to the handler.
-            const updatedConversation = await conversationsCollection.findOne({ userId: senderId });
-            await handleTaskStep(message, collections, user, updatedConversation, true); // `true` indicates this is the first step.
+            // Check if the router provided args, meaning the tool is ready to run.
+            if (intent.args) {
+                await handleTaskStep(message, collections, user, conversation, true, intent.args);
+            } else {
+                const newState = `collecting_${intent.tool}_details`;
+                await conversationsCollection.updateOne({ userId: senderId }, { $set: { state: newState } });
+                const updatedConversation = await conversationsCollection.findOne({ userId: senderId });
+                await handleTaskStep(message, collections, user, updatedConversation, true);
+            }
         } else {
-            // The AI couldn't determine a specific task, so it provides a general response.
             await whatsappService.sendMessage(senderId, intent.responseText);
         }
     }

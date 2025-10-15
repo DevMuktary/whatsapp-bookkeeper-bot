@@ -6,6 +6,7 @@ import { uploadMedia, sendDocument, sendTextMessage, sendInteractiveButtons } fr
 import { USER_STATES, INTENTS } from '../utils/constants.js';
 import logger from '../utils/logger.js';
 import { executeTask } from './taskHandler.js';
+import { handleMessage } from './messageHandler.js'; // <-- NEW: Import the main message handler
 import { ObjectId } from 'mongodb';
 
 export async function handleInteractiveMessage(message) {
@@ -15,7 +16,8 @@ export async function handleInteractiveMessage(message) {
 
     try {
         if (interactive.type === 'button_reply') {
-            await handleButtonReply(user, interactive.button_reply.id);
+            // Pass the full message object so we can reconstruct it if needed
+            await handleButtonReply(user, interactive.button_reply.id, message);
         } else if (interactive.type === 'list_reply') {
             await handleListReply(user, interactive.list_reply.id);
         }
@@ -25,8 +27,24 @@ export async function handleInteractiveMessage(message) {
     }
 }
 
-async function handleButtonReply(user, buttonId) {
+async function handleButtonReply(user, buttonId, originalMessage) {
     switch (user.state) {
+        // --- NEW: Handle Quick Start button clicks from IDLE state ---
+        case USER_STATES.IDLE:
+            // This is a special case for the post-onboarding quick start menu.
+            // We will treat this button click as if the user typed the text.
+            logger.info(`Handling quick start button click from IDLE state for user ${user.whatsappId}`);
+            const mockTextMessage = {
+                from: originalMessage.from,
+                text: {
+                    body: buttonId // The button ID is the command text, e.g., "log a sale"
+                },
+                type: 'text'
+            };
+            await handleMessage(mockTextMessage);
+            break;
+        // --- End of New Section ---
+
         case USER_STATES.AWAITING_BULK_PRODUCT_CONFIRMATION:
             await handleBulkProductConfirmation(user, buttonId);
             break;
@@ -170,7 +188,6 @@ async function handleReconcileAction(user, buttonId) {
         ]);
     } else if (buttonId === 'action_edit') {
         let buttons = [];
-        // --- FIX APPLIED HERE ---
         if (transaction.type === 'SALE') {
             buttons = [
                 { id: 'edit_field:unitsSold', title: 'Edit Units Sold' },
@@ -184,7 +201,6 @@ async function handleReconcileAction(user, buttonId) {
         } else { // Customer Payment
             buttons = [{ id: 'edit_field:amount', title: 'Edit Amount' }];
         }
-        // --- END OF FIX ---
         await updateUserState(user.whatsappId, USER_STATES.AWAITING_EDIT_FIELD_SELECTION, { transaction });
         await sendInteractiveButtons(user.whatsappId, "Which part of this transaction would you like to edit?", buttons);
     }
@@ -196,7 +212,6 @@ async function handleEditFieldSelection(user, buttonId) {
 
     if (action !== 'edit_field') return;
     
-    // Map internal field names to user-friendly text
     const fieldMap = {
         unitsSold: "units sold",
         amountPerUnit: "price per unit",

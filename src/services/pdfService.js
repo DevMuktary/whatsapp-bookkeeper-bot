@@ -206,6 +206,86 @@ export function generateInventoryReport(user, products) {
     });
 }
 
+/**
+ * Generates a Profit & Loss (P&L) report PDF.
+ * @param {object} user - The user object.
+ * @param {object} pnlData - The calculated P&L data.
+ * @param {string} periodTitle - A readable title for the report's date range.
+ * @returns {Promise<Buffer>} A promise that resolves with the PDF buffer.
+ */
+export function generatePnLReport(user, pnlData, periodTitle) {
+    return new Promise((resolve, reject) => {
+        try {
+            const doc = new PDFDocument({ margin: 50, size: 'A4' });
+            const buffers = [];
+            doc.on('data', buffers.push.bind(buffers));
+            doc.on('end', () => resolve(Buffer.concat(buffers)));
+
+            const format = (amount) => new Intl.NumberFormat('en-US').format(amount);
+
+            // --- Header ---
+            doc.fontSize(20).font('Helvetica-Bold').text(user.businessName, { align: 'center' });
+            doc.fontSize(14).font('Helvetica').text('Profit & Loss Statement', { align: 'center' });
+            doc.fontSize(10).text(periodTitle, { align: 'center' });
+            doc.moveDown(3);
+
+            const sectionY = doc.y;
+            const labelX = 50;
+            const amountX = 400;
+
+            // --- Income Section ---
+            doc.fontSize(12).font('Helvetica-Bold');
+            doc.text('Revenue', labelX, sectionY);
+            doc.font('Helvetica');
+            doc.text('Total Sales', labelX + 15, doc.y);
+            doc.text(`${user.currency} ${format(pnlData.totalSales)}`, amountX, doc.y - 15, { align: 'right' });
+            doc.moveDown();
+
+            doc.font('Helvetica-Bold');
+            doc.text('Cost of Goods Sold (COGS)', labelX + 15, doc.y);
+            doc.text(`${user.currency} ${format(pnlData.totalCogs)}`, amountX, doc.y - 15, { align: 'right' });
+            doc.moveDown();
+
+            doc.moveTo(labelX, doc.y).lineTo(550, doc.y).stroke();
+            doc.fontSize(14).font('Helvetica-Bold');
+            doc.text('Gross Profit', labelX, doc.y + 10);
+            doc.text(`${user.currency} ${format(pnlData.grossProfit)}`, amountX, doc.y - 15, { align: 'right' });
+            doc.moveDown(3);
+
+            // --- Expenses Section ---
+            const expensesY = doc.y;
+            doc.fontSize(12).font('Helvetica-Bold');
+            doc.text('Operating Expenses', labelX, expensesY);
+            doc.font('Helvetica');
+            pnlData.topExpenses.forEach(exp => {
+                doc.text(exp._id, labelX + 15, doc.y);
+                doc.text(`${user.currency} ${format(exp.total)}`, amountX, doc.y - 15, { align: 'right' });
+            });
+            doc.moveDown();
+            
+            doc.moveTo(labelX, doc.y).lineTo(550, doc.y).stroke();
+            doc.fontSize(12).font('Helvetica-Bold');
+            doc.text('Total Expenses', labelX, doc.y + 10);
+            doc.text(`${user.currency} ${format(pnlData.totalExpenses)}`, amountX, doc.y - 15, { align: 'right' });
+            doc.moveDown(2);
+            
+            // --- Net Profit Section ---
+            doc.moveTo(labelX, doc.y).lineTo(550, doc.y).stroke();
+            doc.fontSize(16).font('Helvetica-Bold');
+            const netProfitY = doc.y + 10;
+            doc.text('Net Profit / (Loss)', labelX, netProfitY);
+            const netProfitText = pnlData.netProfit < 0 ? `(${format(Math.abs(pnlData.netProfit))})` : format(pnlData.netProfit);
+            doc.text(`${user.currency} ${netProfitText}`, amountX, netProfitY, { align: 'right' });
+            doc.moveTo(labelX, doc.y).lineTo(550, doc.y).stroke();
+            
+            doc.end();
+
+        } catch (error) {
+            logger.error('Error generating P&L PDF report:', error);
+            reject(error);
+        }
+    });
+}
 
 /**
  * Generates a professional PDF invoice for a single transaction.

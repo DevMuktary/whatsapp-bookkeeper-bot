@@ -80,14 +80,19 @@ async function handleIdleState(user, text) {
             return;
         }
 
+        // --- FIX APPLIED HERE ---
         const rows = recentTransactions.map(tx => {
             const formattedAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(tx.amount);
+            // Ensure title is never longer than 24 characters
+            const title = tx.description.length > 24 ? tx.description.substring(0, 21) + '...' : tx.description;
+            
             return {
                 id: `select_tx_del:${tx._id}`,
-                title: `${tx.type} - ${formattedAmount}`,
-                description: tx.description.substring(0, 70) 
+                title: title,
+                description: `${tx.type} - ${formattedAmount}` // Move details to description
             };
         });
+        // --- END OF FIX ---
 
         const sections = [{ title: "Recent Transactions", rows: rows }];
         
@@ -254,7 +259,7 @@ async function handleOnboardingDetails(user, text) {
     const tenMinutes = 10 * 60 * 1000;
     const otpExpires = new Date(Date.now() + tenMinutes);
 
-    await updateUser(updatedUser.whatsappId, { otp, otpExpires });
+    await updateUser(user.whatsappId, { otp, otpExpires });
     await updateUserState(user.whatsappId, USER_STATES.ONBOARDING_AWAIT_OTP);
     await sendTextMessage(user.whatsappId, `Perfect! I've just sent a 6-digit verification code to ${updatedUser.email}. 📧 Please enter it here to continue.`);
   } else if (updatedUser.businessName) {

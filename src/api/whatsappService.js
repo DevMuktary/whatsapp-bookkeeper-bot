@@ -18,6 +18,12 @@ async function sendMessage(data) {
   }
 }
 
+/**
+ * Uploads a media file to WhatsApp servers to get a media ID.
+ * @param {Buffer} buffer The file buffer.
+ * @param {string} mimeType The MIME type of the file (e.g., 'application/pdf').
+ * @returns {Promise<string|null>} The media ID or null if failed.
+ */
 export async function uploadMedia(buffer, mimeType) {
     try {
         const form = new FormData();
@@ -38,6 +44,11 @@ export async function uploadMedia(buffer, mimeType) {
     }
 }
 
+/**
+ * Sends a simple text message.
+ * @param {string} to The recipient's WhatsApp ID.
+ * @param {string} text The content of the message.
+ */
 export async function sendTextMessage(to, text) {
   const data = {
     messaging_product: 'whatsapp',
@@ -48,6 +59,13 @@ export async function sendTextMessage(to, text) {
   await sendMessage(data);
 }
 
+/**
+ * Sends a document (like a PDF) to the user using a media ID.
+ * @param {string} to The recipient's WhatsApp ID.
+ * @param {string} mediaId The ID of the uploaded media.
+ * @param {string} filename The desired filename for the document.
+ * @param {string} caption A short description of the document.
+ */
 export async function sendDocument(to, mediaId, filename, caption) {
     const data = {
         messaging_product: 'whatsapp',
@@ -62,6 +80,12 @@ export async function sendDocument(to, mediaId, filename, caption) {
     await sendMessage(data);
 }
 
+/**
+ * Sends an interactive message with up to 3 buttons.
+ * @param {string} to The recipient's WhatsApp ID.
+ * @param {string} bodyText The main text of the message.
+ * @param {Array<object>} buttons An array of button objects, e.g., [{id: 'yes_btn', title: 'Yes'}]
+ */
 export async function sendInteractiveButtons(to, bodyText, buttons) {
   const formattedButtons = buttons.map(btn => ({
     type: 'reply',

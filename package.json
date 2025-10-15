@@ -1,29 +1,19 @@
 {
-  "name": "whatsapp-bookkeeper-bot",
+  "name": "fynax-bookkeeper",
   "version": "1.0.0",
-  "description": "A WhatsApp bot for bookkeeping using the official Meta API and Node.js",
+  "description": "A WhatsApp bookkeeping assistant.",
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "dev": "node --watch index.js"
   },
+  "author": "Fynax",
+  "license": "ISC",
   "dependencies": {
-    "@getbrevo/brevo": "^1.0.1",
-    "@langchain/core": "^0.2.9",
-    "@langchain/mongodb": "^0.1.0",
-    "@langchain/openai": "^0.2.1",
-    "archiver": "^7.0.1",
     "axios": "^1.7.2",
-    "bcrypt": "^5.1.1",
-    "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "form-data": "^4.0.0",
-    "joi": "^17.13.1",
-    "jsonwebtoken": "^9.0.2",
-    "langchain": "^0.2.5",
-    "mongodb": "^6.5.0",
-    "openai": "^4.47.1",
+    "mongodb": "^6.6.2",
     "pdfkit": "^0.15.0"
   }
 }

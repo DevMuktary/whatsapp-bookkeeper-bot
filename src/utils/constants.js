@@ -10,5 +10,14 @@ export const USER_STATES = {
   // Core State
   IDLE: 'IDLE',
 
+  // Task-specific states
+  LOGGING_SALE: 'LOGGING_SALE',
+  AWAITING_INVOICE_CONFIRMATION: 'AWAITING_INVOICE_CONFIRMATION',
+
   // Add other states here as we build them...
+};
+
+export const INTENTS = {
+    LOG_SALE: 'LOG_SALE',
+    // Add other intents like LOG_EXPENSE, ADD_PRODUCT etc. later
 };

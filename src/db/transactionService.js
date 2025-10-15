@@ -14,7 +14,7 @@ export async function createSaleTransaction(saleData) {
             description: saleData.description,
             linkedProductId: saleData.linkedProductId,
             linkedCustomerId: saleData.linkedCustomerId,
-            linkedBankId: saleData.linkedBankId || null, // Updated
+            linkedBankId: saleData.linkedBankId || null,
             paymentMethod: saleData.paymentMethod.toUpperCase(),
             createdAt: new Date()
         };
@@ -36,7 +36,7 @@ export async function createExpenseTransaction(expenseData) {
             date: expenseData.date,
             description: expenseData.description,
             category: expenseData.category,
-            linkedBankId: expenseData.linkedBankId || null, // Updated
+            linkedBankId: expenseData.linkedBankId || null,
             createdAt: new Date()
         };
         const result = await transactionsCollection().insertOne(transactionDoc);
@@ -97,6 +97,27 @@ export async function getTransactionsByDateRange(userId, type, startDate, endDat
     }
 }
 
+/**
+ * Fetches the most recent transactions for a user.
+ * @param {ObjectId} userId The user's _id.
+ * @param {number} limit The number of transactions to fetch.
+ * @returns {Promise<Array<object>>}
+ */
+export async function getRecentTransactions(userId, limit = 5) {
+    try {
+        const transactions = await transactionsCollection()
+            .find({ userId })
+            .sort({ date: -1 })
+            .limit(limit)
+            .toArray();
+        return transactions;
+    } catch (error) {
+        logger.error(`Error fetching recent transactions for user ${userId}:`, error);
+        throw new Error('Could not retrieve recent transactions.');
+    }
+}
+
+
 export async function findTransactionById(transactionId) {
     try {
         const transaction = await transactionsCollection().findOne({ _id: transactionId });
@@ -104,5 +125,25 @@ export async function findTransactionById(transactionId) {
     } catch (error) {
         logger.error(`Error finding transaction by ID ${transactionId}:`, error);
         throw new Error('Could not find transaction.');
+    }
+}
+
+/**
+ * Deletes a single transaction by its MongoDB _id.
+ * @param {ObjectId} transactionId The _id of the transaction to delete.
+ * @returns {Promise<boolean>} True if deletion was successful, false otherwise.
+ */
+export async function deleteTransactionById(transactionId) {
+    try {
+        const result = await transactionsCollection().deleteOne({ _id: transactionId });
+        if (result.deletedCount === 1) {
+            logger.info(`Successfully deleted transaction with ID: ${transactionId}`);
+            return true;
+        }
+        logger.warn(`Transaction with ID: ${transactionId} not found for deletion.`);
+        return false;
+    } catch (error) {
+        logger.error(`Error deleting transaction by ID ${transactionId}:`, error);
+        throw new Error('Could not delete transaction.');
     }
 }

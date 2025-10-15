@@ -152,3 +152,18 @@ export async function updateStock(productId, quantityChange, reason, linkedTrans
         throw new Error('Could not update product stock.');
     }
 }
+
+/**
+ * Fetches all products for a specific user.
+ * @param {ObjectId} userId The user's _id.
+ * @returns {Promise<Array<object>>} An array of all product documents for the user.
+ */
+export async function getAllProducts(userId) {
+    try {
+        const products = await productsCollection().find({ userId }).sort({ productName: 1 }).toArray();
+        return products;
+    } catch (error) {
+        logger.error(`Error getting all products for user ${userId}:`, error);
+        throw new Error('Could not retrieve products.');
+    }
+}

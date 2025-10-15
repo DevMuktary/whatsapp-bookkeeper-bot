@@ -56,16 +56,35 @@ export async function extractCurrency(text) {
 }
 
 export async function getIntent(text) {
-    const messages = [
-        {
-            role: 'system',
-            content: `You are an intent classification system for a bookkeeping app. Your job is to analyze the user's message and determine their intent. You must respond ONLY with a JSON object. The possible intents are [\"${INTENTS.LOG_SALE}\", \"${INTENTS.LOG_EXPENSE}\", \"${INTENTS.ADD_PRODUCT}\"]. If an intent is detected, also extract any available details. The JSON format is {"intent": "INTENT_NAME", "context": { ... extracted details ... }}. Example contexts are {"productName": "...", "unitsSold": ..., "amountPerUnit": ...} for LOG_SALE, {"amount": ..., "expenseType": "...", "description": "..."} for LOG_EXPENSE, and {"productName": "...", "quantityAdded": ..., "costPrice": ..., "sellingPrice": ...} for ADD_PRODUCT. Note that quantityAdded can also be referred to as quantity or units. If the user's message is conversational or does not match any intent, respond with {"intent": null, "context": {}}.`
-        },
-        {
-            role: 'user',
-            content: text
-        }
-    ];
+    const systemPrompt = `You are an advanced intent classification and entity extraction system for a bookkeeping app. Your job is to analyze the user's message and determine their intent. You must respond ONLY with a JSON object.
+
+The possible intents are:
+- "${INTENTS.LOG_SALE}"
+- "${INTENTS.LOG_EXPENSE}"
+- "${INTENTS.ADD_PRODUCT}" (for a single product)
+- "${INTENTS.ADD_MULTIPLE_PRODUCTS}" (if two or more products are mentioned)
+
+Your JSON response format is: {"intent": "INTENT_NAME", "context": { ... extracted details ... }}.
+
+Extraction Rules:
+1.  If the intent is "${INTENTS.ADD_MULTIPLE_PRODUCTS}", the context MUST contain a key "products" which is an ARRAY of product objects. Each object should have: "productName", "quantityAdded", "costPrice", "sellingPrice".
+2.  If the intent is "${INTENTS.ADD_PRODUCT}", the context should be a single object with the keys: "productName", "quantityAdded", "costPrice", "sellingPrice".
+3.  If the user's message is conversational or does not match any intent, respond with {"intent": null, "context": {}}.
+
+Example 1:
+User: "Add 100 bags of rice to my inventory. I bought them for 50000 each and I will sell them for 60000."
+Your Response: {"intent": "${INTENTS.ADD_PRODUCT}", "context": {"productName": "bags of rice", "quantityAdded": 100, "costPrice": 50000, "sellingPrice": 60000}}
+
+Example 2:
+User: "restock 20 shirts (cost 3k, sell 5k) and 15 trousers (cost 4k, sell 7k)"
+Your Response: {"intent": "${INTENTS.ADD_MULTIPLE_PRODUCTS}", "context": {"products": [{"productName": "shirts", "quantityAdded": 20, "costPrice": 3000, "sellingPrice": 5000}, {"productName": "trousers", "quantityAdded": 15, "costPrice": 4000, "sellingPrice": 7000}]}}
+
+Example 3:
+User: "I want to add some new items"
+Your Response: {"intent": "${INTENTS.ADD_PRODUCT}", "context": {}}
+`;
+
+    const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: text }];
     const responseJson = await callDeepSeek(messages);
     return JSON.parse(responseJson);
 }

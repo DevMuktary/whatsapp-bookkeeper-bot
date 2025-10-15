@@ -18,12 +18,6 @@ async function sendMessage(data) {
   }
 }
 
-/**
- * Uploads a media file to WhatsApp servers to get a media ID.
- * @param {Buffer} buffer The file buffer.
- * @param {string} mimeType The MIME type of the file (e.g., 'application/pdf').
- * @returns {Promise<string|null>} The media ID or null if failed.
- */
 export async function uploadMedia(buffer, mimeType) {
     try {
         const form = new FormData();
@@ -85,4 +79,35 @@ export async function sendInteractiveButtons(to, bodyText, buttons) {
     }
   };
   await sendMessage(data);
+}
+
+/**
+ * Sends an interactive list message.
+ * @param {string} to The recipient's WhatsApp ID.
+ * @param {string} headerText The header text for the entire list.
+ * @param {string} bodyText The main text content of the message.
+ * @param {string} buttonText The text on the button that opens the list.
+ * @param {Array<object>} sections An array of section objects. Each section has a title and rows.
+ */
+export async function sendInteractiveList(to, headerText, bodyText, buttonText, sections) {
+    const data = {
+        messaging_product: 'whatsapp',
+        to,
+        type: 'interactive',
+        interactive: {
+            type: 'list',
+            header: {
+                type: 'text',
+                text: headerText
+            },
+            body: {
+                text: bodyText
+            },
+            action: {
+                button: buttonText,
+                sections: sections
+            }
+        }
+    };
+    await sendMessage(data);
 }

@@ -6,7 +6,7 @@ import logger from '../utils/logger.js';
 const apiInstance = new Brevo.TransactionalEmailsApi();
 apiInstance.setApiKey(Brevo.TransactionalEmailsApiApiKeys.apiKey, config.brevo.apiKey);
 
-const SENDER_EMAIL = 'no-reply@fynaxtech.com'; // Replace with your verified sender email
+const SENDER_EMAIL = 'no-reply@fynaxtech.com'; // Replace with your verified sender email in Brevo
 const SENDER_NAME = 'Fynax Bookkeeper';
 
 /**
@@ -27,15 +27,19 @@ export async function sendOtp(userEmail, businessName) {
   const otp = generateOtp();
   const sendSmtpEmail = new Brevo.SendSmtpEmail();
 
-  sendSmtpEmail.to = [new Brevo.SendSmtpEmailTo(userEmail)];
-  sendSmtpEmail.sender = new Brevo.SendSmtpEmailSender(SENDER_NAME, SENDER_EMAIL);
+  // --- FIX APPLIED HERE ---
+  // The newer Brevo SDK uses plain objects for recipients and senders, not constructors.
+  sendSmtpEmail.to = [{ email: userEmail, name: businessName }];
+  sendSmtpEmail.sender = { name: SENDER_NAME, email: SENDER_EMAIL };
+  // --- END OF FIX ---
+  
   sendSmtpEmail.subject = `Your Fynax Verification Code`;
   sendSmtpEmail.htmlContent = `
     <html>
-      <body>
-        <h1>Hello from Fynax!</h1>
+      <body style="font-family: Arial, sans-serif; color: #333;">
+        <h1 style="color: #4CAF50;">Hello from Fynax!</h1>
         <p>Hi ${businessName},</p>
-        <p>Your verification code is: <strong>${otp}</strong></p>
+        <p>Your verification code is: <strong style="font-size: 1.2em; color: #333;">${otp}</strong></p>
         <p>This code will expire in 10 minutes.</p>
         <p>If you did not request this, you can safely ignore this email.</p>
       </body>
@@ -47,7 +51,8 @@ export async function sendOtp(userEmail, businessName) {
     logger.info(`OTP successfully sent to ${userEmail}`);
     return otp;
   } catch (error) {
-    logger.error(`Failed to send OTP email to ${userEmail}:`, error);
+    // The Brevo SDK can sometimes wrap errors, so we log the full body for details.
+    logger.error(`Failed to send OTP email to ${userEmail}:`, JSON.stringify(error, null, 2));
     throw new Error('Could not send OTP email.');
   }
 }

@@ -32,6 +32,7 @@ async function handleButtonReply(user, buttonId) {
         case USER_STATES.AWAITING_BANK_SELECTION_SALE: await handleBankSelection(user, buttonId, INTENTS.LOG_SALE); break;
         case USER_STATES.AWAITING_BANK_SELECTION_EXPENSE: await handleBankSelection(user, buttonId, INTENTS.LOG_EXPENSE); break;
         case USER_STATES.AWAITING_RECONCILE_ACTION: await handleReconcileAction(user, buttonId); break;
+        case USER_STATES.AWAITING_EDIT_FIELD_SELECTION: await handleEditFieldSelection(user, buttonId); break;
         case USER_STATES.AWAITING_DELETE_CONFIRMATION: await handleDeleteConfirmation(user, buttonId); break;
         default:
             logger.warn(`Received a button click in an unhandled state: ${user.state}`);
@@ -154,9 +155,33 @@ async function handleReconcileAction(user, buttonId) {
             { id: 'cancel_delete', title: 'No, Keep It' }
         ]);
     } else if (buttonId === 'action_edit') {
-        await updateUserState(user.whatsappId, USER_STATES.EDITING_TRANSACTION, { transaction, memory: [] });
-        await sendTextMessage(user.whatsappId, "Okay, let's edit this transaction. What would you like to change? (e.g., 'change the amount to 5000')");
+        let buttons = [];
+        if (transaction.type === 'SALE') {
+            buttons = [
+                { id: 'edit_field:unitsSold', title: 'Change Units Sold' },
+                { id: 'edit_field:amountPerUnit', title: 'Change Price Per Unit' },
+            ];
+        } else if (transaction.type === 'EXPENSE') {
+            buttons = [
+                { id: 'edit_field:amount', title: 'Change Amount' },
+                { id: 'edit_field:description', title: 'Change Description' },
+            ];
+        } else { // Customer Payment
+            buttons = [{ id: 'edit_field:amount', title: 'Change Amount' }];
+        }
+        await updateUserState(user.whatsappId, USER_STATES.AWAITING_EDIT_FIELD_SELECTION, { transaction });
+        await sendInteractiveButtons(user.whatsappId, "Which part of this transaction would you like to edit?", buttons);
     }
+}
+
+async function handleEditFieldSelection(user, buttonId) {
+    const { transaction } = user.stateContext;
+    const [action, fieldToEdit] = buttonId.split(':');
+
+    if (action !== 'edit_field') return;
+    
+    await updateUserState(user.whatsappId, USER_STATES.AWAITING_EDIT_VALUE, { transaction, fieldToEdit });
+    await sendTextMessage(user.whatsappId, `Okay, what is the new value for "${fieldToEdit}"?`);
 }
 
 async function handleDeleteConfirmation(user, buttonId) {

@@ -1,5 +1,5 @@
 import { findOrCreateUser, updateUser, updateUserState } from '../db/userService.js';
-import { extractOnboardingDetails, extractCurrency, getIntent, gatherSaleDetails } from '../services/aiService.js';
+import { extractOnboardingDetails, extractCurrency, getIntent, gatherSaleDetails, gatherExpenseDetails } from '../services/aiService.js';
 import { sendOtp } from '../services/emailService.js';
 import { sendTextMessage } from '../api/whatsappService.js';
 import { USER_STATES, INTENTS } from '../utils/constants.js';
@@ -14,21 +14,27 @@ export async function handleMessage(message) {
     const user = await findOrCreateUser(whatsappId);
 
     switch (user.state) {
-      // --- ONBOARDING STATES (Unchanged) ---
-      case USER_STATES.NEW_USER: await handleNewUser(user); break;
-      case USER_STATES.ONBOARDING_AWAIT_BUSINESS_AND_EMAIL: await handleOnboardingDetails(user, text); break;
-      case USER_STATES.ONBOARDING_AWAIT_OTP: await handleOtp(user, text); break;
-      case USER_STATES.ONBOARDING_AWAIT_CURRENCY: await handleCurrency(user, text); break;
-
-      // --- CORE LOGIC ---
+      case USER_STATES.NEW_USER: 
+        await handleNewUser(user); 
+        break;
+      case USER_STATES.ONBOARDING_AWAIT_BUSINESS_AND_EMAIL: 
+        await handleOnboardingDetails(user, text); 
+        break;
+      case USER_STATES.ONBOARDING_AWAIT_OTP: 
+        await handleOtp(user, text); 
+        break;
+      case USER_STATES.ONBOARDING_AWAIT_CURRENCY: 
+        await handleCurrency(user, text); 
+        break;
       case USER_STATES.IDLE:
         await handleIdleState(user, text);
         break;
-
       case USER_STATES.LOGGING_SALE:
         await handleLoggingSale(user, text);
         break;
-
+      case USER_STATES.LOGGING_EXPENSE:
+        await handleLoggingExpense(user, text);
+        break;
       default:
         logger.warn(`Unhandled state: ${user.state} for user ${whatsappId}`);
         await sendTextMessage(whatsappId, "Apologies, I'm a bit stuck. Let's get you back on track.");
@@ -46,25 +52,21 @@ async function handleIdleState(user, text) {
 
     if (intent === INTENTS.LOG_SALE) {
         logger.info(`Intent detected: LOG_SALE for user ${user.whatsappId}`);
-        
-        // The first message from the user becomes the start of the conversation memory
         const initialMemory = [{ role: 'user', content: text }];
-
         await updateUserState(user.whatsappId, USER_STATES.LOGGING_SALE, { memory: initialMemory });
-        
-        // Immediately process the first turn
         await handleLoggingSale({ ...user, state: USER_STATES.LOGGING_SALE, stateContext: { memory: initialMemory } }, text);
-
+    } else if (intent === INTENTS.LOG_EXPENSE) {
+        logger.info(`Intent detected: LOG_EXPENSE for user ${user.whatsappId}`);
+        const initialMemory = [{ role: 'user', content: text }];
+        await updateUserState(user.whatsappId, USER_STATES.LOGGING_EXPENSE, { memory: initialMemory });
+        await handleLoggingExpense({ ...user, state: USER_STATES.LOGGING_EXPENSE, stateContext: { memory: initialMemory } }, text);
     } else {
-        await sendTextMessage(user.whatsappId, "I'm sorry, I can only help with bookkeeping tasks right now. Try saying something like 'I made a sale'.");
+        await sendTextMessage(user.whatsappId, "I'm sorry, I can only help with bookkeeping tasks right now. Try saying something like 'I made a sale' or 'I paid for transport'.");
     }
 }
 
 async function handleLoggingSale(user, text) {
-    // Append the user's latest message to the conversation history
     const currentMemory = user.stateContext.memory || [];
-    
-    // Make sure not to add the very first message twice
     if (currentMemory.length === 0 || currentMemory[currentMemory.length - 1].role !== 'user') {
         currentMemory.push({ role: 'user', content: text });
     }
@@ -72,18 +74,91 @@ async function handleLoggingSale(user, text) {
     const aiResponse = await gatherSaleDetails(currentMemory);
     
     if (aiResponse.status === 'incomplete') {
-        // AI needs more info, so we ask the user and save the new conversation memory
         await updateUserState(user.whatsappId, USER_STATES.LOGGING_SALE, { memory: aiResponse.memory });
         await sendTextMessage(user.whatsappId, aiResponse.reply);
     } else if (aiResponse.status === 'complete') {
-        // AI has all info, execute the task
         await sendTextMessage(user.whatsappId, "Got it! Let me record that for you... 📝");
         await executeTask(INTENTS.LOG_SALE, user, aiResponse.data);
     }
 }
 
-// --- ONBOARDING HANDLERS (Unchanged) ---
-async function handleNewUser(user) { /* ... no changes ... */ }
-async function handleOnboardingDetails(user, text) { /* ... no changes ... */ }
-async function handleOtp(user, text) { /* ... no changes ... */ }
-async function handleCurrency(user, text) { /* ... no changes ... */ }
+async function handleLoggingExpense(user, text) {
+    const currentMemory = user.stateContext.memory || [];
+    if (currentMemory.length === 0 || currentMemory[currentMemory.length - 1].role !== 'user') {
+        currentMemory.push({ role: 'user', content: text });
+    }
+
+    const aiResponse = await gatherExpenseDetails(currentMemory);
+
+    if (aiResponse.status === 'incomplete') {
+        await updateUserState(user.whatsappId, USER_STATES.LOGGING_EXPENSE, { memory: aiResponse.memory });
+        await sendTextMessage(user.whatsappId, aiResponse.reply);
+    } else if (aiResponse.status === 'complete') {
+        await sendTextMessage(user.whatsappId, "Okay, noting that down... ✍️");
+        await executeTask(INTENTS.LOG_EXPENSE, user, aiResponse.data);
+    }
+}
+
+async function handleNewUser(user) {
+  await updateUserState(user.whatsappId, USER_STATES.ONBOARDING_AWAIT_BUSINESS_AND_EMAIL);
+  await sendTextMessage(user.whatsappId, "👋 Welcome to Fynax Bookkeeper! I'm here to help you manage your business finances effortlessly.");
+  await sendTextMessage(user.whatsappId, "To get started, what is your business name and your email address?");
+}
+
+async function handleOnboardingDetails(user, text) {
+  const { businessName, email } = await extractOnboardingDetails(text);
+  
+  let updates = {};
+  if (businessName) updates.businessName = businessName;
+  if (email) updates.email = email;
+
+  let updatedUser = user;
+  if (Object.keys(updates).length > 0) {
+    updatedUser = await updateUser(user.whatsappId, updates);
+  }
+
+  if (updatedUser.businessName && updatedUser.email) {
+    const otp = await sendOtp(updatedUser.email, updatedUser.businessName);
+    const tenMinutes = 10 * 60 * 1000;
+    const otpExpires = new Date(Date.now() + tenMinutes);
+
+    await updateUser(updatedUser.whatsappId, { otp, otpExpires });
+    await updateUserState(updatedUser.whatsappId, USER_STATES.ONBOARDING_AWAIT_OTP);
+    await sendTextMessage(updatedUser.whatsappId, `Perfect! I've just sent a 6-digit verification code to ${updatedUser.email}. 📧 Please enter it here to continue.`);
+  } else if (updatedUser.businessName) {
+    await sendTextMessage(updatedUser.whatsappId, `Got it! Your business is "${updatedUser.businessName}". Now, what's your email address?`);
+  } else if (updatedUser.email) {
+    await sendTextMessage(updatedUser.whatsappId, `Thanks! I have your email as ${updatedUser.email}. What's your business name?`);
+  } else {
+    await sendTextMessage(updatedUser.whatsappId, "I'm sorry, I couldn't quite understand that. Could you please provide your business name and email address?");
+  }
+}
+
+async function handleOtp(user, text) {
+  const otpAttempt = text.trim();
+  if (user.otpExpires < new Date()) {
+    await sendTextMessage(user.whatsappId, "It looks like that code has expired. 😥 Let's send a new one.");
+    await handleOnboardingDetails(user, user.email);
+    return;
+  }
+
+  if (user.otp === otpAttempt) {
+    await updateUser(user.whatsappId, { isEmailVerified: true, otp: null, otpExpires: null });
+    await updateUserState(user.whatsappId, USER_STATES.ONBOARDING_AWAIT_CURRENCY);
+    await sendTextMessage(user.whatsappId, `✅ Email verified! Just one last thing: what is your primary business currency? (e.g., Naira, GHS, USD)`);
+  } else {
+    await sendTextMessage(user.whatsappId, "That code doesn't seem to match. Please double-check and try again. 🤔");
+  }
+}
+
+async function handleCurrency(user, text) {
+  const { currency } = await extractCurrency(text);
+  if (currency) {
+    await updateUser(user.whatsappId, { currency });
+    await updateUserState(user.whatsappId, USER_STATES.IDLE);
+    await sendTextMessage(user.whatsappId, `Excellent! Your account is fully set up with ${currency} as your currency. 🎉`);
+    await sendTextMessage(user.whatsappId, `You can now start managing your finances. Try telling me about a sale or an expense. For example:\n\n_"I sold 2 loaves of bread for 500 each"_`);
+  } else {
+    await sendTextMessage(user.whatsappId, "I didn't recognize that currency. Please tell me your main currency, like 'Naira', 'Dollars', or 'GHS'.");
+  }
+}

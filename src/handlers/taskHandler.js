@@ -1,9 +1,10 @@
 import { findOrCreateCustomer, updateBalanceOwed } from '../db/customerService.js';
-import { findOrCreateProduct, updateStock, upsertProduct } from '../db/productService.js';
-import { createSaleTransaction, createExpenseTransaction } from '../db/transactionService.js';
+import { findOrCreateProduct, updateStock, upsertProduct, findProductByName } from '../db/productService.js';
+import { createSaleTransaction, createExpenseTransaction, getSummaryByDateRange } from '../db/transactionService.js';
 import { updateUserState } from '../db/userService.js';
-import { sendTextMessage, sendInteractiveButtons } from '../api/whatsappService.js';
+import { sendTextMessage } from '../api/whatsappService.js';
 import { INTENTS, USER_STATES } from '../utils/constants.js';
+import { getDateRange } from '../utils/dateUtils.js';
 import logger from '../utils/logger.js';
 
 export async function executeTask(intent, user, data) {
@@ -21,6 +22,12 @@ export async function executeTask(intent, user, data) {
             case INTENTS.ADD_MULTIPLE_PRODUCTS:
                 await executeAddMultipleProducts(user, data);
                 break;
+            case INTENTS.CHECK_STOCK:
+                await executeCheckStock(user, data);
+                break;
+            case INTENTS.GET_FINANCIAL_SUMMARY:
+                await executeGetFinancialSummary(user, data);
+                break;
             default:
                 logger.warn(`No executor found for intent: ${intent}`);
                 await sendTextMessage(user.whatsappId, "I'm not sure how to process that right now, but I'm learning!");
@@ -31,7 +38,7 @@ export async function executeTask(intent, user, data) {
         await sendTextMessage(user.whatsappId, "I ran into an issue trying to complete that task. Please try again. 🛠️");
     } finally {
         // Only reset state if it's not already IDLE.
-        // This prevents resetting in the middle of a multi-step process if we add one later.
+        // This handles resetting conversational states without affecting direct-execution tasks.
         if (user.state !== USER_STATES.IDLE) {
             await updateUserState(user.whatsappId, USER_STATES.IDLE, {});
         }
@@ -105,7 +112,6 @@ async function executeAddMultipleProducts(user, data) {
     }
 
     const addedProducts = [];
-    // Using a for...of loop for sequential processing to avoid overwhelming the database
     for (const p of products) {
         try {
             const newProd = await upsertProduct(
@@ -126,4 +132,38 @@ async function executeAddMultipleProducts(user, data) {
         const summary = addedProducts.map(p => `"${p.productName}" (${p.quantity} units)`).join(', ');
         await sendTextMessage(user.whatsappId, `✅ Successfully updated ${addedProducts.length} items in your inventory: ${summary}.`);
     }
+}
+
+async function executeCheckStock(user, data) {
+    const { productName } = data;
+    if (!productName) {
+        await sendTextMessage(user.whatsappId, "Please tell me which product you'd like to check.");
+        return;
+    }
+
+    const product = await findProductByName(user._id, productName);
+
+    if (product) {
+        await sendTextMessage(user.whatsappId, `You have ${product.quantity} units of "${product.productName}" in stock. 📦`);
+    } else {
+        await sendTextMessage(user.whatsappId, `I couldn't find a product named "${productName}" in your inventory. 🤔`);
+    }
+}
+
+async function executeGetFinancialSummary(user, data) {
+    const { metric, period } = data;
+    if (!metric || !period) {
+        await sendTextMessage(user.whatsappId, "Please be more specific. You can ask 'what are my sales today?' or 'show me my expenses this month'.");
+        return;
+    }
+
+    const { startDate, endDate } = getDateRange(period);
+    const type = metric.toUpperCase() === 'SALES' ? 'SALE' : 'EXPENSE';
+
+    const total = await getSummaryByDateRange(user._id, type, startDate, endDate);
+    
+    const formattedAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(total);
+    const readablePeriod = period.replace('_', ' ');
+
+    await sendTextMessage(user.whatsappId, `Your total ${metric} for ${readablePeriod} is ${formattedAmount}. 📊`);
 }

@@ -14,6 +14,7 @@ export async function createSaleTransaction(saleData) {
             description: saleData.description,
             linkedProductId: saleData.linkedProductId,
             linkedCustomerId: saleData.linkedCustomerId,
+            linkedBankId: saleData.linkedBankId || null, // Updated
             paymentMethod: saleData.paymentMethod.toUpperCase(),
             createdAt: new Date()
         };
@@ -35,6 +36,7 @@ export async function createExpenseTransaction(expenseData) {
             date: expenseData.date,
             description: expenseData.description,
             category: expenseData.category,
+            linkedBankId: expenseData.linkedBankId || null, // Updated
             createdAt: new Date()
         };
         const result = await transactionsCollection().insertOne(transactionDoc);
@@ -46,16 +48,6 @@ export async function createExpenseTransaction(expenseData) {
     }
 }
 
-/**
- * Creates a new customer payment transaction in the database.
- * @param {object} paymentData - The data for the payment.
- * @param {ObjectId} paymentData.userId
- * @param {ObjectId} paymentData.linkedCustomerId
- * @param {number} paymentData.amount
- * @param {Date} paymentData.date
- * @param {string} paymentData.description
- * @returns {Promise<object>} The newly created transaction document.
- */
 export async function createCustomerPaymentTransaction(paymentData) {
     try {
         const transactionDoc = {

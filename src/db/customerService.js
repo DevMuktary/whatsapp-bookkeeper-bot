@@ -4,15 +4,8 @@ import { ObjectId } from 'mongodb';
 
 const customersCollection = () => getDB().collection('customers');
 
-/**
- * Finds a customer by name for a specific user, or creates one if they don't exist.
- * @param {ObjectId} userId The user's _id.
- * @param {string} customerName The name of the customer.
- * @returns {Promise<object>} The customer document.
- */
 export async function findOrCreateCustomer(userId, customerName) {
     try {
-        // Case-insensitive search
         const query = { userId, customerName: { $regex: new RegExp(`^${customerName}$`, 'i') } };
         let customer = await customersCollection().findOne(query);
 
@@ -36,12 +29,6 @@ export async function findOrCreateCustomer(userId, customerName) {
     }
 }
 
-/**
- * Updates a customer's outstanding balance.
- * @param {ObjectId} customerId The customer's _id.
- * @param {number} amountChange The amount to add (for credit sales) or subtract (for payments).
- * @returns {Promise<object>} The updated customer document.
- */
 export async function updateBalanceOwed(customerId, amountChange) {
     try {
         const result = await customersCollection().findOneAndUpdate(
@@ -57,5 +44,20 @@ export async function updateBalanceOwed(customerId, amountChange) {
     } catch (error) {
         logger.error(`Error updating balance for customer ${customerId}:`, error);
         throw new Error('Could not update customer balance.');
+    }
+}
+
+/**
+ * Finds a single customer by their MongoDB _id.
+ * @param {ObjectId} customerId The _id of the customer.
+ * @returns {Promise<object|null>} The customer document or null if not found.
+ */
+export async function findCustomerById(customerId) {
+    try {
+        const customer = await customersCollection().findOne({ _id: customerId });
+        return customer;
+    } catch (error) {
+        logger.error(`Error finding customer by ID ${customerId}:`, error);
+        throw new Error('Could not find customer.');
     }
 }

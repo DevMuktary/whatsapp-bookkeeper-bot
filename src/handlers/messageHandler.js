@@ -1,4 +1,5 @@
 import { findOrCreateUser, updateUser, updateUserState } from '../db/userService.js';
+import { findProductByName } from '../db/productService.js';
 import { extractOnboardingDetails, extractCurrency, getIntent, gatherSaleDetails, gatherExpenseDetails, gatherProductDetails } from '../services/aiService.js';
 import { sendOtp } from '../services/emailService.js';
 import { sendTextMessage } from '../api/whatsappService.js';
@@ -65,11 +66,17 @@ async function handleIdleState(user, text) {
         await handleLoggingExpense({ ...user, state: USER_STATES.LOGGING_EXPENSE, stateContext: { memory: initialMemory } }, text);
     } else if (intent === INTENTS.ADD_PRODUCT) {
         logger.info(`Intent detected: ADD_PRODUCT for user ${user.whatsappId}`);
+        
+        let existingProduct = null;
+        if (context.productName) {
+            existingProduct = await findProductByName(user._id, context.productName);
+        }
+
         const initialMemory = [{ role: 'user', content: text }];
-        await updateUserState(user.whatsappId, USER_STATES.ADDING_PRODUCT, { memory: initialMemory });
-        await handleAddingProduct({ ...user, state: USER_STATES.ADDING_PRODUCT, stateContext: { memory: initialMemory } }, text);
+        await updateUserState(user.whatsappId, USER_STATES.ADDING_PRODUCT, { memory: initialMemory, existingProduct });
+        await handleAddingProduct({ ...user, state: USER_STATES.ADDING_PRODUCT, stateContext: { memory: initialMemory, existingProduct } }, text);
     } else {
-        await sendTextMessage(user.whatsappId, "I'm sorry, I can only help with bookkeeping tasks right now. Try saying something like 'I made a sale' or 'I paid for transport'.");
+        await sendTextMessage(user.whatsappId, "I'm sorry, I can only help with bookkeeping tasks right now. Try saying 'log a sale' or 'add a new product'.");
     }
 }
 
@@ -108,15 +115,16 @@ async function handleLoggingExpense(user, text) {
 }
 
 async function handleAddingProduct(user, text) {
-    const currentMemory = user.stateContext.memory || [];
+    const { memory: currentMemory = [], existingProduct } = user.stateContext;
+
     if (currentMemory.length === 0 || currentMemory[currentMemory.length - 1].role !== 'user') {
         currentMemory.push({ role: 'user', content: text });
     }
 
-    const aiResponse = await gatherProductDetails(currentMemory);
+    const aiResponse = await gatherProductDetails(currentMemory, existingProduct);
 
     if (aiResponse.status === 'incomplete') {
-        await updateUserState(user.whatsappId, USER_STATES.ADDING_PRODUCT, { memory: aiResponse.memory });
+        await updateUserState(user.whatsappId, USER_STATES.ADDING_PRODUCT, { memory: aiResponse.memory, existingProduct });
         await sendTextMessage(user.whatsappId, aiResponse.reply);
     } else if (aiResponse.status === 'complete') {
         await sendTextMessage(user.whatsappId, "Alright, adding that to your inventory... 📋");

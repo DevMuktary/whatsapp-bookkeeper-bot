@@ -158,14 +158,19 @@ CONVERSATION RULES:
     return { ...response, memory: updatedHistory };
 }
 
-export async function gatherPaymentDetails(conversationHistory) {
+export async function gatherPaymentDetails(conversationHistory, userCurrency) {
     const systemPrompt = `You are a friendly and efficient bookkeeping assistant. Your goal is to log a payment received from a customer.
 You must fill a JSON object with these exact keys: "customerName", "amount".
 
+CONTEXT: The user's default currency is ${userCurrency}.
+
 CONVERSATION RULES:
-1.  Analyze the conversation history. If any required keys are missing, ask a clear question for the missing information.
-2.  Once ALL keys are filled, your FINAL response must be a JSON object with {"status": "complete", "data": {"customerName": "...", "amount": ...}}.
-3.  While collecting information, your response must be a JSON object with {"status": "incomplete", "reply": "Your question to the user."}.
+1.  Analyze the conversation history.
+2.  You MUST assume all monetary values are in the user's default currency (${userCurrency}) unless they explicitly specify a different one (e.g., "500 dollars").
+3.  DO NOT ask the user to specify or confirm the currency.
+4.  If any required keys are missing, ask a clear question for the missing information.
+5.  Once ALL keys are filled, your FINAL response must be a JSON object with {"status": "complete", "data": {"customerName": "...", "amount": ...}}.
+6.  While collecting information, your response must be a JSON object with {"status": "incomplete", "reply": "Your question to the user."}.
 `;
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     const responseJson = await callDeepSeek(messages, 0.5);

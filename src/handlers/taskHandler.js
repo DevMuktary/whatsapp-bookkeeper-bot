@@ -12,15 +12,21 @@ import logger from '../utils/logger.js';
 
 /**
  * Helper function to calculate P&L data.
+ * This is the financial "engine" of the bot.
  */
 async function _calculatePnLData(userId, period) {
     const { startDate, endDate } = getDateRange(period);
+
+    // 1. Get total sales and expenses
     const totalSales = await getSummaryByDateRange(userId, 'SALE', startDate, endDate);
     const totalExpenses = await getSummaryByDateRange(userId, 'EXPENSE', startDate, endDate);
+
+    // 2. Calculate Cost of Goods Sold (COGS)
     let totalCogs = 0;
     const salesTransactions = await getTransactionsByDateRange(userId, 'SALE', startDate, endDate);
     for (const sale of salesTransactions) {
         if (sale.linkedProductId) {
+            // We need the full product details to get the costPrice
             const product = await findProductByName(userId, sale.description.split(' x ')[1].split(' sold to ')[0]);
             if (product) {
                 const unitsSold = parseInt(sale.description.split(' x ')[0], 10) || 0;
@@ -28,6 +34,8 @@ async function _calculatePnLData(userId, period) {
             }
         }
     }
+    
+    // 3. Get top expenses
     const allExpenses = await getTransactionsByDateRange(userId, 'EXPENSE', startDate, endDate);
     const expenseMap = allExpenses.reduce((acc, tx) => {
         acc[tx.category] = (acc[tx.category] || 0) + tx.amount;
@@ -37,25 +45,59 @@ async function _calculatePnLData(userId, period) {
         .sort(([,a], [,b]) => b - a)
         .slice(0, 3)
         .map(([category, total]) => ({ _id: category, total }));
+
+    // 4. Calculate final numbers
     const grossProfit = totalSales - totalCogs;
     const netProfit = grossProfit - totalExpenses;
+
     return { totalSales, totalCogs, grossProfit, totalExpenses, netProfit, topExpenses };
 }
+
 
 export async function executeTask(intent, user, data) {
     let success = false;
     try {
         switch (intent) {
-            case INTENTS.LOG_SALE: await executeLogSale(user, data); success = true; return; 
-            case INTENTS.LOG_EXPENSE: await executeLogExpense(user, data); success = true; break;
-            case INTENTS.ADD_PRODUCT: await executeAddProduct(user, data); success = true; break;
-            case INTENTS.ADD_MULTIPLE_PRODUCTS: await executeAddMultipleProducts(user, data); success = true; break;
-            case INTENTS.CHECK_STOCK: await executeCheckStock(user, data); success = true; break;
-            case INTENTS.GET_FINANCIAL_SUMMARY: await executeGetFinancialSummary(user, data); success = true; break;
-            case INTENTS.GENERATE_REPORT: await executeGenerateReport(user, data); success = true; break;
-            case INTENTS.LOG_CUSTOMER_PAYMENT: await executeLogCustomerPayment(user, data); success = true; break;
-            case INTENTS.ADD_BANK_ACCOUNT: await executeAddBankAccount(user, data); success = true; break;
-            case INTENTS.CHECK_BANK_BALANCE: await executeCheckBankBalance(user, data); success = true; break;
+            case INTENTS.LOG_SALE:
+                await executeLogSale(user, data);
+                success = true;
+                return; 
+            case INTENTS.LOG_EXPENSE:
+                await executeLogExpense(user, data);
+                success = true;
+                break;
+            case INTENTS.ADD_PRODUCT:
+                await executeAddProduct(user, data);
+                success = true;
+                break;
+            case INTENTS.ADD_MULTIPLE_PRODUCTS:
+                await executeAddMultipleProducts(user, data);
+                success = true;
+                break;
+            case INTENTS.CHECK_STOCK:
+                await executeCheckStock(user, data);
+                success = true;
+                break;
+            case INTENTS.GET_FINANCIAL_SUMMARY:
+                await executeGetFinancialSummary(user, data);
+                success = true;
+                break;
+            case INTENTS.GENERATE_REPORT:
+                await executeGenerateReport(user, data);
+                success = true;
+                break;
+            case INTENTS.LOG_CUSTOMER_PAYMENT:
+                await executeLogCustomerPayment(user, data);
+                success = true;
+                break;
+            case INTENTS.ADD_BANK_ACCOUNT:
+                await executeAddBankAccount(user, data);
+                success = true;
+                break;
+            case INTENTS.CHECK_BANK_BALANCE:
+                await executeCheckBankBalance(user, data);
+                success = true;
+                break;
             case INTENTS.RECONCILE_TRANSACTION:
                 if (data.action === 'delete') {
                     await executeDeleteTransaction(user, data);
@@ -64,7 +106,10 @@ export async function executeTask(intent, user, data) {
                 }
                 success = true;
                 break;
-            case INTENTS.GET_FINANCIAL_INSIGHT: await executeGetFinancialInsight(user, data); success = true; break;
+            case INTENTS.GET_FINANCIAL_INSIGHT:
+                await executeGetFinancialInsight(user, data);
+                success = true;
+                break;
             default:
                 logger.warn(`No executor found for intent: ${intent}`);
                 await sendTextMessage(user.whatsappId, "I'm not sure how to process that right now.");
@@ -74,16 +119,12 @@ export async function executeTask(intent, user, data) {
         logger.error(`Error executing task for intent ${intent} and user ${user.whatsappId}:`, error);
         await sendTextMessage(user.whatsappId, `I ran into an issue: ${error.message} Please try again. 🛠️`);
     } finally {
-        // --- MODIFIED BLOCK ---
-        // If the state was not IDLE, reset it.
-        // If the operation was successful, send the main menu to guide the user.
-        if (user.state !== USER_STATES.IDLE) {
+        if (user.state !== USER_STATES.IDLE && intent !== INTENTS.LOG_SALE) {
             await updateUserState(user.whatsappId, USER_STATES.IDLE, {});
         }
-        if (success) {
+        if (success && intent !== INTENTS.LOG_SALE) {
             await sendMainMenu(user.whatsappId);
         }
-        // --- END OF MODIFICATION ---
     }
 }
 

@@ -46,6 +46,37 @@ export async function createExpenseTransaction(expenseData) {
     }
 }
 
+/**
+ * Creates a new customer payment transaction in the database.
+ * @param {object} paymentData - The data for the payment.
+ * @param {ObjectId} paymentData.userId
+ * @param {ObjectId} paymentData.linkedCustomerId
+ * @param {number} paymentData.amount
+ * @param {Date} paymentData.date
+ * @param {string} paymentData.description
+ * @returns {Promise<object>} The newly created transaction document.
+ */
+export async function createCustomerPaymentTransaction(paymentData) {
+    try {
+        const transactionDoc = {
+            userId: paymentData.userId,
+            type: 'CUSTOMER_PAYMENT',
+            amount: paymentData.amount,
+            date: paymentData.date,
+            description: paymentData.description,
+            linkedCustomerId: paymentData.linkedCustomerId,
+            createdAt: new Date()
+        };
+        const result = await transactionsCollection().insertOne(transactionDoc);
+        logger.info(`Customer payment transaction created with ID: ${result.insertedId}`);
+        return await transactionsCollection().findOne({ _id: result.insertedId });
+    } catch (error) {
+        logger.error('Error creating customer payment transaction:', error);
+        throw new Error('Could not create customer payment transaction.');
+    }
+}
+
+
 export async function getSummaryByDateRange(userId, type, startDate, endDate) {
     try {
         const pipeline = [
@@ -74,11 +105,6 @@ export async function getTransactionsByDateRange(userId, type, startDate, endDat
     }
 }
 
-/**
- * Finds a single transaction by its MongoDB _id.
- * @param {ObjectId} transactionId The _id of the transaction.
- * @returns {Promise<object|null>} The transaction document or null if not found.
- */
 export async function findTransactionById(transactionId) {
     try {
         const transaction = await transactionsCollection().findOne({ _id: transactionId });

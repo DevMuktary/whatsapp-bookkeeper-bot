@@ -75,6 +75,10 @@ async function handleIdleState(user, text) {
         const initialMemory = [{ role: 'user', content: text }];
         await updateUserState(user.whatsappId, USER_STATES.ADDING_PRODUCT, { memory: initialMemory, existingProduct });
         await handleAddingProduct({ ...user, state: USER_STATES.ADDING_PRODUCT, stateContext: { memory: initialMemory, existingProduct } }, text);
+    } else if (intent === INTENTS.ADD_MULTIPLE_PRODUCTS) {
+        logger.info(`Intent detected: ADD_MULTIPLE_PRODUCTS for user ${user.whatsappId}`);
+        await sendTextMessage(user.whatsappId, "Processing multiple products... 🧑‍💻");
+        await executeTask(INTENTS.ADD_MULTIPLE_PRODUCTS, user, context);
     } else {
         await sendTextMessage(user.whatsappId, "I'm sorry, I can only help with bookkeeping tasks right now. Try saying 'log a sale' or 'add a new product'.");
     }

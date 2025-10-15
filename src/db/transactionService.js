@@ -60,14 +60,6 @@ export async function getSummaryByDateRange(userId, type, startDate, endDate) {
     }
 }
 
-/**
- * Fetches all transactions for a given type and date range.
- * @param {ObjectId} userId The user's _id.
- * @param {string} type 'SALE' or 'EXPENSE'.
- * @param {Date} startDate The start of the date range.
- * @param {Date} endDate The end of the date range.
- * @returns {Promise<Array<object>>} An array of transaction documents.
- */
 export async function getTransactionsByDateRange(userId, type, startDate, endDate) {
     try {
         const transactions = await transactionsCollection().find({
@@ -79,5 +71,20 @@ export async function getTransactionsByDateRange(userId, type, startDate, endDat
     } catch (error) {
         logger.error(`Error getting transactions for user ${userId}:`, error);
         throw new Error('Could not retrieve transactions.');
+    }
+}
+
+/**
+ * Finds a single transaction by its MongoDB _id.
+ * @param {ObjectId} transactionId The _id of the transaction.
+ * @returns {Promise<object|null>} The transaction document or null if not found.
+ */
+export async function findTransactionById(transactionId) {
+    try {
+        const transaction = await transactionsCollection().findOne({ _id: transactionId });
+        return transaction;
+    } catch (error) {
+        logger.error(`Error finding transaction by ID ${transactionId}:`, error);
+        throw new Error('Could not find transaction.');
     }
 }

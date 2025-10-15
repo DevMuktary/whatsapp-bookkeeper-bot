@@ -13,11 +13,8 @@ const banksCollection = () => getDB().collection('banks');
  */
 export async function createBankAccount(userId, bankName, openingBalance) {
     try {
-        // Optional: Check if a bank with the same name already exists for this user
         const existingBank = await banksCollection().findOne({ userId, bankName: { $regex: new RegExp(`^${bankName}$`, 'i') } });
         if (existingBank) {
-            // In a more complex flow, we might ask if they want to update it.
-            // For now, we'll prevent duplicates.
             throw new Error(`A bank account named "${bankName}" already exists.`);
         }
 
@@ -34,7 +31,45 @@ export async function createBankAccount(userId, bankName, openingBalance) {
         return await banksCollection().findOne({ _id: result.insertedId });
     } catch (error) {
         logger.error(`Error creating bank account for user ${userId}:`, error);
-        // Re-throw the error to be handled by the taskHandler
         throw error;
+    }
+}
+
+/**
+ * Fetches all bank accounts for a specific user.
+ * @param {ObjectId} userId The user's _id.
+ * @returns {Promise<Array<object>>} An array of bank account documents.
+ */
+export async function getAllBankAccounts(userId) {
+    try {
+        const banks = await banksCollection().find({ userId }).toArray();
+        return banks;
+    } catch (error) {
+        logger.error(`Error fetching bank accounts for user ${userId}:`, error);
+        throw new Error('Could not retrieve bank accounts.');
+    }
+}
+
+/**
+ * Updates the balance of a specific bank account.
+ * @param {ObjectId} bankId The _id of the bank account.
+ * @param {number} amountChange The amount to add (positive for income) or subtract (negative for expense).
+ * @returns {Promise<object>} The updated bank account document.
+ */
+export async function updateBankBalance(bankId, amountChange) {
+    try {
+        const result = await banksCollection().findOneAndUpdate(
+            { _id: bankId },
+            { 
+                $inc: { balance: amountChange },
+                $set: { updatedAt: new Date() }
+            },
+            { returnDocument: 'after' }
+        );
+        logger.info(`Balance updated for bank ${bankId}. Change: ${amountChange}. New balance: ${result.balance}`);
+        return result;
+    } catch (error) {
+        logger.error(`Error updating balance for bank ${bankId}:`, error);
+        throw new Error('Could not update bank balance.');
     }
 }

@@ -13,6 +13,7 @@ export const USER_STATES = {
   // Task-specific states
   LOGGING_SALE: 'LOGGING_SALE',
   LOGGING_EXPENSE: 'LOGGING_EXPENSE',
+  ADDING_PRODUCT: 'ADDING_PRODUCT',
   AWAITING_INVOICE_CONFIRMATION: 'AWAITING_INVOICE_CONFIRMATION',
 
   // Add other states here as we build them...
@@ -21,5 +22,5 @@ export const USER_STATES = {
 export const INTENTS = {
     LOG_SALE: 'LOG_SALE',
     LOG_EXPENSE: 'LOG_EXPENSE',
-    // Add other intents like ADD_PRODUCT etc. later
+    ADD_PRODUCT: 'ADD_PRODUCT',
 };

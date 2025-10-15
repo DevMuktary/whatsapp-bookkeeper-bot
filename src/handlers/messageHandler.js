@@ -101,11 +101,11 @@ async function handleIdleState(user, text) {
                 { id: 'cancel_bulk_add', title: '❌ No, Cancel' }
             ]
         );
-    } else if (intent === INTENTS.CHECK_STOCK || intent === INTENTS.GET_FINANCIAL_SUMMARY) {
+    } else if (intent === INTENTS.CHECK_STOCK || intent === INTENTS.GET_FINANCIAL_SUMMARY || intent === INTENTS.GENERATE_REPORT) {
         logger.info(`Intent detected: ${intent} for user ${user.whatsappId}`);
         await executeTask(intent, user, context);
     } else {
-        await sendTextMessage(user.whatsappId, "I'm sorry, I can only help with bookkeeping tasks right now. Try 'log a sale' or 'what is my stock of rice?'.");
+        await sendTextMessage(user.whatsappId, "I'm sorry, I can only help with bookkeeping tasks right now. Try 'log a sale' or 'send sales report'.");
     }
 }
 
@@ -185,12 +185,12 @@ async function handleOnboardingDetails(user, text) {
     const otpExpires = new Date(Date.now() + tenMinutes);
 
     await updateUser(updatedUser.whatsappId, { otp, otpExpires });
-    await updateUserState(updatedUser.whatsappId, USER_STATES.ONBOARDING_AWAIT_OTP);
-    await sendTextMessage(updatedUser.whatsappId, `Perfect! I've just sent a 6-digit verification code to ${updatedUser.email}. 📧 Please enter it here to continue.`);
+    await updateUserState(user.whatsappId, USER_STATES.ONBOARDING_AWAIT_OTP);
+    await sendTextMessage(user.whatsappId, `Perfect! I've just sent a 6-digit verification code to ${updatedUser.email}. 📧 Please enter it here to continue.`);
   } else if (updatedUser.businessName) {
-    await sendTextMessage(updatedUser.whatsappId, `Got it! Your business is "${updatedUser.businessName}". Now, what's your email address?`);
+    await sendTextMessage(user.whatsappId, `Got it! Your business is "${updatedUser.businessName}". Now, what's your email address?`);
   } else if (updatedUser.email) {
-    await sendTextMessage(updatedUser.whatsappId, `Thanks! I have your email as ${updatedUser.email}. What's your business name?`);
+    await sendTextMessage(user.whatsappId, `Thanks! I have your email as ${updatedUser.email}. What's your business name?`);
   } else {
     await sendTextMessage(user.whatsappId, "I'm sorry, I couldn't quite understand that. Could you please provide your business name and email address?");
   }

@@ -6,6 +6,23 @@ const productsCollection = () => getDB().collection('products');
 const inventoryLogsCollection = () => getDB().collection('inventory_logs');
 
 /**
+ * Finds a single product by name for a specific user.
+ * @param {ObjectId} userId The user's _id.
+ * @param {string} productName The name of the product.
+ * @returns {Promise<object|null>} The product document or null if not found.
+ */
+export async function findProductByName(userId, productName) {
+    try {
+        const query = { userId, productName: { $regex: new RegExp(`^${productName}$`, 'i') } };
+        const product = await productsCollection().findOne(query);
+        return product;
+    } catch (error) {
+        logger.error(`Error in findProductByName for user ${userId}:`, error);
+        throw new Error('Could not find product by name.');
+    }
+}
+
+/**
  * Finds a product by name for a specific user, or creates it if it doesn't exist.
  * New products are created with a default quantity of 0.
  * @param {ObjectId} userId The user's _id.
@@ -26,7 +43,7 @@ export async function findOrCreateProduct(userId, productName) {
                 costPrice: 0,
                 sellingPrice: 0,
                 createdAt: new Date(),
-                updatedAt: new Date(),
+                updatedAt: new D ate(),
             };
             const result = await productsCollection().insertOne(newProduct);
             product = await productsCollection().findOne({ _id: result.insertedId });

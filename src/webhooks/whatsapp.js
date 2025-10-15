@@ -2,10 +2,11 @@ import express from 'express';
 import config from '../config/index.js';
 import logger from '../utils/logger.js';
 import { handleMessage } from '../handlers/messageHandler.js';
+import { handleInteractiveMessage } from '../handlers/interactiveHandler.js';
 
 const router = express.Router();
 
-// Route for WhatsApp webhook verification (no changes)
+// Route for WhatsApp webhook verification
 router.get('/', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
@@ -27,11 +28,14 @@ router.post('/', (req, res) => {
   // Immediately send a 200 OK response to Meta.
   res.sendStatus(200);
 
-  // Asynchronously process the message
   if (body.object === 'whatsapp_business_account') {
     const message = body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
-    if (message && message.type === 'text') { // Only process text messages for now
-      handleMessage(message);
+    if (message) {
+      if (message.type === 'text') {
+        handleMessage(message);
+      } else if (message.type === 'interactive') {
+        handleInteractiveMessage(message);
+      }
     }
   } else {
     logger.warn('Received a non-whatsapp_business_account payload');

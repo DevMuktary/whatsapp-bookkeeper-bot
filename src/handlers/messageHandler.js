@@ -2,7 +2,7 @@ import { findOrCreateUser, updateUser, updateUserState } from '../db/userService
 import { findProductByName } from '../db/productService.js';
 import { extractOnboardingDetails, extractCurrency, getIntent, gatherSaleDetails, gatherExpenseDetails, gatherProductDetails } from '../services/aiService.js';
 import { sendOtp } from '../services/emailService.js';
-import { sendTextMessage } from '../api/whatsappService.js';
+import { sendTextMessage, sendInteractiveButtons } from '../api/whatsappService.js';
 import { USER_STATES, INTENTS } from '../utils/constants.js';
 import logger from '../utils/logger.js';
 import { executeTask } from './taskHandler.js';
@@ -39,13 +39,16 @@ export async function handleMessage(message) {
       case USER_STATES.ADDING_PRODUCT:
         await handleAddingProduct(user, text);
         break;
+      // We removed AWAITING_BULK_PRODUCT_CONFIRMATION from here
+      // because it's handled by the interactiveHandler now.
       default:
         logger.warn(`Unhandled state: ${user.state} for user ${whatsappId}`);
         await sendTextMessage(whatsappId, "Apologies, I'm a bit stuck. Let's get you back on track.");
         await updateUserState(whatsappId, USER_STATES.IDLE);
         break;
     }
-  } catch (error) {
+  } catch (error)
+ {
     logger.error(`Error in message handler for ${whatsappId}:`, error);
     await sendTextMessage(whatsappId, "Oh dear, something went wrong on my end. Please try again in a moment. 🛠️");
   }
@@ -77,8 +80,34 @@ async function handleIdleState(user, text) {
         await handleAddingProduct({ ...user, state: USER_STATES.ADDING_PRODUCT, stateContext: { memory: initialMemory, existingProduct } }, text);
     } else if (intent === INTENTS.ADD_MULTIPLE_PRODUCTS) {
         logger.info(`Intent detected: ADD_MULTIPLE_PRODUCTS for user ${user.whatsappId}`);
-        await sendTextMessage(user.whatsappId, "Processing multiple products... 🧑‍💻");
-        await executeTask(INTENTS.ADD_MULTIPLE_PRODUCTS, user, context);
+        
+        const products = context.products || [];
+        if (products.length === 0) {
+            await sendTextMessage(user.whatsappId, "I see you want to add multiple products, but I had trouble understanding the list. Could you try a simpler format like:\n\n`Add 10 shirts (cost 1k, sell 2k) and 5 trousers (cost 2k, sell 4k)`");
+            return;
+        }
+
+        // --- THE NEW CONFIRMATION FLOW ---
+        let summary = "Great! I've found the following items. Please confirm:\n\n";
+        products.forEach((p, index) => {
+            const cost = new Intl.NumberFormat('en-US').format(p.costPrice);
+            const sell = new Intl.NumberFormat('en-US').format(p.sellingPrice);
+            summary += `${index + 1}. *${p.quantityAdded}x ${p.productName}*\n   Cost: ${user.currency} ${cost}, Sell: ${user.currency} ${sell}\n`;
+        });
+        
+        // Store the parsed products in the user's state context
+        await updateUserState(user.whatsappId, USER_STATES.AWAITING_BULK_PRODUCT_CONFIRMATION, { products: products });
+        
+        // Send the summary and interactive buttons
+        await sendInteractiveButtons(
+            user.whatsappId,
+            summary,
+            [
+                { id: 'confirm_bulk_add', title: '✅ Yes, Proceed' },
+                { id: 'cancel_bulk_add', title: '❌ No, Cancel' }
+            ]
+        );
+
     } else {
         await sendTextMessage(user.whatsappId, "I'm sorry, I can only help with bookkeeping tasks right now. Try saying 'log a sale' or 'add a new product'.");
     }
@@ -160,14 +189,14 @@ async function handleOnboardingDetails(user, text) {
     const otpExpires = new Date(Date.now() + tenMinutes);
 
     await updateUser(updatedUser.whatsappId, { otp, otpExpires });
-    await updateUserState(updatedUser.whatsappId, USER_STATES.ONBOARDING_AWAIT_OTP);
+    await updateUserState(user.whatsappId, USER_STATES.ONBOARDING_AWAIT_OTP);
     await sendTextMessage(updatedUser.whatsappId, `Perfect! I've just sent a 6-digit verification code to ${updatedUser.email}. 📧 Please enter it here to continue.`);
   } else if (updatedUser.businessName) {
     await sendTextMessage(updatedUser.whatsappId, `Got it! Your business is "${updatedUser.businessName}". Now, what's your email address?`);
   } else if (updatedUser.email) {
     await sendTextMessage(updatedUser.whatsappId, `Thanks! I have your email as ${updatedUser.email}. What's your business name?`);
   } else {
-    await sendTextMessage(updatedUser.whatsappId, "I'm sorry, I couldn't quite understand that. Could you please provide your business name and email address?");
+    await sendTextMessage(user.whatsappId, "I'm sorry, I couldn't quite understand that. Could you please provide your business name and email address?");
   }
 }
 

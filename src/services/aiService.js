@@ -59,7 +59,7 @@ export async function getIntent(text) {
     const messages = [
         {
             role: 'system',
-            content: `You are an intent classification system for a bookkeeping app. Your job is to analyze the user's message and determine their intent. You must respond ONLY with a JSON object. The possible intents are [\"${INTENTS.LOG_SALE}\", \"${INTENTS.LOG_EXPENSE}\", \"${INTENTS.ADD_PRODUCT}\"]. If an intent is detected, also extract any available details. The JSON format is {"intent": "INTENT_NAME", "context": { ... extracted details ... }}. Example contexts are {"productName": "...", "unitsSold": ..., "amountPerUnit": ...} for LOG_SALE, {"amount": ..., "expenseType": "...", "description": "..."} for LOG_EXPENSE, and {"productName": "...", "quantity": ..., "costPrice": ..., "sellingPrice": ...} for ADD_PRODUCT. If the user's message is conversational or does not match any intent, respond with {"intent": null, "context": {}}.`
+            content: `You are an intent classification system for a bookkeeping app. Your job is to analyze the user's message and determine their intent. You must respond ONLY with a JSON object. The possible intents are [\"${INTENTS.LOG_SALE}\", \"${INTENTS.LOG_EXPENSE}\", \"${INTENTS.ADD_PRODUCT}\"]. If an intent is detected, also extract any available details. The JSON format is {"intent": "INTENT_NAME", "context": { ... extracted details ... }}. Example contexts are {"productName": "...", "unitsSold": ..., "amountPerUnit": ...} for LOG_SALE, {"amount": ..., "expenseType": "...", "description": "..."} for LOG_EXPENSE, and {"productName": "...", "quantityAdded": ..., "costPrice": ..., "sellingPrice": ...} for ADD_PRODUCT. Note that quantityAdded can also be referred to as quantity or units. If the user's message is conversational or does not match any intent, respond with {"intent": null, "context": {}}.`
         },
         {
             role: 'user',
@@ -109,25 +109,23 @@ CONVERSATION RULES:
     return { ...response, memory: updatedHistory };
 }
 
-export async function gatherProductDetails(conversationHistory) {
-    const systemPrompt = `You are a friendly and efficient inventory manager named Fynax. Your current goal is to collect details to add or update a product in the inventory.
+export async function gatherProductDetails(conversationHistory, existingProduct = null) {
+    const existingDataInfo = existingProduct 
+        ? `This is an existing product. Its current cost price is ${existingProduct.costPrice} and selling price is ${existingProduct.sellingPrice}.`
+        : 'This is a brand new product.';
+
+    const systemPrompt = `You are a friendly and efficient inventory manager named Fynax. Your goal is to collect details to add or update a product.
 You must fill a JSON object with these exact keys: "productName", "quantityAdded", "costPrice", "sellingPrice".
+
+CONTEXT: ${existingDataInfo}
 
 CONVERSATION RULES:
 1.  Analyze the conversation history.
-2.  If any required keys are missing, ask a clear, friendly question for the missing information.
-3.  Once ALL keys are filled, your FINAL response must be a JSON object containing ONLY {"status": "complete", "data": { ... the final product object ... }}.
-4.  While collecting information, your response must be a JSON object in the format {"status": "incomplete", "reply": "Your question to the user."}.
-
-Example flow:
-User: "I want to add a new shirt"
-Your response: {"status": "incomplete", "reply": "Okay, a new shirt. How many units are you adding to your stock?"}
-User: "50"
-Your response: {"status": "incomplete", "reply": "50 units, got it. What is the cost price for one shirt?"}
-User: "3000"
-Your response: {"status": "incomplete", "reply": "Cost price is 3000. And what will be the selling price?"}
-User: "5000"
-Your response: {"status": "complete", "data": {"productName": "shirt", "quantityAdded": 50, "costPrice": 3000, "sellingPrice": 5000}}
+2.  If the user says the price is the "same as before", "unchanged", or similar, YOU MUST use the existing product data for the price.
+3.  Only ask for information that is truly missing. For example, if you already have the productName and quantityAdded, your next question should be about the costPrice.
+4.  If all required information is already present in the conversation, immediately proceed to the 'complete' status.
+5.  Once ALL keys are filled, your FINAL response must be a JSON object containing ONLY {"status": "complete", "data": { ... the final product object ... }}.
+6.  While collecting information, your response must be a JSON object in the format {"status": "incomplete", "reply": "Your question to the user."}.
 `;
 
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];

@@ -2,7 +2,7 @@ import { findOrCreateUser, updateUser, updateUserState } from '../db/userService
 import { findProductByName } from '../db/productService.js';
 import { getAllBankAccounts } from '../db/bankService.js';
 import { getRecentTransactions } from '../db/transactionService.js';
-import { extractOnboardingDetails, extractCurrency, getIntent, gatherSaleDetails, gatherExpenseDetails, gatherProductDetails, gatherPaymentDetails, gatherBankAccountDetails } from '../services/aiService.js';
+import { extractOnboardingDetails, extractCurrency, getIntent, gatherSaleDetails, gatherExpenseDetails, gatherProductDetails, gatherPaymentDetails, gatherBankAccountDetails, gatherTransactionEdits } from '../services/aiService.js';
 import { sendOtp } from '../services/emailService.js';
 import { sendTextMessage, sendInteractiveButtons, sendInteractiveList } from '../api/whatsappService.js';
 import { USER_STATES, INTENTS } from '../utils/constants.js';
@@ -40,8 +40,8 @@ export async function handleMessage(message) {
       case USER_STATES.ADDING_PRODUCT: await handleAddingProduct(user, text); break;
       case USER_STATES.LOGGING_CUSTOMER_PAYMENT: await handleLoggingCustomerPayment(user, text); break;
       case USER_STATES.ADDING_BANK_ACCOUNT: await handleAddingBankAccount(user, text); break;
+      case USER_STATES.EDITING_TRANSACTION: await handleEditingTransaction(user, text); break;
 
-      // --- NEW: Gracefully handle text messages when expecting interactive replies ---
       case USER_STATES.AWAITING_BANK_SELECTION_SALE:
       case USER_STATES.AWAITING_BANK_SELECTION_EXPENSE:
         await sendTextMessage(whatsappId, "Please select one of the bank accounts from the buttons I sent, or type 'cancel' to start over.");
@@ -49,12 +49,12 @@ export async function handleMessage(message) {
       case USER_STATES.AWAITING_BULK_PRODUCT_CONFIRMATION:
       case USER_STATES.AWAITING_INVOICE_CONFIRMATION:
       case USER_STATES.AWAITING_DELETE_CONFIRMATION:
+      case USER_STATES.AWAITING_RECONCILE_ACTION:
         await sendTextMessage(whatsappId, "Please choose one of the options from the buttons I sent, or type 'cancel'.");
         break;
-      case USER_STATES.AWAITING_TRANSACTION_SELECTION_FOR_DELETE:
+      case USER_STATES.AWAITING_TRANSACTION_SELECTION:
         await sendTextMessage(whatsappId, "Please select an item from the list I sent to proceed, or type 'cancel'.");
         break;
-      // --- End of New Section ---
         
       default:
         logger.warn(`Unhandled state: ${user.state} for user ${whatsappId}`);
@@ -101,7 +101,7 @@ async function handleIdleState(user, text) {
             const title = tx.description.length > 24 ? tx.description.substring(0, 21) + '...' : tx.description;
             
             return {
-                id: `select_tx_del:${tx._id}`,
+                id: `select_tx:${tx._id}`,
                 title: title,
                 description: `${tx.type} - ${formattedAmount}`
             };
@@ -109,7 +109,7 @@ async function handleIdleState(user, text) {
 
         const sections = [{ title: "Recent Transactions", rows: rows }];
         
-        await updateUserState(user.whatsappId, USER_STATES.AWAITING_TRANSACTION_SELECTION_FOR_DELETE);
+        await updateUserState(user.whatsappId, USER_STATES.AWAITING_TRANSACTION_SELECTION);
         await sendInteractiveList(user.whatsappId,
             "Modify Transaction",
             "Please select the transaction you would like to modify from the list below.",
@@ -246,6 +246,28 @@ async function handleAddingBankAccount(user, text) {
     } else if (aiResponse.status === 'complete') {
         await sendTextMessage(user.whatsappId, "Got it! Adding your new bank account... 🏦");
         await executeTask(INTENTS.ADD_BANK_ACCOUNT, user, aiResponse.data);
+    }
+}
+
+async function handleEditingTransaction(user, text) {
+    const { memory: currentMemory = [], transaction } = user.stateContext;
+    if (!transaction) {
+        await sendTextMessage(user.whatsappId, "I've lost track of which transaction we are editing. Please start over.");
+        await updateUserState(user.whatsappId, USER_STATES.IDLE);
+        return;
+    }
+
+    if (currentMemory.length === 0 || currentMemory[currentMemory.length - 1].role !== 'user') {
+        currentMemory.push({ role: 'user', content: text });
+    }
+
+    const aiResponse = await gatherTransactionEdits(currentMemory, transaction);
+    if (aiResponse.status === 'incomplete') {
+        await updateUserState(user.whatsappId, USER_STATES.EDITING_TRANSACTION, { transaction, memory: aiResponse.memory });
+        await sendTextMessage(user.whatsappId, aiResponse.reply);
+    } else if (aiResponse.status === 'complete') {
+        await sendTextMessage(user.whatsappId, "Okay, applying your changes... 🔄");
+        await executeTask(INTENTS.RECONCILE_TRANSACTION, user, { transactionId: transaction._id, action: 'edit', changes: aiResponse.data });
     }
 }
 

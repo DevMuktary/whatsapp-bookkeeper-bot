@@ -4,10 +4,55 @@ import { createSaleTransaction, createExpenseTransaction, createCustomerPaymentT
 import { createBankAccount, updateBankBalance, findBankAccountByName, getAllBankAccounts } from '../db/bankService.js';
 import { updateUserState } from '../db/userService.js';
 import { sendTextMessage, sendInteractiveButtons, uploadMedia, sendDocument } from '../api/whatsappService.js';
-import { generateSalesReport, generateExpenseReport, generateInventoryReport } from '../services/pdfService.js';
+import { generateSalesReport, generateExpenseReport, generateInventoryReport, generatePnLReport } from '../services/pdfService.js';
+import { getFinancialInsight } from '../services/aiService.js';
 import { INTENTS, USER_STATES } from '../utils/constants.js';
 import { getDateRange } from '../utils/dateUtils.js';
 import logger from '../utils/logger.js';
+
+/**
+ * Helper function to calculate P&L data.
+ * This is the financial "engine" of the bot.
+ */
+async function _calculatePnLData(userId, period) {
+    const { startDate, endDate } = getDateRange(period);
+
+    // 1. Get total sales and expenses
+    const totalSales = await getSummaryByDateRange(userId, 'SALE', startDate, endDate);
+    const totalExpenses = await getSummaryByDateRange(userId, 'EXPENSE', startDate, endDate);
+
+    // 2. Calculate Cost of Goods Sold (COGS)
+    let totalCogs = 0;
+    const salesTransactions = await getTransactionsByDateRange(userId, 'SALE', startDate, endDate);
+    for (const sale of salesTransactions) {
+        if (sale.linkedProductId) {
+            // We need the full product details to get the costPrice
+            const product = await findProductByName(userId, sale.description.split(' x ')[1].split(' sold to ')[0]);
+            if (product) {
+                const unitsSold = parseInt(sale.description.split(' x ')[0], 10) || 0;
+                totalCogs += (product.costPrice * unitsSold);
+            }
+        }
+    }
+    
+    // 3. Get top expenses
+    const allExpenses = await getTransactionsByDateRange(userId, 'EXPENSE', startDate, endDate);
+    const expenseMap = allExpenses.reduce((acc, tx) => {
+        acc[tx.category] = (acc[tx.category] || 0) + tx.amount;
+        return acc;
+    }, {});
+    const topExpenses = Object.entries(expenseMap)
+        .sort(([,a], [,b]) => b - a)
+        .slice(0, 3)
+        .map(([category, total]) => ({ _id: category, total }));
+
+    // 4. Calculate final numbers
+    const grossProfit = totalSales - totalCogs;
+    const netProfit = grossProfit - totalExpenses;
+
+    return { totalSales, totalCogs, grossProfit, totalExpenses, netProfit, topExpenses };
+}
+
 
 export async function executeTask(intent, user, data) {
     try {
@@ -48,6 +93,9 @@ export async function executeTask(intent, user, data) {
                 } else if (data.action === 'edit') {
                     await executeUpdateTransaction(user, data);
                 }
+                break;
+            case INTENTS.GET_FINANCIAL_INSIGHT:
+                await executeGetFinancialInsight(user, data);
                 break;
             default:
                 logger.warn(`No executor found for intent: ${intent}`);
@@ -152,29 +200,32 @@ async function executeGetFinancialSummary(user, data) {
 }
 
 async function executeGenerateReport(user, data) {
-    const { reportType, period } = data;
-    if (!reportType && !data.reportType) {
-        await sendTextMessage(user.whatsappId, "Please specify the report you need, for example: 'send sales report for this month' or 'generate inventory report'.");
+    const { reportType, period = 'this_month' } = data;
+    if (!reportType) {
+        await sendTextMessage(user.whatsappId, "Please specify which report you need, e.g., 'sales report for this month' or 'inventory report'.");
         return;
     }
-    const reportTypeLower = (reportType || data.reportType).toLowerCase();
-    await sendTextMessage(user.whatsappId, `Generating your ${reportTypeLower} report... Please wait a moment. 📄`);
+    
+    const reportTypeLower = reportType.toLowerCase();
+    const readablePeriodStr = period.replace('_', ' ');
+
+    await sendTextMessage(user.whatsappId, `Generating your ${reportTypeLower} report for ${readablePeriodStr}... Please wait. 📄`);
+    
     let pdfBuffer;
     let filename;
+    
     if (reportTypeLower === 'sales' || reportTypeLower === 'expenses') {
-        if (!period) {
-            await sendTextMessage(user.whatsappId, "Please specify a period for this report, like 'today' or 'this month'.");
-            return;
-        }
         const { startDate, endDate } = getDateRange(period);
         const readablePeriod = `For the Period: ${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`;
         const type = reportTypeLower === 'sales' ? 'SALE' : 'EXPENSE';
         const transactions = await getTransactionsByDateRange(user._id, type, startDate, endDate);
         if (transactions.length === 0) {
-            await sendTextMessage(user.whatsappId, `You have no ${reportTypeLower} data for ${period.replace('_', ' ')}.`);
+            await sendTextMessage(user.whatsappId, `You have no ${reportTypeLower} data for ${readablePeriodStr}.`);
             return;
         }
-        pdfBuffer = reportTypeLower === 'sales' ? await generateSalesReport(user, transactions, readablePeriod) : await generateExpenseReport(user, transactions, readablePeriod);
+        pdfBuffer = reportTypeLower === 'sales' 
+            ? await generateSalesReport(user, transactions, readablePeriod)
+            : await generateExpenseReport(user, transactions, readablePeriod);
         filename = `${reportType.charAt(0).toUpperCase() + reportType.slice(1)}_Report_${period}.pdf`;
     } else if (reportTypeLower === 'inventory') {
         const products = await getAllProducts(user._id);
@@ -184,10 +235,17 @@ async function executeGenerateReport(user, data) {
         }
         pdfBuffer = await generateInventoryReport(user, products);
         filename = 'Inventory_Report.pdf';
+    } else if (reportTypeLower === 'pnl') {
+        const { startDate, endDate } = getDateRange(period);
+        const readablePeriod = `For the Period: ${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`;
+        const pnlData = await _calculatePnLData(user._id, period);
+        pdfBuffer = await generatePnLReport(user, pnlData, readablePeriod);
+        filename = `P&L_Report_${period}.pdf`;
     } else {
-        await sendTextMessage(user.whatsappId, `Sorry, I can only generate sales, expense, and inventory reports for now.`);
+        await sendTextMessage(user.whatsappId, `Sorry, I can only generate sales, expense, inventory, and P&L reports for now.`);
         return;
     }
+
     if (pdfBuffer) {
         const mediaId = await uploadMedia(pdfBuffer, 'application/pdf');
         if (mediaId) {
@@ -283,8 +341,6 @@ async function executeUpdateTransaction(user, data) {
     if (!originalTx) {
         throw new Error("Could not find the original transaction to update.");
     }
-
-    // --- Step 1: Rollback ---
     logger.info(`Rolling back original transaction ${transactionId}`);
     if (originalTx.type === 'SALE') {
         const unitsSoldMatch = originalTx.description.match(/^(\d+)\s*x/);
@@ -305,27 +361,20 @@ async function executeUpdateTransaction(user, data) {
     } else if (originalTx.type === 'CUSTOMER_PAYMENT') {
         await updateBalanceOwed(originalTx.linkedCustomerId, originalTx.amount);
     }
-
-    // --- Step 2: Recalculate & Prepare Update Data ---
     let updateData = { ...changes };
     if (originalTx.type === 'SALE') {
         const unitsSoldMatch = originalTx.description.match(/^(\d+)\s*x/);
         const originalUnitsSold = unitsSoldMatch ? parseInt(unitsSoldMatch[1], 10) : 0;
         const originalAmountPerUnit = originalUnitsSold > 0 ? (originalTx.amount / originalUnitsSold) : 0;
-        
         const descParts = originalTx.description.split(' sold to ');
         const customerName = descParts[1];
         const productPart = descParts[0].split(' x ');
         const productName = productPart.slice(1).join(' x ');
-
         const newUnitsSold = changes.unitsSold ?? originalUnitsSold;
         const newAmountPerUnit = changes.amountPerUnit ?? originalAmountPerUnit;
-        
         updateData.amount = newUnitsSold * newAmountPerUnit;
         updateData.description = `${newUnitsSold} x ${productName} sold to ${customerName}`;
     }
-    
-    // --- Step 3: Save and Replay ---
     const updatedTx = await updateTransactionById(transactionId, updateData);
     logger.info(`Re-applying impact for updated transaction ${transactionId}`);
     if (updatedTx.type === 'SALE') {
@@ -347,6 +396,16 @@ async function executeUpdateTransaction(user, data) {
     } else if (updatedTx.type === 'CUSTOMER_PAYMENT') {
         await updateBalanceOwed(updatedTx.linkedCustomerId, -updatedTx.amount);
     }
-    
-    await sendTextMessage(user.whatsappId, "✅ The transaction has been successfully updated.");
+    const newFormattedAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(updatedTx.amount);
+    await sendTextMessage(user.whatsappId, `✅ The transaction has been successfully updated. The new total amount is ${newFormattedAmount}.`);
+}
+
+async function executeGetFinancialInsight(user, data) {
+    const period = data.period || 'this_month';
+    await sendTextMessage(user.whatsappId, `Analyzing your business performance for ${period.replace('_', ' ')}... 🧠`);
+
+    const pnlData = await _calculatePnLData(user._id, period);
+    const insight = await getFinancialInsight(pnlData, user.currency);
+
+    await sendTextMessage(user.whatsappId, insight);
 }

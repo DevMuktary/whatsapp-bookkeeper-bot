@@ -2,7 +2,7 @@ import { findOrCreateUser, updateUserState } from '../db/userService.js';
 import { findTransactionById } from '../db/transactionService.js';
 import { findCustomerById } from '../db/customerService.js';
 import { generateInvoice } from '../services/pdfService.js';
-import { uploadMedia, sendDocument, sendTextMessage, sendInteractiveButtons } from '../api/whatsappService.js';
+import { uploadMedia, sendDocument, sendTextMessage, sendInteractiveButtons, sendMainMenu } from '../api/whatsappService.js';
 import { USER_STATES, INTENTS } from '../utils/constants.js';
 import logger from '../utils/logger.js';
 import { executeTask } from './taskHandler.js';
@@ -70,19 +70,17 @@ async function handleButtonReply(user, buttonId, originalMessage) {
 
 async function handleListReply(user, listId, originalMessage) {
     switch (user.state) {
-        // --- NEW: Handle Main Menu list clicks from IDLE state ---
         case USER_STATES.IDLE:
             logger.info(`Handling main menu list click from IDLE state for user ${user.whatsappId}`);
             const mockTextMessage = {
                 from: originalMessage.from,
                 text: {
-                    body: listId // The list ID is the command text, e.g., "generate sales report"
+                    body: listId 
                 },
                 type: 'text'
             };
             await handleMessage(mockTextMessage);
             break;
-        // --- End of New Section ---
 
         case USER_STATES.AWAITING_TRANSACTION_SELECTION:
             await handleTransactionSelection(user, listId);
@@ -111,6 +109,7 @@ async function handleBulkProductConfirmation(user, buttonId) {
 }
 
 async function handleInvoiceConfirmation(user, buttonId) {
+    let success = false;
     try {
         if (buttonId === 'invoice_yes') {
             const { transactionId } = user.stateContext;
@@ -134,19 +133,21 @@ async function handleInvoiceConfirmation(user, buttonId) {
             if (mediaId) {
                 const filename = `Invoice_${transaction._id.toString().slice(-8).toUpperCase()}.pdf`;
                 await sendDocument(user.whatsappId, mediaId, filename, `Here is the invoice for your recent sale to ${customer.customerName}.`);
+                success = true;
             } else {
                 await sendTextMessage(user.whatsappId, "I created the invoice, but I had trouble uploading it. Please try asking for it again later.");
             }
         } else if (buttonId === 'invoice_no') {
             await sendTextMessage(user.whatsappId, "No problem! Let me know if you need anything else.");
-            await sendMainMenu(user.whatsappId); // Send main menu after they say no
+            success = true;
         }
     } catch (error) {
         logger.error(`Error handling invoice confirmation for user ${user.whatsappId}:`, error);
         await sendTextMessage(user.whatsappId, "I ran into a problem while creating the invoice. Please try again.");
     } finally {
-        if (buttonId === 'invoice_yes') {
-            await updateUserState(user.whatsappId, USER_STATES.IDLE, {});
+        await updateUserState(user.whatsappId, USER_STATES.IDLE, {});
+        if (success) {
+            await sendMainMenu(user.whatsappId);
         }
     }
 }
@@ -210,7 +211,7 @@ async function handleReconcileAction(user, buttonId) {
                 { id: 'edit_field:amount', title: 'Edit Amount' },
                 { id: 'edit_field:description', title: 'Edit Description' },
             ];
-        } else { // Customer Payment
+        } else { 
             buttons = [{ id: 'edit_field:amount', title: 'Edit Amount' }];
         }
         await updateUserState(user.whatsappId, USER_STATES.AWAITING_EDIT_FIELD_SELECTION, { transaction });

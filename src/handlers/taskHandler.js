@@ -1,6 +1,6 @@
 import { findOrCreateCustomer, updateBalanceOwed } from '../db/customerService.js';
 import { findOrCreateProduct, updateStock, upsertProduct, findProductByName, getAllProducts } from '../db/productService.js';
-import { createSaleTransaction, createExpenseTransaction, createCustomerPaymentTransaction, getSummaryByDateRange, getTransactionsByDateRange } from '../db/transactionService.js';
+import { createSaleTransaction, createExpenseTransaction, createCustomerPaymentTransaction, getSummaryByDateRange, getTransactionsByDateRange, findTransactionById, deleteTransactionById } from '../db/transactionService.js';
 import { createBankAccount, updateBankBalance, findBankAccountByName, getAllBankAccounts } from '../db/bankService.js';
 import { updateUserState } from '../db/userService.js';
 import { sendTextMessage, sendInteractiveButtons, uploadMedia, sendDocument } from '../api/whatsappService.js';
@@ -42,14 +42,19 @@ export async function executeTask(intent, user, data) {
             case INTENTS.CHECK_BANK_BALANCE:
                 await executeCheckBankBalance(user, data);
                 break;
+            case INTENTS.RECONCILE_TRANSACTION:
+                if (data.action === 'delete') {
+                    await executeDeleteTransaction(user, data);
+                }
+                break;
             default:
                 logger.warn(`No executor found for intent: ${intent}`);
-                await sendTextMessage(user.whatsappId, "I'm not sure how to process that right now, but I'm learning!");
+                await sendTextMessage(user.whatsappId, "I'm not sure how to process that right now.");
                 break;
         }
     } catch (error) {
         logger.error(`Error executing task for intent ${intent} and user ${user.whatsappId}:`, error);
-        await sendTextMessage(user.whatsappId, `I ran into an issue trying to complete that task: ${error.message} Please try again. 🛠️`);
+        await sendTextMessage(user.whatsappId, `I ran into an issue: ${error.message} Please try again. 🛠️`);
     } 
     
     if (user.state !== USER_STATES.IDLE) {
@@ -217,7 +222,6 @@ async function executeCheckBankBalance(user, data) {
     const format = (amount) => new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(amount);
 
     if (bankName) {
-        // User asked for a specific bank
         const bank = await findBankAccountByName(user._id, bankName);
         if (bank) {
             await sendTextMessage(user.whatsappId, `Your balance in *${bank.bankName}* is ${format(bank.balance)}.`);
@@ -225,7 +229,6 @@ async function executeCheckBankBalance(user, data) {
             await sendTextMessage(user.whatsappId, `I couldn't find a bank account named "${bankName}".`);
         }
     } else {
-        // User asked for all bank balances
         const banks = await getAllBankAccounts(user._id);
         if (banks.length === 0) {
             await sendTextMessage(user.whatsappId, "You haven't added any bank accounts yet. You can add one by saying 'add bank account'.");
@@ -236,5 +239,43 @@ async function executeCheckBankBalance(user, data) {
             summary += `*${bank.bankName}*: ${format(bank.balance)}\n`;
         });
         await sendTextMessage(user.whatsappId, summary);
+    }
+}
+
+async function executeDeleteTransaction(user, data) {
+    const { transactionId } = data;
+    
+    const transaction = await findTransactionById(transactionId);
+    if (!transaction || transaction.userId.toString() !== user._id.toString()) {
+        await sendTextMessage(user.whatsappId, "Transaction not found or you don't have permission to delete it.");
+        return;
+    }
+
+    if (transaction.type === 'SALE') {
+        const unitsSoldMatch = transaction.description.match(/^(\d+)\s*x/);
+        const unitsSold = unitsSoldMatch ? parseInt(unitsSoldMatch[1], 10) : 0;
+        if (transaction.linkedProductId && unitsSold > 0) {
+            await updateStock(transaction.linkedProductId, unitsSold, 'SALE_DELETED', transaction._id);
+        }
+        if (transaction.paymentMethod === 'CREDIT') {
+            await updateBalanceOwed(transaction.linkedCustomerId, -transaction.amount);
+        }
+        if (transaction.linkedBankId) {
+            await updateBankBalance(transaction.linkedBankId, -transaction.amount);
+        }
+    } else if (transaction.type === 'EXPENSE') {
+        if (transaction.linkedBankId) {
+            await updateBankBalance(transaction.linkedBankId, transaction.amount);
+        }
+    } else if (transaction.type === 'CUSTOMER_PAYMENT') {
+        await updateBalanceOwed(transaction.linkedCustomerId, transaction.amount);
+    }
+    
+    const deleted = await deleteTransactionById(transactionId);
+
+    if (deleted) {
+        await sendTextMessage(user.whatsappId, "✅ The transaction has been successfully deleted and all associated balances have been updated.");
+    } else {
+        await sendTextMessage(user.whatsappId, "There was an issue deleting the transaction record. Please check your recent transactions.");
     }
 }

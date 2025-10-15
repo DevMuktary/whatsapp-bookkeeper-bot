@@ -67,23 +67,19 @@ The possible intents are:
 - "${INTENTS.GET_FINANCIAL_SUMMARY}"
 - "${INTENTS.GENERATE_REPORT}"
 - "${INTENTS.LOG_CUSTOMER_PAYMENT}"
+- "${INTENTS.ADD_BANK_ACCOUNT}"
 
 Your JSON response format is: {"intent": "INTENT_NAME", "context": { ... extracted details ... }}.
 
 Extraction Rules:
-1.  For "${INTENTS.LOG_CUSTOMER_PAYMENT}", context must contain {"customerName": "...", "amount": ...}.
-2.  For "${INTENTS.CHECK_STOCK}", context must contain {"productName": "..."}.
-3.  For "${INTENTS.GET_FINANCIAL_SUMMARY}" or "${INTENTS.GENERATE_REPORT}", extract "period" and "reportType"/"metric".
-4.  For "${INTENTS.ADD_MULTIPLE_PRODUCTS}", context MUST contain a key "products" which is an ARRAY of product objects.
-5.  If the intent is not clear, respond with {"intent": null, "context": {}}.
+1.  For "${INTENTS.ADD_BANK_ACCOUNT}", context must contain {"bankName": "...", "openingBalance": ...}.
+2.  For "${INTENTS.LOG_CUSTOMER_PAYMENT}", context must contain {"customerName": "...", "amount": ...}.
+3.  For "${INTENTS.CHECK_STOCK}", context must contain {"productName": "..."}.
+4.  If the intent is not clear, respond with {"intent": null, "context": {}}.
 
-Example 1:
-User: "Mr. Ade paid me 5000"
-Your Response: {"intent": "${INTENTS.LOG_CUSTOMER_PAYMENT}", "context": {"customerName": "Mr. Ade", "amount": 5000}}
-
-Example 2:
-User: "send my sales report for this month"
-Your Response: {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "sales", "period": "this_month"}}
+Example:
+User: "add a new bank account called Zenith with 250k"
+Your Response: {"intent": "${INTENTS.ADD_BANK_ACCOUNT}", "context": {"bankName": "Zenith", "openingBalance": 250000}}
 `;
 
     const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: text }];
@@ -103,11 +99,10 @@ CONTEXT: ${existingDataInfo}
 
 CONVERSATION RULES:
 1.  Analyze the conversation history.
-2.  If the 'amountPerUnit' is missing from the user's message BUT an existing product price is available in the context, YOU MUST use the existing selling price for the 'amountPerUnit'. Do not ask the user for the price in this case.
-3.  Only ask for a price if the product is new (no existing product context is provided) OR if the user has not provided a price in their messages.
-4.  If any other required keys are missing, ask a clear, friendly question to get ONLY the missing information. Do NOT ask for multiple things at once.
-5.  Once ALL keys are filled (using user input and existing context), your FINAL response must be a JSON object containing ONLY {"status": "complete", "data": { ... the final sale object ... }}.
-6.  While you are still collecting information, your response must be a JSON object in the format {"status": "incomplete", "reply": "Your question or comment to the user."}.
+2.  If the 'amountPerUnit' is missing but an existing product price is available, YOU MUST use the existing selling price. Do not ask for the price.
+3.  Only ask for information that is truly missing.
+4.  Once ALL keys are filled, your FINAL response must be a JSON object containing ONLY {"status": "complete", "data": { ... the final sale object ... }}.
+5.  While collecting information, your response must be a JSON object in the format {"status": "incomplete", "reply": "Your question or comment to the user."}.
 `;
 
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
@@ -165,12 +160,32 @@ You must fill a JSON object with these exact keys: "customerName", "amount".
 CONTEXT: The user's default currency is ${userCurrency}.
 
 CONVERSATION RULES:
-1.  Analyze the conversation history.
-2.  You MUST assume all monetary values are in the user's default currency (${userCurrency}) unless they explicitly specify a different one (e.g., "500 dollars").
-3.  DO NOT ask the user to specify or confirm the currency.
-4.  If any required keys are missing, ask a clear question for the missing information.
-5.  Once ALL keys are filled, your FINAL response must be a JSON object with {"status": "complete", "data": {"customerName": "...", "amount": ...}}.
-6.  While collecting information, your response must be a JSON object with {"status": "incomplete", "reply": "Your question to the user."}.
+1.  You MUST assume all monetary values are in the user's default currency (${userCurrency}).
+2.  DO NOT ask the user to specify or confirm the currency.
+3.  If any required keys are missing, ask a clear question for the missing information.
+4.  Once ALL keys are filled, your FINAL response must be a JSON object with {"status": "complete", "data": {"customerName": "...", "amount": ...}}.
+5.  While collecting information, your response must be a JSON object with {"status": "incomplete", "reply": "Your question to the user."}.
+`;
+    const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
+    const responseJson = await callDeepSeek(messages, 0.5);
+    const response = JSON.parse(responseJson);
+    const updatedHistory = [...conversationHistory, { role: 'assistant', content: responseJson }];
+
+    return { ...response, memory: updatedHistory };
+}
+
+export async function gatherBankAccountDetails(conversationHistory, userCurrency) {
+    const systemPrompt = `You are a friendly assistant helping a user set up a new bank account in their books.
+You must fill a JSON object with these exact keys: "bankName", "openingBalance".
+
+CONTEXT: The user's default currency is ${userCurrency}.
+
+CONVERSATION RULES:
+1.  You MUST assume the openingBalance is in the user's default currency (${userCurrency}).
+2.  DO NOT ask for the currency.
+3.  If any required keys are missing, ask a clear question for the missing information.
+4.  Once ALL keys are filled, your FINAL response must be a JSON object with {"status": "complete", "data": {"bankName": "...", "openingBalance": ...}}.
+5.  While collecting information, your response must be a JSON object with {"status": "incomplete", "reply": "Your question to the user."}.
 `;
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     const responseJson = await callDeepSeek(messages, 0.5);

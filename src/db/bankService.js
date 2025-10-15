@@ -51,6 +51,22 @@ export async function getAllBankAccounts(userId) {
 }
 
 /**
+ * Finds a single bank account by name for a specific user.
+ * @param {ObjectId} userId The user's _id.
+ * @param {string} bankName The name of the bank to find.
+ * @returns {Promise<object|null>} The bank account document or null if not found.
+ */
+export async function findBankAccountByName(userId, bankName) {
+    try {
+        const bank = await banksCollection().findOne({ userId, bankName: { $regex: new RegExp(`^${bankName}$`, 'i') } });
+        return bank;
+    } catch (error) {
+        logger.error(`Error finding bank account by name for user ${userId}:`, error);
+        throw new Error('Could not retrieve bank account.');
+    }
+}
+
+/**
  * Updates the balance of a specific bank account.
  * @param {ObjectId} bankId The _id of the bank account.
  * @param {number} amountChange The amount to add (positive for income) or subtract (negative for expense).

@@ -61,28 +61,29 @@ export async function getIntent(text) {
 The possible intents are:
 - "${INTENTS.LOG_SALE}"
 - "${INTENTS.LOG_EXPENSE}"
-- "${INTENTS.ADD_PRODUCT}" (for a single product)
-- "${INTENTS.ADD_MULTIPLE_PRODUCTS}" (if two or more products are mentioned)
+- "${INTENTS.ADD_PRODUCT}"
+- "${INTENTS.ADD_MULTIPLE_PRODUCTS}"
 - "${INTENTS.CHECK_STOCK}"
 - "${INTENTS.GET_FINANCIAL_SUMMARY}"
 - "${INTENTS.GENERATE_REPORT}"
+- "${INTENTS.LOG_CUSTOMER_PAYMENT}"
 
 Your JSON response format is: {"intent": "INTENT_NAME", "context": { ... extracted details ... }}.
 
 Extraction Rules:
-1.  For "${INTENTS.CHECK_STOCK}", context must contain {"productName": "..."}.
-2.  For "${INTENTS.GET_FINANCIAL_SUMMARY}", context must contain {"metric": "...", "period": "..."}. 'metric' is "sales" or "expenses". 'period' is one of ["today", "this_week", "this_month", "last_month"].
-3.  For "${INTENTS.GENERATE_REPORT}", context must contain {"reportType": "...", "period": "..."}. 'reportType' is "sales", "expenses", or "inventory". 'period' is one of ["today", "this_week", "this_month", "last_month"].
+1.  For "${INTENTS.LOG_CUSTOMER_PAYMENT}", context must contain {"customerName": "...", "amount": ...}.
+2.  For "${INTENTS.CHECK_STOCK}", context must contain {"productName": "..."}.
+3.  For "${INTENTS.GET_FINANCIAL_SUMMARY}" or "${INTENTS.GENERATE_REPORT}", extract "period" and "reportType"/"metric".
 4.  For "${INTENTS.ADD_MULTIPLE_PRODUCTS}", context MUST contain a key "products" which is an ARRAY of product objects.
-5.  If the user's message is ambiguous, conversational, or does not match any intent, respond with {"intent": null, "context": {}}.
+5.  If the intent is not clear, respond with {"intent": null, "context": {}}.
 
 Example 1:
-User: "send my sales report for this month"
-Your Response: {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "sales", "period": "this_month"}}
+User: "Mr. Ade paid me 5000"
+Your Response: {"intent": "${INTENTS.LOG_CUSTOMER_PAYMENT}", "context": {"customerName": "Mr. Ade", "amount": 5000}}
 
 Example 2:
-User: "what are my total sales for this month"
-Your Response: {"intent": "${INTENTS.GET_FINANCIAL_SUMMARY}", "context": {"metric": "sales", "period": "this_month"}}
+User: "send my sales report for this month"
+Your Response: {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "sales", "period": "this_month"}}
 `;
 
     const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: text }];
@@ -95,12 +96,9 @@ export async function gatherSaleDetails(conversationHistory) {
 You must fill a JSON object with these exact keys: "productName", "unitsSold", "amountPerUnit", "customerName", "saleType". The 'saleType' must be one of ['cash', 'credit', 'bank'].
 
 CONVERSATION RULES:
-1.  Analyze the conversation history provided by the user.
-2.  If any of the required keys are missing, ask a clear, friendly question to get ONLY the missing information. Do NOT ask for multiple things at once.
-3.  Be conversational. For example, if a user provides a product name, acknowledge it before asking the next question.
-4.  Once ALL keys are filled, your FINAL response must be a JSON object containing ONLY {"status": "complete", "data": { ... the final sale object ... }}.
-5.  While you are still collecting information, your response must be a JSON object in the format {"status": "incomplete", "reply": "Your question or comment to the user."}.
-`;
+1.  Analyze the conversation history. If any keys are missing, ask a clear, friendly question for ONLY the missing information.
+2.  Once ALL keys are filled, your FINAL response must be a JSON object containing ONLY {"status": "complete", "data": { ... the final sale object ... }}.
+3.  While collecting information, your response must be a JSON object in the format {"status": "incomplete", "reply": "Your question or comment to the user."}.`;
 
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     const responseJson = await callDeepSeek(messages, 0.5); 
@@ -111,15 +109,12 @@ CONVERSATION RULES:
 }
 
 export async function gatherExpenseDetails(conversationHistory) {
-    const systemPrompt = `You are a friendly and efficient bookkeeping assistant named Fynax. Your current goal is to collect all the necessary details to log an expense.
-You must fill a JSON object with these exact keys: "category", "amount", "description". The 'description' should be a brief summary of the expense.
+    const systemPrompt = `You are a friendly and efficient bookkeeping assistant named Fynax. Your goal is to collect details to log an expense. You must fill a JSON object with these exact keys: "category", "amount", "description".
 
 CONVERSATION RULES:
-1.  Analyze the conversation history.
-2.  If any required keys are missing, ask a clear, friendly question for the missing information.
-3.  Once ALL keys are filled, your FINAL response must be a JSON object containing ONLY {"status": "complete", "data": { ... the final expense object ... }}.
-4.  While collecting information, your response must be a JSON object in the format {"status": "incomplete", "reply": "Your question to the user."}.
-`;
+1.  Analyze the conversation history. If any keys are missing, ask a clear, friendly question for the missing information.
+2.  Once ALL keys are filled, your FINAL response must be a JSON object containing ONLY {"status": "complete", "data": { ... the final expense object ... }}.
+3.  While collecting information, your response must be a JSON object in the format {"status": "incomplete", "reply": "Your question to the user."}.`;
 
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     const responseJson = await callDeepSeek(messages, 0.5);
@@ -134,20 +129,34 @@ export async function gatherProductDetails(conversationHistory, existingProduct 
         ? `This is an existing product. Its current cost price is ${existingProduct.costPrice} and selling price is ${existingProduct.sellingPrice}.`
         : 'This is a brand new product.';
 
-    const systemPrompt = `You are a friendly and efficient inventory manager named Fynax. Your goal is to collect details to add or update a product.
-You must fill a JSON object with these exact keys: "productName", "quantityAdded", "costPrice", "sellingPrice".
+    const systemPrompt = `You are a friendly inventory manager named Fynax. Your goal is to collect details to add or update a product. You must fill a JSON object with keys: "productName", "quantityAdded", "costPrice", "sellingPrice".
 
 CONTEXT: ${existingDataInfo}
 
 CONVERSATION RULES:
 1.  Analyze the conversation history.
-2.  If the user says the price is the "same as before", "unchanged", or similar, YOU MUST use the existing product data for the price.
-3.  Only ask for information that is truly missing. For example, if you already have the productName and quantityAdded, your next question should be about the costPrice.
-4.  If all required information is already present in the conversation, immediately proceed to the 'complete' status.
-5.  Once ALL keys are filled, your FINAL response must be a JSON object containing ONLY {"status": "complete", "data": { ... the final product object ... }}.
-6.  While collecting information, your response must be a JSON object in the format {"status": "incomplete", "reply": "Your question to the user."}.
-`;
+2.  If the user says the price is the "same as before", you MUST use the existing product data.
+3.  Only ask for information that is truly missing.
+4.  Once ALL keys are filled, your FINAL response must be a JSON object containing ONLY {"status": "complete", "data": { ... the final product object ... }}.
+5.  While collecting information, your response must be a JSON object in the format {"status": "incomplete", "reply": "Your question to the user."}.`;
 
+    const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
+    const responseJson = await callDeepSeek(messages, 0.5);
+    const response = JSON.parse(responseJson);
+    const updatedHistory = [...conversationHistory, { role: 'assistant', content: responseJson }];
+
+    return { ...response, memory: updatedHistory };
+}
+
+export async function gatherPaymentDetails(conversationHistory) {
+    const systemPrompt = `You are a friendly and efficient bookkeeping assistant. Your goal is to log a payment received from a customer.
+You must fill a JSON object with these exact keys: "customerName", "amount".
+
+CONVERSATION RULES:
+1.  Analyze the conversation history. If any required keys are missing, ask a clear question for the missing information.
+2.  Once ALL keys are filled, your FINAL response must be a JSON object with {"status": "complete", "data": {"customerName": "...", "amount": ...}}.
+3.  While collecting information, your response must be a JSON object with {"status": "incomplete", "reply": "Your question to the user."}.
+`;
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     const responseJson = await callDeepSeek(messages, 0.5);
     const response = JSON.parse(responseJson);

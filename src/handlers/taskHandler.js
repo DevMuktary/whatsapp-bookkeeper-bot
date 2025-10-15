@@ -1,6 +1,6 @@
 import { findOrCreateCustomer, updateBalanceOwed } from '../db/customerService.js';
 import { findOrCreateProduct, updateStock, upsertProduct, findProductByName, getAllProducts } from '../db/productService.js';
-import { createSaleTransaction, createExpenseTransaction, createCustomerPaymentTransaction, getSummaryByDateRange, getTransactionsByDateRange, findTransactionById, deleteTransactionById } from '../db/transactionService.js';
+import { createSaleTransaction, createExpenseTransaction, createCustomerPaymentTransaction, getSummaryByDateRange, getTransactionsByDateRange, findTransactionById, deleteTransactionById, updateTransactionById } from '../db/transactionService.js';
 import { createBankAccount, updateBankBalance, findBankAccountByName, getAllBankAccounts } from '../db/bankService.js';
 import { updateUserState } from '../db/userService.js';
 import { sendTextMessage, sendInteractiveButtons, uploadMedia, sendDocument } from '../api/whatsappService.js';
@@ -45,6 +45,8 @@ export async function executeTask(intent, user, data) {
             case INTENTS.RECONCILE_TRANSACTION:
                 if (data.action === 'delete') {
                     await executeDeleteTransaction(user, data);
+                } else if (data.action === 'edit') {
+                    await executeUpdateTransaction(user, data);
                 }
                 break;
             default:
@@ -220,7 +222,6 @@ async function executeAddBankAccount(user, data) {
 async function executeCheckBankBalance(user, data) {
     const { bankName } = data;
     const format = (amount) => new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(amount);
-
     if (bankName) {
         const bank = await findBankAccountByName(user._id, bankName);
         if (bank) {
@@ -244,13 +245,11 @@ async function executeCheckBankBalance(user, data) {
 
 async function executeDeleteTransaction(user, data) {
     const { transactionId } = data;
-    
     const transaction = await findTransactionById(transactionId);
     if (!transaction || transaction.userId.toString() !== user._id.toString()) {
         await sendTextMessage(user.whatsappId, "Transaction not found or you don't have permission to delete it.");
         return;
     }
-
     if (transaction.type === 'SALE') {
         const unitsSoldMatch = transaction.description.match(/^(\d+)\s*x/);
         const unitsSold = unitsSoldMatch ? parseInt(unitsSoldMatch[1], 10) : 0;
@@ -270,12 +269,62 @@ async function executeDeleteTransaction(user, data) {
     } else if (transaction.type === 'CUSTOMER_PAYMENT') {
         await updateBalanceOwed(transaction.linkedCustomerId, transaction.amount);
     }
-    
     const deleted = await deleteTransactionById(transactionId);
-
     if (deleted) {
         await sendTextMessage(user.whatsappId, "✅ The transaction has been successfully deleted and all associated balances have been updated.");
     } else {
         await sendTextMessage(user.whatsappId, "There was an issue deleting the transaction record. Please check your recent transactions.");
     }
+}
+
+async function executeUpdateTransaction(user, data) {
+    const { transactionId, changes } = data;
+    const originalTx = await findTransactionById(transactionId);
+    if (!originalTx) {
+        throw new Error("Could not find the original transaction to update.");
+    }
+    logger.info(`Rolling back original transaction ${transactionId}`);
+    if (originalTx.type === 'SALE') {
+        const unitsSoldMatch = originalTx.description.match(/^(\d+)\s*x/);
+        const unitsSold = unitsSoldMatch ? parseInt(unitsSoldMatch[1], 10) : 0;
+        if (originalTx.linkedProductId && unitsSold > 0) {
+            await updateStock(originalTx.linkedProductId, unitsSold, 'SALE_EDIT_ROLLBACK');
+        }
+        if (originalTx.paymentMethod === 'CREDIT') {
+            await updateBalanceOwed(originalTx.linkedCustomerId, -originalTx.amount);
+        }
+        if (originalTx.linkedBankId) {
+            await updateBankBalance(originalTx.linkedBankId, -originalTx.amount);
+        }
+    } else if (originalTx.type === 'EXPENSE') {
+        if (originalTx.linkedBankId) {
+            await updateBankBalance(originalTx.linkedBankId, originalTx.amount);
+        }
+    } else if (originalTx.type === 'CUSTOMER_PAYMENT') {
+        await updateBalanceOwed(originalTx.linkedCustomerId, originalTx.amount);
+    }
+    const updatedTxData = { ...originalTx, ...changes, updatedAt: new Date() };
+    const updatedTx = await updateTransactionById(transactionId, updatedTxData);
+    logger.info(`Transaction ${transactionId} updated in DB.`);
+    logger.info(`Re-applying impact for updated transaction ${transactionId}`);
+    if (updatedTx.type === 'SALE') {
+        const unitsSoldMatch = updatedTx.description.match(/^(\d+)\s*x/);
+        const unitsSold = unitsSoldMatch ? parseInt(unitsSoldMatch[1], 10) : 0;
+        if (updatedTx.linkedProductId && unitsSold > 0) {
+            await updateStock(updatedTx.linkedProductId, -unitsSold, 'SALE_EDIT_REAPPLY');
+        }
+        if (updatedTx.paymentMethod === 'CREDIT') {
+            await updateBalanceOwed(updatedTx.linkedCustomerId, updatedTx.amount);
+        }
+        if (updatedTx.linkedBankId) {
+            await updateBankBalance(updatedTx.linkedBankId, updatedTx.amount);
+        }
+    } else if (updatedTx.type === 'EXPENSE') {
+        if (updatedTx.linkedBankId) {
+            await updateBankBalance(updatedTx.linkedBankId, -updatedTx.amount);
+        }
+    } else if (updatedTx.type === 'CUSTOMER_PAYMENT') {
+        await updateBalanceOwed(updatedTx.linkedCustomerId, -updatedTx.amount);
+    }
+    await sendTextMessage(user.whatsappId, "✅ The transaction has been successfully updated.");
 }

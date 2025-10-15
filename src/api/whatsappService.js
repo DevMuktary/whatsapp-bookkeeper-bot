@@ -63,7 +63,7 @@ export async function sendDocument(to, mediaId, filename, caption) {
 }
 
 export async function sendInteractiveButtons(to, bodyText, buttons) {
-  const formattedButtons = buttons.map(btn => ({
+  const formattedButtons = buttons.slice(0, 3).map(btn => ({ // WhatsApp allows max 3 buttons
     type: 'reply',
     reply: { id: btn.id, title: btn.title }
   }));
@@ -105,44 +105,55 @@ export async function sendInteractiveList(to, headerText, bodyText, buttonText, 
 }
 
 /**
- * Sends a structured main menu of options to the user.
+ * Sends a structured main menu of options to the user using an interactive list.
  * @param {string} to The recipient's WhatsApp ID.
  */
 export async function sendMainMenu(to) {
     const sections = [
         {
-            title: "📊 Reporting & Insights",
+            title: "Main Options",
             rows: [
-                { id: 'generate sales report', title: 'Sales Report', description: 'Get a PDF report of your sales.' },
-                { id: 'generate expense report', title: 'Expense Report', description: 'Get a PDF report of your expenses.' },
-                { id: 'generate inventory report', title: 'Inventory Report', description: 'Get a PDF of your current stock.' },
-                { id: 'generate p&l report', title: 'Profit & Loss Report', description: 'See your revenue, costs, and net profit.' },
-                { id: 'get financial insight', title: 'Get Financial Insight', description: 'Receive an AI-powered tip for your business.' }
-            ]
-        },
-        {
-            title: "✍️ Data Entry",
-            rows: [
-                { id: 'log a sale', title: 'Log a Sale', description: 'Record a new sale.' },
-                { id: 'log an expense', title: 'Log an Expense', description: 'Record a new business expense.' },
-                { id: 'add a new product', title: 'Add a Product', description: 'Add a single new item to inventory.' },
-                { id: 'log a customer payment', title: 'Log Customer Payment', description: 'Record a payment from a customer.' },
-            ]
-        },
-        {
-            title: "⚙️ Management",
-            rows: [
-                { id: 'edit a transaction', title: 'Edit/Delete Transaction', description: 'Correct a mistake in your records.' },
-                { id: 'add a bank account', title: 'Add a Bank Account', description: 'Set up a new bank account.' },
-                { id: 'check bank balance', title: 'Check Bank Balance', description: 'View current account balances.' },
+                { id: 'log a sale', title: '✍️ Log a Sale', description: 'Record a new sale transaction.' },
+                { id: 'log an expense', title: '💸 Log an Expense', description: 'Record a new business expense.' },
+                { id: 'add a product', title: '📦 Add/Restock Product', description: 'Add a new item or update stock.' },
+                { id: 'generate report', title: '📊 Generate a Report', description: 'Get a PDF report for your business.' },
+                { id: 'get financial insight', title: '💡 Get Financial Insight', description: 'Receive an AI-powered tip.' },
+                { id: 'edit a transaction', title: '✏️ Edit/Delete a Record', description: 'Correct a previous entry.' },
+                { id: 'log a customer payment', title: '💰 Log Customer Payment', description: 'Record a payment from a customer.' },
+                { id: 'manage bank accounts', title: '🏦 Manage Bank Accounts', description: 'Add or check bank balances.' },
             ]
         }
     ];
 
     await sendInteractiveList(to,
         'Main Menu',
-        'What would you like to do next? You can select an option from the menu or type your request.',
+        'Hello! What would you like to do? You can select an option from the menu or just type your request.',
         'Show Menu',
+        sections
+    );
+}
+
+/**
+ * Sends a menu of available report types.
+ * @param {string} to The recipient's WhatsApp ID.
+ */
+export async function sendReportMenu(to) {
+    const sections = [
+        {
+            title: "Available Reports",
+            rows: [
+                { id: 'generate sales report', title: 'Sales Report', description: 'Get a PDF of all sales.' },
+                { id: 'generate expense report', title: 'Expense Report', description: 'Get a PDF of all expenses.' },
+                { id: 'generate p&l report', title: 'Profit & Loss Report', description: 'See your revenue, costs, and profit.' },
+                { id: 'generate inventory report', title: 'Inventory Report', description: 'Get a PDF of your current stock.' },
+            ]
+        }
+    ];
+
+    await sendInteractiveList(to,
+        'Generate Report',
+        'Which report would you like to generate? Please choose from the list.',
+        'Select Report',
         sections
     );
 }

@@ -1,7 +1,7 @@
 import { findOrCreateCustomer, updateBalanceOwed } from '../db/customerService.js';
 import { findOrCreateProduct, updateStock, upsertProduct, findProductByName, getAllProducts } from '../db/productService.js';
 import { createSaleTransaction, createExpenseTransaction, createCustomerPaymentTransaction, getSummaryByDateRange, getTransactionsByDateRange } from '../db/transactionService.js';
-import { createBankAccount } from '../db/bankService.js';
+import { createBankAccount, updateBankBalance } from '../db/bankService.js';
 import { updateUserState } from '../db/userService.js';
 import { sendTextMessage, sendInteractiveButtons, uploadMedia, sendDocument } from '../api/whatsappService.js';
 import { generateSalesReport, generateExpenseReport, generateInventoryReport } from '../services/pdfService.js';
@@ -14,6 +14,7 @@ export async function executeTask(intent, user, data) {
         switch (intent) {
             case INTENTS.LOG_SALE:
                 await executeLogSale(user, data);
+                // State is managed by executeLogSale for the invoice flow
                 return; 
             case INTENTS.LOG_EXPENSE:
                 await executeLogExpense(user, data);
@@ -49,13 +50,14 @@ export async function executeTask(intent, user, data) {
         await sendTextMessage(user.whatsappId, `I ran into an issue trying to complete that task: ${error.message} Please try again. 🛠️`);
     } 
     
+    // Most tasks reset state to IDLE. Sales is a special case.
     if (user.state !== USER_STATES.IDLE) {
         await updateUserState(user.whatsappId, USER_STATES.IDLE, {});
     }
 }
 
 async function executeLogSale(user, data) {
-    const { productName, unitsSold, amountPerUnit, customerName, saleType } = data;
+    const { productName, unitsSold, amountPerUnit, customerName, saleType, linkedBankId } = data;
     const totalAmount = unitsSold * amountPerUnit;
 
     const customer = await findOrCreateCustomer(user._id, customerName);
@@ -69,6 +71,7 @@ async function executeLogSale(user, data) {
         description,
         linkedProductId: product._id,
         linkedCustomerId: customer._id,
+        linkedBankId,
         paymentMethod: saleType,
     };
     const transaction = await createSaleTransaction(transactionData);
@@ -77,6 +80,8 @@ async function executeLogSale(user, data) {
 
     if (saleType.toLowerCase() === 'credit') {
         await updateBalanceOwed(customer._id, totalAmount);
+    } else if (linkedBankId) {
+        await updateBankBalance(linkedBankId, totalAmount);
     }
 
     const formattedAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(totalAmount);
@@ -91,7 +96,7 @@ async function executeLogSale(user, data) {
 }
 
 async function executeLogExpense(user, data) {
-    const { category, amount, description } = data;
+    const { category, amount, description, linkedBankId } = data;
 
     const transactionData = {
         userId: user._id,
@@ -99,8 +104,13 @@ async function executeLogExpense(user, data) {
         date: new Date(),
         description,
         category,
+        linkedBankId,
     };
     await createExpenseTransaction(transactionData);
+    
+    if (linkedBankId) {
+        await updateBankBalance(linkedBankId, -Number(amount));
+    }
     
     const formattedAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(amount);
     await sendTextMessage(user.whatsappId, `✅ Expense logged: ${formattedAmount} for "${description}".`);

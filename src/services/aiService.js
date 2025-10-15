@@ -5,14 +5,18 @@ import { INTENTS } from '../utils/constants.js';
 
 const DEEPSEEK_API_URL = 'https://api.deepseek.com/chat/completions';
 
-async function callDeepSeek(messages, temperature = 0.1) {
+async function callDeepSeek(messages, temperature = 0.1, enforceJson = true) {
   try {
-    const response = await axios.post(DEEPSEEK_API_URL, {
+    const payload = {
       model: 'deepseek-chat',
       messages: messages,
       temperature: temperature,
-      response_format: { type: "json_object" }
-    }, {
+    };
+    if (enforceJson) {
+        payload.response_format = { type: "json_object" };
+    }
+
+    const response = await axios.post(DEEPSEEK_API_URL, payload, {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${config.deepseek.apiKey}`
@@ -56,42 +60,69 @@ export async function extractCurrency(text) {
 }
 
 export async function getIntent(text) {
-    const systemPrompt = `You are an advanced intent classification system for a bookkeeping app. You must respond ONLY with a JSON object.
+    const systemPrompt = `You are an advanced intent classification system. Respond ONLY with a JSON object.
 
 The possible intents are:
+- "${INTENTS.RECONCILE_TRANSACTION}"
+- "${INTENTS.GET_FINANCIAL_INSIGHT}"
+- "${INTENTS.GENERATE_REPORT}"
+- "${INTENTS.GET_FINANCIAL_SUMMARY}"
+- "${INTENTS.CHECK_BANK_BALANCE}"
+- "${INTENTS.CHECK_STOCK}"
 - "${INTENTS.LOG_SALE}"
 - "${INTENTS.LOG_EXPENSE}"
 - "${INTENTS.ADD_PRODUCT}"
 - "${INTENTS.ADD_MULTIPLE_PRODUCTS}"
-- "${INTENTS.CHECK_STOCK}"
-- "${INTENTS.GET_FINANCIAL_SUMMARY}"
-- "${INTENTS.GENERATE_REPORT}"
 - "${INTENTS.LOG_CUSTOMER_PAYMENT}"
 - "${INTENTS.ADD_BANK_ACCOUNT}"
-- "${INTENTS.CHECK_BANK_BALANCE}"
-- "${INTENTS.RECONCILE_TRANSACTION}"
 
-Your JSON response format is: {"intent": "INTENT_NAME", "context": {}}.
 
 Extraction Rules & Examples:
-1.  **Reconciliation:** If the user says "I made a mistake", "delete a transaction", "edit a sale", "correct a record", the intent is "${INTENTS.RECONCILE_TRANSACTION}".
-    - User: "I need to correct my last entry" -> {"intent": "${INTENTS.RECONCILE_TRANSACTION}", "context": {}}
-
-2.  **Reports:** For "${INTENTS.GENERATE_REPORT}", extract "reportType" and "period". 'reportType' can be "sales", "expenses", or "inventory". 'period' can be "today", "this_week", "this_month", "last_month".
-    - User: "my sales report" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "sales"}}
+1.  **Insight:** If user asks "how is my business doing?", "give me advice", "financial insight", the intent is "${INTENTS.GET_FINANCIAL_INSIGHT}".
+2.  **Reconciliation:** If user says "I made a mistake", "delete transaction", "edit a sale", the intent is "${INTENTS.RECONCILE_TRANSACTION}".
+3.  **Reports:** For "${INTENTS.GENERATE_REPORT}", extract "reportType" and "period". 'reportType' can be "sales", "expenses", "inventory", or "pnl".
+    - User: "my p&l report" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "pnl"}}
     - User: "sales report for this month" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "sales", "period": "this_month"}}
     - User: "generate sales report for this month" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "sales", "period": "this_month"}}
     - User: "send my inventory report" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "inventory"}}
 
-3.  **Summaries:** For "${INTENTS.GET_FINANCIAL_SUMMARY}", extract "metric" and "period".
+4.  **Summaries:** For "${INTENTS.GET_FINANCIAL_SUMMARY}", extract "metric" and "period".
     - User: "what were my expenses this week" -> {"intent": "${INTENTS.GET_FINANCIAL_SUMMARY}", "context": {"metric": "expenses", "period": "this_week"}}
 
-4.  If the intent is not clear, respond with {"intent": null, "context": {}}.
+5.  If the intent is not clear, respond with {"intent": null, "context": {}}.
 `;
 
     const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: text }];
     const responseJson = await callDeepSeek(messages);
     return JSON.parse(responseJson);
+}
+
+export async function getFinancialInsight(pnlData, currency) {
+    const { totalSales, totalCogs, grossProfit, totalExpenses, netProfit, topExpenses } = pnlData;
+    const format = (amount) => new Intl.NumberFormat('en-US').format(amount);
+
+    const systemPrompt = `You are Fynax, a friendly and encouraging financial advisor for small business owners in Nigeria. Your goal is to provide ONE clear, simple, and actionable insight based on the financial data provided. Speak in plain, encouraging language. Avoid jargon. Start your response with a friendly greeting. Your entire response must be a single paragraph.
+
+Data for this period:
+- Total Sales (Revenue): ${currency} ${format(totalSales)}
+- Cost of Goods Sold (COGS): ${currency} ${format(totalCogs)}
+- Gross Profit: ${currency} ${format(grossProfit)}
+- Total Expenses: ${currency} ${format(totalExpenses)}
+- **Net Profit:** ${currency} ${format(netProfit)}
+- Top 3 Expenses: ${topExpenses.map(e => `${e._id}: ${currency} ${format(e.total)}`).join(', ')}
+
+Analyze this data and provide ONE insight. Here are some patterns to look for:
+- If Net Profit is positive: Start by congratulating them.
+- If Net Profit is negative: Be encouraging. Say something like "Building a business takes time."
+- If COGS is very high compared to Sales: Suggest they might want to look at their supplier costs or pricing strategy for their products.
+- If one specific expense category is much higher than others: Gently point it out and suggest it's an area to watch.
+- If sales are good but net profit is low due to high expenses: Commend their sales effort and suggest reviewing operational costs.
+- If there is no data: Just say you need more data to provide an insight.
+`;
+
+    const messages = [{ role: 'system', content: systemPrompt }];
+    const insight = await callDeepSeek(messages, 0.7, false); 
+    return insight;
 }
 
 export async function gatherSaleDetails(conversationHistory, existingProduct = null) {

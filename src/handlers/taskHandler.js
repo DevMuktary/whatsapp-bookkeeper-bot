@@ -1,8 +1,9 @@
 import { findOrCreateCustomer, updateBalanceOwed } from '../db/customerService.js';
 import { findOrCreateProduct, updateStock, upsertProduct, findProductByName } from '../db/productService.js';
-import { createSaleTransaction, createExpenseTransaction, getSummaryByDateRange } from '../db/transactionService.js';
+import { createSaleTransaction, createExpenseTransaction, getSummaryByDateRange, getTransactionsByDateRange } from '../db/transactionService.js';
 import { updateUserState } from '../db/userService.js';
-import { sendTextMessage } from '../api/whatsappService.js';
+import { sendTextMessage, uploadMedia, sendDocument } from '../api/whatsappService.js';
+import { generateSalesReport } from '../services/pdfService.js';
 import { INTENTS, USER_STATES } from '../utils/constants.js';
 import { getDateRange } from '../utils/dateUtils.js';
 import logger from '../utils/logger.js';
@@ -28,6 +29,9 @@ export async function executeTask(intent, user, data) {
             case INTENTS.GET_FINANCIAL_SUMMARY:
                 await executeGetFinancialSummary(user, data);
                 break;
+            case INTENTS.GENERATE_REPORT:
+                await executeGenerateReport(user, data);
+                break;
             default:
                 logger.warn(`No executor found for intent: ${intent}`);
                 await sendTextMessage(user.whatsappId, "I'm not sure how to process that right now, but I'm learning!");
@@ -37,8 +41,6 @@ export async function executeTask(intent, user, data) {
         logger.error(`Error executing task for intent ${intent} and user ${user.whatsappId}:`, error);
         await sendTextMessage(user.whatsappId, "I ran into an issue trying to complete that task. Please try again. 🛠️");
     } finally {
-        // Only reset state if it's not already IDLE.
-        // This handles resetting conversational states without affecting direct-execution tasks.
         if (user.state !== USER_STATES.IDLE) {
             await updateUserState(user.whatsappId, USER_STATES.IDLE, {});
         }
@@ -166,4 +168,43 @@ async function executeGetFinancialSummary(user, data) {
     const readablePeriod = period.replace('_', ' ');
 
     await sendTextMessage(user.whatsappId, `Your total ${metric} for ${readablePeriod} is ${formattedAmount}. 📊`);
+}
+
+async function executeGenerateReport(user, data) {
+    const { reportType, period } = data;
+    if (!reportType || !period) {
+        await sendTextMessage(user.whatsappId, "Please specify the report you need, for example: 'send sales report for this month'.");
+        return;
+    }
+
+    await sendTextMessage(user.whatsappId, `Generating your ${reportType} report for ${period.replace('_', ' ')}... Please wait a moment. 📄`);
+    
+    const { startDate, endDate } = getDateRange(period);
+    const readablePeriod = `For the Period: ${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`;
+
+    let pdfBuffer;
+    let filename;
+    
+    if (reportType.toLowerCase() === 'sales') {
+        const transactions = await getTransactionsByDateRange(user._id, 'SALE', startDate, endDate);
+        if (transactions.length === 0) {
+            await sendTextMessage(user.whatsappId, `You have no sales data for ${period.replace('_', ' ')}.`);
+            return;
+        }
+        pdfBuffer = await generateSalesReport(user, transactions, readablePeriod);
+        filename = `Sales_Report_${period}.pdf`;
+    } else {
+        // We will add 'expenses' and 'inventory' report types here later
+        await sendTextMessage(user.whatsappId, `Sorry, I can only generate sales reports for now. More report types are coming soon!`);
+        return;
+    }
+
+    if (pdfBuffer) {
+        const mediaId = await uploadMedia(pdfBuffer, 'application/pdf');
+        if (mediaId) {
+            await sendDocument(user.whatsappId, mediaId, filename, `Here is your ${reportType} report.`);
+        } else {
+            await sendTextMessage(user.whatsappId, "I couldn't send the report. There was an issue with the file upload. Please try again.");
+        }
+    }
 }

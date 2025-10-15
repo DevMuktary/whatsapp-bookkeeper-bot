@@ -68,18 +68,23 @@ The possible intents are:
 - "${INTENTS.GENERATE_REPORT}"
 - "${INTENTS.LOG_CUSTOMER_PAYMENT}"
 - "${INTENTS.ADD_BANK_ACCOUNT}"
+- "${INTENTS.CHECK_BANK_BALANCE}"
 
 Your JSON response format is: {"intent": "INTENT_NAME", "context": { ... extracted details ... }}.
 
 Extraction Rules:
-1.  For "${INTENTS.ADD_BANK_ACCOUNT}", context must contain {"bankName": "...", "openingBalance": ...}.
-2.  For "${INTENTS.LOG_CUSTOMER_PAYMENT}", context must contain {"customerName": "...", "amount": ...}.
-3.  For "${INTENTS.CHECK_STOCK}", context must contain {"productName": "..."}.
+1.  For "${INTENTS.CHECK_BANK_BALANCE}", context must contain {"bankName": "..."}. If the user asks for all balances or doesn't specify one, "bankName" should be null.
+2.  For "${INTENTS.ADD_BANK_ACCOUNT}", context must contain {"bankName": "...", "openingBalance": ...}.
+3.  For "${INTENTS.LOG_CUSTOMER_PAYMENT}", context must contain {"customerName": "...", "amount": ...}.
 4.  If the intent is not clear, respond with {"intent": null, "context": {}}.
 
-Example:
-User: "add a new bank account called Zenith with 250k"
-Your Response: {"intent": "${INTENTS.ADD_BANK_ACCOUNT}", "context": {"bankName": "Zenith", "openingBalance": 250000}}
+Example 1:
+User: "what's my balance in GTB"
+Your Response: {"intent": "${INTENTS.CHECK_BANK_BALANCE}", "context": {"bankName": "GTB"}}
+
+Example 2:
+User: "show me all my bank balances"
+Your Response: {"intent": "${INTENTS.CHECK_BANK_BALANCE}", "context": {"bankName": null}}
 `;
 
     const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: text }];

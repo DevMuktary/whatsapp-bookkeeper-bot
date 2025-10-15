@@ -137,6 +137,77 @@ export function generateExpenseReport(user, transactions, periodTitle) {
 }
 
 /**
+ * Generates an inventory report PDF.
+ * @param {object} user - The user object, containing businessName and currency.
+ * @param {Array<object>} products - An array of all product documents.
+ * @returns {Promise<Buffer>} A promise that resolves with the PDF buffer.
+ */
+export function generateInventoryReport(user, products) {
+    return new Promise((resolve, reject) => {
+        try {
+            const doc = new PDFDocument({ margin: 40, size: 'A4' });
+            const buffers = [];
+            doc.on('data', buffers.push.bind(buffers));
+            doc.on('end', () => resolve(Buffer.concat(buffers)));
+
+            // --- Document Header ---
+            doc.fontSize(20).font('Helvetica-Bold').text(user.businessName, { align: 'center' });
+            doc.fontSize(14).font('Helvetica').text('Inventory Report', { align: 'center' });
+            doc.fontSize(10).text(`As of: ${new Date().toLocaleString()}`, { align: 'center' });
+            doc.moveDown(2);
+
+            // --- Table Header ---
+            const tableTop = doc.y;
+            const itemX = 40;
+            const nameX = 40;
+            const qtyX = 250;
+            const costX = 310;
+            const sellX = 390;
+            const valueX = 470;
+
+            doc.fontSize(10).font('Helvetica-Bold');
+            doc.text('Product Name', nameX, tableTop);
+            doc.text('Quantity', qtyX, tableTop, { align: 'center' });
+            doc.text('Cost Price', costX, tableTop, { align: 'right' });
+            doc.text('Sell Price', sellX, tableTop, { align: 'right' });
+            doc.text('Total Value', valueX, tableTop, { align: 'right' });
+            doc.moveTo(itemX, doc.y).lineTo(560, doc.y).stroke();
+            doc.font('Helvetica');
+
+            // --- Table Rows ---
+            let totalInventoryValue = 0;
+            products.forEach(p => {
+                const y = doc.y + 5;
+                const itemValue = p.quantity * p.costPrice;
+                totalInventoryValue += itemValue;
+                
+                doc.text(p.productName, nameX, y, { width: 200, ellipsis: true });
+                doc.text(p.quantity, qtyX, y, { align: 'center', width: 50 });
+                doc.text(new Intl.NumberFormat('en-US').format(p.costPrice), costX, y, { align: 'right', width: 60 });
+                doc.text(new Intl.NumberFormat('en-US').format(p.sellingPrice), sellX, y, { align: 'right', width: 60 });
+                doc.text(new Intl.NumberFormat('en-US').format(itemValue), valueX, y, { align: 'right', width: 80 });
+            });
+
+            // --- Footer and Total ---
+            doc.moveTo(itemX, doc.y + 15).lineTo(560, doc.y + 15).stroke();
+            doc.moveDown(2);
+            const totalY = doc.y;
+            doc.font('Helvetica-Bold');
+            doc.text('Total Inventory Value (at Cost):', sellX - 50, totalY, { align: 'right' });
+            const formattedTotal = new Intl.NumberFormat('en-US').format(totalInventoryValue);
+            doc.text(`${user.currency} ${formattedTotal}`, valueX, totalY, { align: 'right' });
+
+            doc.end();
+
+        } catch (error) {
+            logger.error('Error generating Inventory PDF report:', error);
+            reject(error);
+        }
+    });
+}
+
+
+/**
  * Generates a professional PDF invoice for a single transaction.
  * @param {object} user - The user object (business details).
  * @param {object} transaction - The transaction document.

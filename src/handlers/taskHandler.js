@@ -18,6 +18,9 @@ export async function executeTask(intent, user, data) {
             case INTENTS.ADD_PRODUCT:
                 await executeAddProduct(user, data);
                 break;
+            case INTENTS.ADD_MULTIPLE_PRODUCTS:
+                await executeAddMultipleProducts(user, data);
+                break;
             default:
                 logger.warn(`No executor found for intent: ${intent}`);
                 await sendTextMessage(user.whatsappId, "I'm not sure how to process that right now, but I'm learning!");
@@ -27,7 +30,11 @@ export async function executeTask(intent, user, data) {
         logger.error(`Error executing task for intent ${intent} and user ${user.whatsappId}:`, error);
         await sendTextMessage(user.whatsappId, "I ran into an issue trying to complete that task. Please try again. 🛠️");
     } finally {
-        await updateUserState(user.whatsappId, USER_STATES.IDLE, {});
+        // Only reset state if it's not already IDLE.
+        // This prevents resetting in the middle of a multi-step process if we add one later.
+        if (user.state !== USER_STATES.IDLE) {
+            await updateUserState(user.whatsappId, USER_STATES.IDLE, {});
+        }
     }
 }
 
@@ -88,4 +95,35 @@ async function executeAddProduct(user, data) {
     );
 
     await sendTextMessage(user.whatsappId, `📦 Done! "${product.productName}" has been updated. You now have ${product.quantity} units in stock.`);
+}
+
+async function executeAddMultipleProducts(user, data) {
+    const products = data.products || [];
+    if (products.length === 0) {
+        await sendTextMessage(user.whatsappId, "I couldn't find any products in your message to add. Please try again!");
+        return;
+    }
+
+    const addedProducts = [];
+    // Using a for...of loop for sequential processing to avoid overwhelming the database
+    for (const p of products) {
+        try {
+            const newProd = await upsertProduct(
+                user._id,
+                p.productName,
+                Number(p.quantityAdded),
+                Number(p.costPrice),
+                Number(p.sellingPrice)
+            );
+            addedProducts.push(newProd);
+        } catch (error) {
+            logger.error(`Failed to add one of the multiple products: ${p.productName}`, error);
+            await sendTextMessage(user.whatsappId, `I had an issue adding "${p.productName}". Please try adding it separately.`);
+        }
+    }
+
+    if (addedProducts.length > 0) {
+        const summary = addedProducts.map(p => `"${p.productName}" (${p.quantity} units)`).join(', ');
+        await sendTextMessage(user.whatsappId, `✅ Successfully updated ${addedProducts.length} items in your inventory: ${summary}.`);
+    }
 }

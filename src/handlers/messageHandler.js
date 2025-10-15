@@ -11,12 +11,11 @@ const CANCEL_KEYWORDS = ['cancel', 'stop', 'exit', 'nevermind', 'abort'];
 
 export async function handleMessage(message) {
   const whatsappId = message.from;
-  const text = message.text.body.trim().toLowerCase(); // Normalize input for reliable matching
+  const text = message.text.body.trim().toLowerCase(); 
 
   try {
     const user = await findOrCreateUser(whatsappId);
 
-    // --- NEW: Global Cancel Command Check ---
     if (CANCEL_KEYWORDS.includes(text)) {
         if (user.state === USER_STATES.IDLE) {
             await sendTextMessage(whatsappId, "There's nothing to cancel. What would you like to do?");
@@ -26,9 +25,8 @@ export async function handleMessage(message) {
         logger.info(`User ${whatsappId} cancelled operation from state: ${user.state}`);
         await updateUserState(whatsappId, USER_STATES.IDLE, {});
         await sendTextMessage(whatsappId, "Okay, I've cancelled the current operation. What would you like to do next? 👍");
-        return; // Stop further processing
+        return; 
     }
-    // --- End of New Section ---
 
     switch (user.state) {
       case USER_STATES.NEW_USER: 
@@ -179,7 +177,7 @@ async function handleLoggingCustomerPayment(user, text) {
     if (currentMemory.length === 0 || currentMemory[currentMemory.length - 1].role !== 'user') {
         currentMemory.push({ role: 'user', content: text });
     }
-    const aiResponse = await gatherPaymentDetails(currentMemory);
+    const aiResponse = await gatherPaymentDetails(currentMemory, user.currency);
     if (aiResponse.status === 'incomplete') {
         await updateUserState(user.whatsappId, USER_STATES.LOGGING_CUSTOMER_PAYMENT, { memory: aiResponse.memory });
         await sendTextMessage(user.whatsappId, aiResponse.reply);

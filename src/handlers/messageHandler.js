@@ -140,7 +140,7 @@ async function handleIdleState(user, text) {
                 { id: 'cancel_bulk_add', title: '❌ No, Cancel' }
             ]
         );
-    } else if (intent === INTENTS.CHECK_STOCK || intent === INTENTS.GET_FINANCIAL_SUMMARY || intent === INTENTS.GENERATE_REPORT || intent === INTENTS.CHECK_BANK_BALANCE) {
+    } else if (intent === INTENTS.CHECK_STOCK || intent === INTENTS.GET_FINANCIAL_SUMMARY || intent === INTENTS.GENERATE_REPORT || intent === INTENTS.CHECK_BANK_BALANCE || intent === INTENTS.GET_FINANCIAL_INSIGHT) {
         logger.info(`Intent detected: ${intent} for user ${user.whatsappId}`);
         await executeTask(intent, user, context);
     } else {
@@ -259,7 +259,6 @@ async function handleEditValue(user, text) {
     }
     
     let newValue;
-    // Basic validation: if the field is numeric, try to parse it.
     if (['unitsSold', 'amountPerUnit', 'amount'].includes(fieldToEdit)) {
         newValue = parseFloat(text);
         if (isNaN(newValue)) {
@@ -299,7 +298,7 @@ async function handleOnboardingDetails(user, text) {
     const tenMinutes = 10 * 60 * 1000;
     const otpExpires = new Date(Date.now() + tenMinutes);
 
-    await updateUser(updatedUser.whatsappId, { otp, otpExpires });
+    await updateUser(user.whatsappId, { otp, otpExpires });
     await updateUserState(user.whatsappId, USER_STATES.ONBOARDING_AWAIT_OTP);
     await sendTextMessage(user.whatsappId, `Perfect! I've just sent a 6-digit verification code to ${updatedUser.email}. 📧 Please enter it here to continue.`);
   } else if (updatedUser.businessName) {
@@ -334,7 +333,17 @@ async function handleCurrency(user, text) {
     await updateUser(user.whatsappId, { currency });
     await updateUserState(user.whatsappId, USER_STATES.IDLE);
     await sendTextMessage(user.whatsappId, `Excellent! Your account is fully set up with ${currency} as your currency. 🎉`);
-    await sendTextMessage(user.whatsappId, `You can now start managing your finances. Try telling me about a sale or an expense. For example:\n\n_"I sold 2 loaves of bread for 500 each"_`);
+    
+    await sendInteractiveButtons(
+        user.whatsappId,
+        "You're all set! What would you like to do first?",
+        [
+            { id: 'log a sale', title: 'Log a Sale' },
+            { id: 'log an expense', title: 'Log an Expense' },
+            { id: 'add a new product', title: 'Add a Product' },
+        ]
+    );
+
   } else {
     await sendTextMessage(user.whatsappId, "I didn't recognize that currency. Please tell me your main currency, like 'Naira', 'Dollars', or 'GHS'.");
   }

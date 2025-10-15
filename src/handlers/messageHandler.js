@@ -2,7 +2,7 @@ import { findOrCreateUser, updateUser, updateUserState } from '../db/userService
 import { findProductByName } from '../db/productService.js';
 import { getAllBankAccounts } from '../db/bankService.js';
 import { getRecentTransactions } from '../db/transactionService.js';
-import { extractOnboardingDetails, extractCurrency, getIntent, gatherSaleDetails, gatherExpenseDetails, gatherProductDetails, gatherPaymentDetails, gatherBankAccountDetails, gatherTransactionEdits } from '../services/aiService.js';
+import { extractOnboardingDetails, extractCurrency, getIntent, gatherSaleDetails, gatherExpenseDetails, gatherProductDetails, gatherPaymentDetails, gatherBankAccountDetails } from '../services/aiService.js';
 import { sendOtp } from '../services/emailService.js';
 import { sendTextMessage, sendInteractiveButtons, sendInteractiveList } from '../api/whatsappService.js';
 import { USER_STATES, INTENTS } from '../utils/constants.js';
@@ -40,8 +40,8 @@ export async function handleMessage(message) {
       case USER_STATES.ADDING_PRODUCT: await handleAddingProduct(user, text); break;
       case USER_STATES.LOGGING_CUSTOMER_PAYMENT: await handleLoggingCustomerPayment(user, text); break;
       case USER_STATES.ADDING_BANK_ACCOUNT: await handleAddingBankAccount(user, text); break;
-      case USER_STATES.EDITING_TRANSACTION: await handleEditingTransaction(user, text); break;
-
+      case USER_STATES.AWAITING_EDIT_VALUE: await handleEditValue(user, text); break;
+        
       case USER_STATES.AWAITING_BANK_SELECTION_SALE:
       case USER_STATES.AWAITING_BANK_SELECTION_EXPENSE:
         await sendTextMessage(whatsappId, "Please select one of the bank accounts from the buttons I sent, or type 'cancel' to start over.");
@@ -50,6 +50,7 @@ export async function handleMessage(message) {
       case USER_STATES.AWAITING_INVOICE_CONFIRMATION:
       case USER_STATES.AWAITING_DELETE_CONFIRMATION:
       case USER_STATES.AWAITING_RECONCILE_ACTION:
+      case USER_STATES.AWAITING_EDIT_FIELD_SELECTION:
         await sendTextMessage(whatsappId, "Please choose one of the options from the buttons I sent, or type 'cancel'.");
         break;
       case USER_STATES.AWAITING_TRANSACTION_SELECTION:
@@ -249,26 +250,30 @@ async function handleAddingBankAccount(user, text) {
     }
 }
 
-async function handleEditingTransaction(user, text) {
-    const { memory: currentMemory = [], transaction } = user.stateContext;
-    if (!transaction) {
-        await sendTextMessage(user.whatsappId, "I've lost track of which transaction we are editing. Please start over.");
+async function handleEditValue(user, text) {
+    const { transaction, fieldToEdit } = user.stateContext;
+    if (!transaction || !fieldToEdit) {
+        await sendTextMessage(user.whatsappId, "I've lost my train of thought. Please start the edit process again.");
         await updateUserState(user.whatsappId, USER_STATES.IDLE);
         return;
     }
-
-    if (currentMemory.length === 0 || currentMemory[currentMemory.length - 1].role !== 'user') {
-        currentMemory.push({ role: 'user', content: text });
+    
+    let newValue;
+    // Basic validation: if the field is numeric, try to parse it.
+    if (['unitsSold', 'amountPerUnit', 'amount'].includes(fieldToEdit)) {
+        newValue = parseFloat(text);
+        if (isNaN(newValue)) {
+            await sendTextMessage(user.whatsappId, "That doesn't seem to be a valid number. Please provide a number for this field.");
+            return;
+        }
+    } else {
+        newValue = text;
     }
 
-    const aiResponse = await gatherTransactionEdits(currentMemory, transaction);
-    if (aiResponse.status === 'incomplete') {
-        await updateUserState(user.whatsappId, USER_STATES.EDITING_TRANSACTION, { transaction, memory: aiResponse.memory });
-        await sendTextMessage(user.whatsappId, aiResponse.reply);
-    } else if (aiResponse.status === 'complete') {
-        await sendTextMessage(user.whatsappId, "Okay, applying your changes... 🔄");
-        await executeTask(INTENTS.RECONCILE_TRANSACTION, user, { transactionId: transaction._id, action: 'edit', changes: aiResponse.data });
-    }
+    const changes = { [fieldToEdit]: newValue };
+    
+    await sendTextMessage(user.whatsappId, "Okay, applying your changes... 🔄");
+    await executeTask(INTENTS.RECONCILE_TRANSACTION, user, { transactionId: transaction._id, action: 'edit', changes });
 }
 
 async function handleNewUser(user) {
@@ -294,7 +299,7 @@ async function handleOnboardingDetails(user, text) {
     const tenMinutes = 10 * 60 * 1000;
     const otpExpires = new Date(Date.now() + tenMinutes);
 
-    await updateUser(user.whatsappId, { otp, otpExpires });
+    await updateUser(updatedUser.whatsappId, { otp, otpExpires });
     await updateUserState(user.whatsappId, USER_STATES.ONBOARDING_AWAIT_OTP);
     await sendTextMessage(user.whatsappId, `Perfect! I've just sent a 6-digit verification code to ${updatedUser.email}. 📧 Please enter it here to continue.`);
   } else if (updatedUser.businessName) {

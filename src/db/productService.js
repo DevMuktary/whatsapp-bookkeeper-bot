@@ -43,7 +43,7 @@ export async function findOrCreateProduct(userId, productName) {
                 costPrice: 0,
                 sellingPrice: 0,
                 createdAt: new Date(),
-                updatedAt: new D ate(),
+                updatedAt: new Date(),
             };
             const result = await productsCollection().insertOne(newProduct);
             product = await productsCollection().findOne({ _id: result.insertedId });

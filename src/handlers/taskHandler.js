@@ -1,6 +1,6 @@
 import { findOrCreateCustomer, updateBalanceOwed } from '../db/customerService.js';
 import { findOrCreateProduct, updateStock, upsertProduct, findProductByName, getAllProducts } from '../db/productService.js';
-import { createSaleTransaction, createExpenseTransaction, getSummaryByDateRange, getTransactionsByDateRange } from '../db/transactionService.js';
+import { createSaleTransaction, createExpenseTransaction, createCustomerPaymentTransaction, getSummaryByDateRange, getTransactionsByDateRange } from '../db/transactionService.js';
 import { updateUserState } from '../db/userService.js';
 import { sendTextMessage, sendInteractiveButtons, uploadMedia, sendDocument } from '../api/whatsappService.js';
 import { generateSalesReport, generateExpenseReport, generateInventoryReport } from '../services/pdfService.js';
@@ -31,6 +31,9 @@ export async function executeTask(intent, user, data) {
                 break;
             case INTENTS.GENERATE_REPORT:
                 await executeGenerateReport(user, data);
+                break;
+            case INTENTS.LOG_CUSTOMER_PAYMENT:
+                await executeLogCustomerPayment(user, data);
                 break;
             default:
                 logger.warn(`No executor found for intent: ${intent}`);
@@ -179,7 +182,7 @@ async function executeGetFinancialSummary(user, data) {
 
 async function executeGenerateReport(user, data) {
     const { reportType, period } = data;
-    if (!reportType && !data.reportType) { // Handle cases where AI might miss the reportType
+    if (!reportType && !data.reportType) {
         await sendTextMessage(user.whatsappId, "Please specify the report you need, for example: 'send sales report for this month' or 'generate inventory report'.");
         return;
     }
@@ -232,4 +235,30 @@ async function executeGenerateReport(user, data) {
             await sendTextMessage(user.whatsappId, "I couldn't send the report. There was an issue with the file upload. Please try again.");
         }
     }
+}
+
+async function executeLogCustomerPayment(user, data) {
+    const { customerName, amount } = data;
+    const paymentAmount = Number(amount);
+
+    const customer = await findOrCreateCustomer(user._id, customerName);
+
+    // Create a transaction record for this payment
+    const description = `Payment of ${paymentAmount} received from ${customer.customerName}.`;
+    await createCustomerPaymentTransaction({
+        userId: user._id,
+        linkedCustomerId: customer._id,
+        amount: paymentAmount,
+        date: new Date(),
+        description,
+    });
+    
+    // Update the customer's balance. We use a negative number to reduce their debt.
+    const updatedCustomer = await updateBalanceOwed(customer._id, -paymentAmount);
+    
+    const formattedAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(paymentAmount);
+    const formattedBalance = new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(updatedCustomer.balanceOwed);
+
+    await sendTextMessage(user.whatsappId, `✅ Payment of ${formattedAmount} from ${customer.customerName} has been recorded.`);
+    await sendTextMessage(user.whatsappId, `Their new outstanding balance is ${formattedBalance}.`);
 }

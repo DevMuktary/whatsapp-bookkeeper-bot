@@ -97,12 +97,6 @@ export async function getTransactionsByDateRange(userId, type, startDate, endDat
     }
 }
 
-/**
- * Fetches the most recent transactions for a user.
- * @param {ObjectId} userId The user's _id.
- * @param {number} limit The number of transactions to fetch.
- * @returns {Promise<Array<object>>}
- */
 export async function getRecentTransactions(userId, limit = 5) {
     try {
         const transactions = await transactionsCollection()
@@ -129,10 +123,25 @@ export async function findTransactionById(transactionId) {
 }
 
 /**
- * Deletes a single transaction by its MongoDB _id.
- * @param {ObjectId} transactionId The _id of the transaction to delete.
- * @returns {Promise<boolean>} True if deletion was successful, false otherwise.
+ * Updates a transaction document by its ID.
+ * @param {ObjectId} transactionId The _id of the transaction.
+ * @param {object} updateData The fields to update.
+ * @returns {Promise<object>} The updated transaction document.
  */
+export async function updateTransactionById(transactionId, updateData) {
+    try {
+        const result = await transactionsCollection().findOneAndUpdate(
+            { _id: transactionId },
+            { $set: updateData },
+            { returnDocument: 'after' }
+        );
+        return result;
+    } catch (error) {
+        logger.error(`Error updating transaction ${transactionId}:`, error);
+        throw new Error('Could not update transaction.');
+    }
+}
+
 export async function deleteTransactionById(transactionId) {
     try {
         const result = await transactionsCollection().deleteOne({ _id: transactionId });

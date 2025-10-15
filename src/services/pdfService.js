@@ -67,3 +67,67 @@ export function generateSalesReport(user, transactions, periodTitle) {
         }
     });
 }
+
+/**
+ * Generates a professional PDF invoice for a single transaction.
+ * @param {object} user - The user object (business details).
+ * @param {object} transaction - The transaction document.
+ * @param {object} customer - The customer document.
+ * @returns {Promise<Buffer>} A promise that resolves with the PDF buffer.
+ */
+export function generateInvoice(user, transaction, customer) {
+    return new Promise((resolve, reject) => {
+        try {
+            const doc = new PDFDocument({ margin: 50, size: 'A4' });
+            const buffers = [];
+            doc.on('data', buffers.push.bind(buffers));
+            doc.on('end', () => resolve(Buffer.concat(buffers)));
+
+            // --- Header ---
+            doc.fontSize(24).font('Helvetica-Bold').text(user.businessName, { align: 'left' });
+            doc.fontSize(10).font('Helvetica').text(user.email || '', { align: 'left' });
+            doc.moveDown(2);
+
+            // --- Bill To & Invoice Info ---
+            const infoTop = doc.y;
+            doc.fontSize(12).font('Helvetica-Bold').text('Bill To:', { continued: false });
+            doc.font('Helvetica').text(customer.customerName);
+            
+            const invoiceNumber = transaction._id.toString().slice(-8).toUpperCase();
+            doc.fontSize(12).font('Helvetica-Bold').text('Invoice #:', 300, infoTop);
+            doc.font('Helvetica').text(invoiceNumber, 400, infoTop);
+            doc.font('Helvetica-Bold').text('Date:', 300, infoTop + 15);
+            doc.font('Helvetica').text(new Date(transaction.date).toLocaleDateString(), 400, infoTop + 15);
+            doc.moveDown(2);
+
+            // --- Table ---
+            const tableTopY = doc.y;
+            doc.font('Helvetica-Bold');
+            doc.text('Description', 50, tableTopY);
+            doc.text('Amount', 450, tableTopY, { align: 'right' });
+            doc.moveTo(50, doc.y).lineTo(550, doc.y).stroke();
+            doc.font('Helvetica');
+
+            const itemY = doc.y + 5;
+            doc.text(transaction.description, 50, itemY, { width: 380 });
+            const formattedAmount = new Intl.NumberFormat('en-US').format(transaction.amount);
+            doc.text(`${user.currency} ${formattedAmount}`, 450, itemY, { align: 'right' });
+            
+            // --- Total ---
+            const totalY = doc.y + 20;
+            doc.moveTo(350, totalY - 5).lineTo(550, totalY - 5).stroke();
+            doc.font('Helvetica-Bold').fontSize(14).text('Total:', 350, totalY);
+            doc.text(`${user.currency} ${formattedAmount}`, 450, totalY, { align: 'right' });
+            doc.moveTo(350, doc.y).lineTo(550, doc.y).stroke();
+
+            // --- Footer ---
+            doc.fontSize(10).font('Helvetica-Oblique').text('Thank you for your business!', 50, doc.page.height - 50, { align: 'center', width: 500 });
+            
+            doc.end();
+
+        } catch (error) {
+            logger.error('Error generating invoice PDF:', error);
+            reject(error);
+        }
+    });
+}

@@ -27,21 +27,12 @@ export async function handleInteractiveMessage(message) {
 
 async function handleButtonReply(user, buttonId) {
     switch (user.state) {
-        case USER_STATES.AWAITING_BULK_PRODUCT_CONFIRMATION:
-            await handleBulkProductConfirmation(user, buttonId);
-            break;
-        case USER_STATES.AWAITING_INVOICE_CONFIRMATION:
-            await handleInvoiceConfirmation(user, buttonId);
-            break;
-        case USER_STATES.AWAITING_BANK_SELECTION_SALE:
-            await handleBankSelection(user, buttonId, INTENTS.LOG_SALE);
-            break;
-        case USER_STATES.AWAITING_BANK_SELECTION_EXPENSE:
-            await handleBankSelection(user, buttonId, INTENTS.LOG_EXPENSE);
-            break;
-        case USER_STATES.AWAITING_DELETE_CONFIRMATION:
-            await handleDeleteConfirmation(user, buttonId);
-            break;
+        case USER_STATES.AWAITING_BULK_PRODUCT_CONFIRMATION: await handleBulkProductConfirmation(user, buttonId); break;
+        case USER_STATES.AWAITING_INVOICE_CONFIRMATION: await handleInvoiceConfirmation(user, buttonId); break;
+        case USER_STATES.AWAITING_BANK_SELECTION_SALE: await handleBankSelection(user, buttonId, INTENTS.LOG_SALE); break;
+        case USER_STATES.AWAITING_BANK_SELECTION_EXPENSE: await handleBankSelection(user, buttonId, INTENTS.LOG_EXPENSE); break;
+        case USER_STATES.AWAITING_RECONCILE_ACTION: await handleReconcileAction(user, buttonId); break;
+        case USER_STATES.AWAITING_DELETE_CONFIRMATION: await handleDeleteConfirmation(user, buttonId); break;
         default:
             logger.warn(`Received a button click in an unhandled state: ${user.state}`);
             await sendTextMessage(user.whatsappId, "Sorry, I wasn't expecting that response right now.");
@@ -51,8 +42,8 @@ async function handleButtonReply(user, buttonId) {
 
 async function handleListReply(user, listId) {
     switch (user.state) {
-        case USER_STATES.AWAITING_TRANSACTION_SELECTION_FOR_DELETE:
-            await handleTransactionSelectionForDelete(user, listId);
+        case USER_STATES.AWAITING_TRANSACTION_SELECTION:
+            await handleTransactionSelection(user, listId);
             break;
         default:
             logger.warn(`Received a list reply in an unhandled state: ${user.state}`);
@@ -85,31 +76,25 @@ async function handleInvoiceConfirmation(user, buttonId) {
                 await sendTextMessage(user.whatsappId, "I seem to have lost the details of that sale. Please try logging it again.");
                 return;
             }
-
             await sendTextMessage(user.whatsappId, "Perfect! Generating your invoice now... 🧾");
-
             const transaction = await findTransactionById(transactionId);
             if (!transaction) {
                  await sendTextMessage(user.whatsappId, "I couldn't find the original sale record to create an invoice.");
                  return;
             }
-
             const customer = await findCustomerById(transaction.linkedCustomerId);
             if (!customer) {
                 await sendTextMessage(user.whatsappId, "I couldn't find the customer details for this invoice.");
                 return;
             }
-
             const pdfBuffer = await generateInvoice(user, transaction, customer);
             const mediaId = await uploadMedia(pdfBuffer, 'application/pdf');
-
             if (mediaId) {
                 const filename = `Invoice_${transaction._id.toString().slice(-8).toUpperCase()}.pdf`;
                 await sendDocument(user.whatsappId, mediaId, filename, `Here is the invoice for your recent sale to ${customer.customerName}.`);
             } else {
                 await sendTextMessage(user.whatsappId, "I created the invoice, but I had trouble uploading it. Please try asking for it again later.");
             }
-
         } else if (buttonId === 'invoice_no') {
             await sendTextMessage(user.whatsappId, "No problem! Let me know if you need anything else.");
         }
@@ -123,12 +108,9 @@ async function handleInvoiceConfirmation(user, buttonId) {
 
 async function handleBankSelection(user, buttonId, originalIntent) {
     const [action, bankIdStr] = buttonId.split(':');
-
     if (action === 'select_bank') {
         const transactionData = user.stateContext.transactionData;
-        
         transactionData.linkedBankId = new ObjectId(bankIdStr);
-
         await sendTextMessage(user.whatsappId, "Great, linking this to your bank account...");
         await executeTask(originalIntent, user, transactionData);
     } else {
@@ -136,9 +118,9 @@ async function handleBankSelection(user, buttonId, originalIntent) {
     }
 }
 
-async function handleTransactionSelectionForDelete(user, listId) {
+async function handleTransactionSelection(user, listId) {
     const [action, txIdStr] = listId.split(':');
-    if (action !== 'select_tx_del') return;
+    if (action !== 'select_tx') return;
 
     const transaction = await findTransactionById(new ObjectId(txIdStr));
     if (!transaction) {
@@ -146,16 +128,35 @@ async function handleTransactionSelectionForDelete(user, listId) {
         await updateUserState(user.whatsappId, USER_STATES.IDLE);
         return;
     }
-
     const formattedAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(transaction.amount);
     const summary = `*Transaction Details:*\n\n*Type:* ${transaction.type}\n*Amount:* ${formattedAmount}\n*Description:* ${transaction.description}\n*Date:* ${new Date(transaction.date).toLocaleString()}`;
     
-    await updateUserState(user.whatsappId, USER_STATES.AWAITING_DELETE_CONFIRMATION, { transactionId: transaction._id });
+    await updateUserState(user.whatsappId, USER_STATES.AWAITING_RECONCILE_ACTION, { transaction });
     await sendTextMessage(user.whatsappId, summary);
-    await sendInteractiveButtons(user.whatsappId, "Are you sure you want to permanently delete this transaction? This action cannot be undone.", [
-        { id: 'confirm_delete', title: 'Yes, Delete It' },
-        { id: 'cancel_delete', title: 'No, Keep It' }
+    await sendInteractiveButtons(user.whatsappId, "What would you like to do with this transaction?", [
+        { id: 'action_edit', title: '✏️ Edit' },
+        { id: 'action_delete', title: '🗑️ Delete' }
     ]);
+}
+
+async function handleReconcileAction(user, buttonId) {
+    const { transaction } = user.stateContext;
+    if (!transaction) {
+        await sendTextMessage(user.whatsappId, "I've lost track of the transaction. Please start over.");
+        await updateUserState(user.whatsappId, USER_STATES.IDLE);
+        return;
+    }
+
+    if (buttonId === 'action_delete') {
+        await updateUserState(user.whatsappId, USER_STATES.AWAITING_DELETE_CONFIRMATION, { transactionId: transaction._id });
+        await sendInteractiveButtons(user.whatsappId, "Are you sure you want to permanently delete this transaction? This action cannot be undone.", [
+            { id: 'confirm_delete', title: 'Yes, Delete It' },
+            { id: 'cancel_delete', title: 'No, Keep It' }
+        ]);
+    } else if (buttonId === 'action_edit') {
+        await updateUserState(user.whatsappId, USER_STATES.EDITING_TRANSACTION, { transaction, memory: [] });
+        await sendTextMessage(user.whatsappId, "Okay, let's edit this transaction. What would you like to change? (e.g., 'change the amount to 5000')");
+    }
 }
 
 async function handleDeleteConfirmation(user, buttonId) {

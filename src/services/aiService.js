@@ -73,14 +73,20 @@ The possible intents are:
 
 Your JSON response format is: {"intent": "INTENT_NAME", "context": {}}.
 
-Extraction Rules:
-1.  If the user says "I made a mistake", "delete a transaction", "edit a sale", "correct a record", or similar, the intent is "${INTENTS.RECONCILE_TRANSACTION}".
-2.  For "${INTENTS.CHECK_BANK_BALANCE}", if a specific bank is named, extract {"bankName": "..."}.
-3.  If the intent is not clear, respond with {"intent": null, "context": {}}.
+Extraction Rules & Examples:
+1.  **Reconciliation:** If the user says "I made a mistake", "delete a transaction", "edit a sale", "correct a record", the intent is "${INTENTS.RECONCILE_TRANSACTION}".
+    - User: "I need to correct my last entry" -> {"intent": "${INTENTS.RECONCILE_TRANSACTION}", "context": {}}
 
-Example:
-User: "I need to correct my last entry"
-Your Response: {"intent": "${INTENTS.RECONCILE_TRANSACTION}", "context": {}}
+2.  **Reports:** For "${INTENTS.GENERATE_REPORT}", extract "reportType" and "period". 'reportType' can be "sales", "expenses", or "inventory". 'period' can be "today", "this_week", "this_month", "last_month".
+    - User: "my sales report" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "sales"}}
+    - User: "sales report for this month" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "sales", "period": "this_month"}}
+    - User: "generate sales report for this month" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "sales", "period": "this_month"}}
+    - User: "send my inventory report" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "inventory"}}
+
+3.  **Summaries:** For "${INTENTS.GET_FINANCIAL_SUMMARY}", extract "metric" and "period".
+    - User: "what were my expenses this week" -> {"intent": "${INTENTS.GET_FINANCIAL_SUMMARY}", "context": {"metric": "expenses", "period": "this_week"}}
+
+4.  If the intent is not clear, respond with {"intent": null, "context": {}}.
 `;
 
     const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: text }];
@@ -190,48 +196,6 @@ CONVERSATION RULES:
 `;
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     const responseJson = await callDeepSeek(messages, 0.5);
-    const response = JSON.parse(responseJson);
-    const updatedHistory = [...conversationHistory, { role: 'assistant', content: responseJson }];
-
-    return { ...response, memory: updatedHistory };
-}
-
-export async function gatherTransactionEdits(conversationHistory, originalTransaction) {
-    let editableFieldsPrompt;
-    switch (originalTransaction.type) {
-        case 'SALE':
-            editableFieldsPrompt = "The user can change 'unitsSold' (synonyms: unit, quantity, items) and 'amountPerUnit' (synonyms: price, cost). The total 'amount' is calculated automatically and CANNOT be edited directly. If the user tries to change the total amount, you must ask them to change the units sold or the price per unit instead.";
-            break;
-        case 'EXPENSE':
-            editableFieldsPrompt = "The user can change 'amount', 'description', and 'category'.";
-            break;
-        case 'CUSTOMER_PAYMENT':
-            editableFieldsPrompt = "The user can change the 'amount'.";
-            break;
-        default:
-            editableFieldsPrompt = "The primary editable field is 'amount'.";
-    }
-
-    const systemPrompt = `You are an assistant helping a user edit a transaction. Your goal is to identify what fields they want to change and with what new values.
-
-CONTEXT: The original transaction is: ${JSON.stringify(originalTransaction, null, 2)}
-EDITING RULES: ${editableFieldsPrompt}
-
-CONVERSATION FLOW:
-1.  Analyze the user's message to see what they want to change. Be smart about synonyms (e.g., 'unit' means 'unitsSold').
-2.  After identifying a valid change, confirm it and ask "Got it. Is there anything else you'd like to change?".
-3.  If the user says "no", "that's all", or similar, your FINAL response must be a JSON object with {"status": "complete", "data": { ... an object of ONLY the changed fields ... }}.
-4.  While you are still collecting changes, your response must be a JSON object with {"status": "incomplete", "reply": "Your confirmation and follow-up question."}.
-
-Example for a SALE:
-User: "change the unit to 3"
-Your Response: {"status": "incomplete", "reply": "Okay, I've updated the units sold to 3. Anything else to change?"}
-User: "no"
-Your Response: {"status": "complete", "data": {"unitsSold": 3}}
-`;
-
-    const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
-    const responseJson = await callDeepSeek(messages, 0.7);
     const response = JSON.parse(responseJson);
     const updatedHistory = [...conversationHistory, { role: 'assistant', content: responseJson }];
 

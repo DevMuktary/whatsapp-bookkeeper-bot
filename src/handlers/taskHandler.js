@@ -2,7 +2,7 @@ import { findOrCreateCustomer, updateBalanceOwed } from '../db/customerService.j
 import { findOrCreateProduct, updateStock, upsertProduct, findProductByName } from '../db/productService.js';
 import { createSaleTransaction, createExpenseTransaction, getSummaryByDateRange, getTransactionsByDateRange } from '../db/transactionService.js';
 import { updateUserState } from '../db/userService.js';
-import { sendTextMessage, uploadMedia, sendDocument } from '../api/whatsappService.js';
+import { sendTextMessage, sendInteractiveButtons, uploadMedia, sendDocument } from '../api/whatsappService.js';
 import { generateSalesReport } from '../services/pdfService.js';
 import { INTENTS, USER_STATES } from '../utils/constants.js';
 import { getDateRange } from '../utils/dateUtils.js';
@@ -13,7 +13,9 @@ export async function executeTask(intent, user, data) {
         switch (intent) {
             case INTENTS.LOG_SALE:
                 await executeLogSale(user, data);
-                break;
+                // We no longer reset the state here, as the invoice flow needs to take over.
+                // State will be reset by the interactiveHandler.
+                return; 
             case INTENTS.LOG_EXPENSE:
                 await executeLogExpense(user, data);
                 break;
@@ -40,10 +42,11 @@ export async function executeTask(intent, user, data) {
     } catch (error) {
         logger.error(`Error executing task for intent ${intent} and user ${user.whatsappId}:`, error);
         await sendTextMessage(user.whatsappId, "I ran into an issue trying to complete that task. Please try again. 🛠️");
-    } finally {
-        if (user.state !== USER_STATES.IDLE) {
-            await updateUserState(user.whatsappId, USER_STATES.IDLE, {});
-        }
+    } 
+    
+    // Most tasks reset state to IDLE. Sales is a special case handled in its function.
+    if (user.state !== USER_STATES.IDLE) {
+        await updateUserState(user.whatsappId, USER_STATES.IDLE, {});
     }
 }
 
@@ -74,6 +77,14 @@ async function executeLogSale(user, data) {
 
     const formattedAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(totalAmount);
     await sendTextMessage(user.whatsappId, `✅ Sale logged successfully! ${description} for ${formattedAmount}.`);
+    
+    // --- NEW INVOICE FLOW TRIGGER ---
+    await updateUserState(user.whatsappId, USER_STATES.AWAITING_INVOICE_CONFIRMATION, { transactionId: transaction._id });
+    await sendInteractiveButtons(
+        user.whatsappId,
+        'Would you like me to generate a PDF invoice for this sale?',
+        [{ id: 'invoice_yes', title: 'Yes, Please' }, { id: 'invoice_no', title: 'No, Thanks' }]
+    );
 }
 
 async function executeLogExpense(user, data) {
@@ -194,7 +205,6 @@ async function executeGenerateReport(user, data) {
         pdfBuffer = await generateSalesReport(user, transactions, readablePeriod);
         filename = `Sales_Report_${period}.pdf`;
     } else {
-        // We will add 'expenses' and 'inventory' report types here later
         await sendTextMessage(user.whatsappId, `Sorry, I can only generate sales reports for now. More report types are coming soon!`);
         return;
     }

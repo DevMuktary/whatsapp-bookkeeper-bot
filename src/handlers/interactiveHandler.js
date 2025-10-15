@@ -71,7 +71,8 @@ async function handleButtonReply(user, buttonId, originalMessage) {
 async function handleListReply(user, listId, originalMessage) {
     switch (user.state) {
         case USER_STATES.IDLE:
-            logger.info(`Handling main menu list click from IDLE state for user ${user.whatsappId}`);
+        case USER_STATES.AWAITING_REPORT_TYPE_SELECTION: // <-- FIX IS HERE
+            logger.info(`Handling list click from ${user.state} for user ${user.whatsappId}`);
             const mockTextMessage = {
                 from: originalMessage.from,
                 text: {

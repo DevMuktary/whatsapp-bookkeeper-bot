@@ -6,6 +6,7 @@ import { uploadMedia, sendDocument, sendTextMessage } from '../api/whatsappServi
 import { USER_STATES, INTENTS } from '../utils/constants.js';
 import logger from '../utils/logger.js';
 import { executeTask } from './taskHandler.js';
+import { ObjectId } from 'mongodb';
 
 export async function handleInteractiveMessage(message) {
     const whatsappId = message.from;
@@ -24,6 +25,12 @@ export async function handleInteractiveMessage(message) {
                 break;
             case USER_STATES.AWAITING_INVOICE_CONFIRMATION:
                 await handleInvoiceConfirmation(user, buttonId);
+                break;
+            case USER_STATES.AWAITING_BANK_SELECTION_SALE:
+                await handleBankSelection(user, buttonId, INTENTS.LOG_SALE);
+                break;
+            case USER_STATES.AWAITING_BANK_SELECTION_EXPENSE:
+                await handleBankSelection(user, buttonId, INTENTS.LOG_EXPENSE);
                 break;
             default:
                 logger.warn(`Received a button click in an unhandled state: ${user.state} for user ${whatsappId}`);
@@ -93,7 +100,22 @@ async function handleInvoiceConfirmation(user, buttonId) {
         logger.error(`Error handling invoice confirmation for user ${user.whatsappId}:`, error);
         await sendTextMessage(user.whatsappId, "I ran into a problem while creating the invoice. Please try again.");
     } finally {
-        // Always reset the state to IDLE after handling the confirmation
         await updateUserState(user.whatsappId, USER_STATES.IDLE, {});
+    }
+}
+
+async function handleBankSelection(user, buttonId, originalIntent) {
+    const [action, bankIdStr] = buttonId.split(':');
+
+    if (action === 'select_bank') {
+        const transactionData = user.stateContext.transactionData;
+        
+        // Add the selected bank ID to the data and execute the original task
+        transactionData.linkedBankId = new ObjectId(bankIdStr);
+
+        await sendTextMessage(user.whatsappId, "Great, linking this to your bank account...");
+        await executeTask(originalIntent, user, transactionData);
+    } else {
+        logger.warn(`Unknown action in handleBankSelection: ${action}`);
     }
 }

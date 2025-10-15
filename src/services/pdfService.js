@@ -69,6 +69,74 @@ export function generateSalesReport(user, transactions, periodTitle) {
 }
 
 /**
+ * Generates an expense report PDF.
+ * @param {object} user - The user object, containing businessName and currency.
+ * @param {Array<object>} transactions - An array of expense transaction documents.
+ * @param {string} periodTitle - A readable title for the report's date range.
+ * @returns {Promise<Buffer>} A promise that resolves with the PDF buffer.
+ */
+export function generateExpenseReport(user, transactions, periodTitle) {
+    return new Promise((resolve, reject) => {
+        try {
+            const doc = new PDFDocument({ margin: 50, size: 'A4' });
+            const buffers = [];
+            doc.on('data', buffers.push.bind(buffers));
+            doc.on('end', () => resolve(Buffer.concat(buffers)));
+
+            // --- Document Header ---
+            doc.fontSize(20).font('Helvetica-Bold').text(user.businessName, { align: 'center' });
+            doc.fontSize(14).font('Helvetica').text('Expense Report', { align: 'center' });
+            doc.fontSize(10).text(periodTitle, { align: 'center' });
+            doc.moveDown(2);
+
+            // --- Table Header ---
+            const tableTop = doc.y;
+            const itemX = 50;
+            const dateX = 100;
+            const categoryX = 200;
+            const descX = 300;
+            const amountX = 450;
+
+            doc.fontSize(10).font('Helvetica-Bold');
+            doc.text('Date', dateX, tableTop);
+            doc.text('Category', categoryX, tableTop);
+            doc.text('Description', descX, tableTop);
+            doc.text('Amount', amountX, tableTop, { align: 'right' });
+            doc.moveTo(itemX, doc.y).lineTo(550, doc.y).stroke();
+            doc.font('Helvetica');
+
+            // --- Table Rows ---
+            let totalExpenses = 0;
+            transactions.forEach(tx => {
+                const y = doc.y + 5;
+                totalExpenses += tx.amount;
+                const formattedAmount = new Intl.NumberFormat('en-US').format(tx.amount);
+                
+                doc.text(new Date(tx.date).toLocaleDateString(), dateX, y);
+                doc.text(tx.category, categoryX, y, { width: 90, ellipsis: true });
+                doc.text(tx.description, descX, y, { width: 140, ellipsis: true });
+                doc.text(`${user.currency} ${formattedAmount}`, amountX, y, { align: 'right' });
+            });
+
+            // --- Footer and Total ---
+            doc.moveTo(itemX, doc.y + 15).lineTo(550, doc.y + 15).stroke();
+            doc.moveDown(2);
+            const totalY = doc.y;
+            doc.font('Helvetica-Bold');
+            doc.text('Total Expenses:', descX, totalY);
+            const formattedTotal = new Intl.NumberFormat('en-US').format(totalExpenses);
+            doc.text(`${user.currency} ${formattedTotal}`, amountX, totalY, { align: 'right' });
+
+            doc.end();
+
+        } catch (error) {
+            logger.error('Error generating Expense PDF report:', error);
+            reject(error);
+        }
+    });
+}
+
+/**
  * Generates a professional PDF invoice for a single transaction.
  * @param {object} user - The user object (business details).
  * @param {object} transaction - The transaction document.

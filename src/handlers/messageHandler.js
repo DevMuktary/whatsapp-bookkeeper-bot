@@ -1,9 +1,10 @@
 import { findOrCreateUser, updateUser, updateUserState } from '../db/userService.js';
 import { findProductByName } from '../db/productService.js';
 import { getAllBankAccounts } from '../db/bankService.js';
+import { getRecentTransactions } from '../db/transactionService.js';
 import { extractOnboardingDetails, extractCurrency, getIntent, gatherSaleDetails, gatherExpenseDetails, gatherProductDetails, gatherPaymentDetails, gatherBankAccountDetails } from '../services/aiService.js';
 import { sendOtp } from '../services/emailService.js';
-import { sendTextMessage, sendInteractiveButtons } from '../api/whatsappService.js';
+import { sendTextMessage, sendInteractiveButtons, sendInteractiveList } from '../api/whatsappService.js';
 import { USER_STATES, INTENTS } from '../utils/constants.js';
 import logger from '../utils/logger.js';
 import { executeTask } from './taskHandler.js';
@@ -71,6 +72,33 @@ async function handleIdleState(user, text) {
     } else if (intent === INTENTS.ADD_BANK_ACCOUNT) {
         await updateUserState(user.whatsappId, USER_STATES.ADDING_BANK_ACCOUNT, { memory: [{ role: 'user', content: text }] });
         await handleAddingBankAccount({ ...user, state: USER_STATES.ADDING_BANK_ACCOUNT, stateContext: { memory: [{ role: 'user', content: text }] } }, text);
+    } else if (intent === INTENTS.RECONCILE_TRANSACTION) {
+        logger.info(`Intent detected: RECONCILE_TRANSACTION for user ${user.whatsappId}`);
+        const recentTransactions = await getRecentTransactions(user._id, 5);
+        if (recentTransactions.length === 0) {
+            await sendTextMessage(user.whatsappId, "You don't have any recent transactions to modify.");
+            return;
+        }
+
+        const rows = recentTransactions.map(tx => {
+            const formattedAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(tx.amount);
+            return {
+                id: `select_tx_del:${tx._id}`,
+                title: `${tx.type} - ${formattedAmount}`,
+                description: tx.description.substring(0, 70) 
+            };
+        });
+
+        const sections = [{ title: "Recent Transactions", rows: rows }];
+        
+        await updateUserState(user.whatsappId, USER_STATES.AWAITING_TRANSACTION_SELECTION_FOR_DELETE);
+        await sendInteractiveList(user.whatsappId,
+            "Modify Transaction",
+            "Please select the transaction you would like to modify from the list below.",
+            "View Transactions",
+            sections
+        );
+
     } else if (intent === INTENTS.ADD_MULTIPLE_PRODUCTS) {
         logger.info(`Intent detected: ADD_MULTIPLE_PRODUCTS for user ${user.whatsappId}`);
         const products = context.products || [];
@@ -97,7 +125,7 @@ async function handleIdleState(user, text) {
         logger.info(`Intent detected: ${intent} for user ${user.whatsappId}`);
         await executeTask(intent, user, context);
     } else {
-        await sendTextMessage(user.whatsappId, "I'm sorry, I can only help with bookkeeping tasks right now. Try 'log a sale' or 'add a new bank account'.");
+        await sendTextMessage(user.whatsappId, "I'm sorry, I can only help with bookkeeping tasks right now. Try 'log a sale' or 'delete a transaction'.");
     }
 }
 
@@ -226,7 +254,7 @@ async function handleOnboardingDetails(user, text) {
     const tenMinutes = 10 * 60 * 1000;
     const otpExpires = new Date(Date.now() + tenMinutes);
 
-    await updateUser(user.whatsappId, { otp, otpExpires });
+    await updateUser(updatedUser.whatsappId, { otp, otpExpires });
     await updateUserState(user.whatsappId, USER_STATES.ONBOARDING_AWAIT_OTP);
     await sendTextMessage(user.whatsappId, `Perfect! I've just sent a 6-digit verification code to ${updatedUser.email}. 📧 Please enter it here to continue.`);
   } else if (updatedUser.businessName) {

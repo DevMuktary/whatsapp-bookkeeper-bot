@@ -1,6 +1,6 @@
 import { findOrCreateUser, updateUser, updateUserState } from '../db/userService.js';
 import { findProductByName } from '../db/productService.js';
-import { extractOnboardingDetails, extractCurrency, getIntent, gatherSaleDetails, gatherExpenseDetails, gatherProductDetails, gatherPaymentDetails } from '../services/aiService.js';
+import { extractOnboardingDetails, extractCurrency, getIntent, gatherSaleDetails, gatherExpenseDetails, gatherProductDetails, gatherPaymentDetails, gatherBankAccountDetails } from '../services/aiService.js';
 import { sendOtp } from '../services/emailService.js';
 import { sendTextMessage, sendInteractiveButtons } from '../api/whatsappService.js';
 import { USER_STATES, INTENTS } from '../utils/constants.js';
@@ -21,7 +21,6 @@ export async function handleMessage(message) {
             await sendTextMessage(whatsappId, "There's nothing to cancel. What would you like to do?");
             return;
         }
-
         logger.info(`User ${whatsappId} cancelled operation from state: ${user.state}`);
         await updateUserState(whatsappId, USER_STATES.IDLE, {});
         await sendTextMessage(whatsappId, "Okay, I've cancelled the current operation. What would you like to do next? 👍");
@@ -56,6 +55,9 @@ export async function handleMessage(message) {
       case USER_STATES.LOGGING_CUSTOMER_PAYMENT:
         await handleLoggingCustomerPayment(user, text);
         break;
+      case USER_STATES.ADDING_BANK_ACCOUNT:
+        await handleAddingBankAccount(user, text);
+        break;
       default:
         logger.warn(`Unhandled state: ${user.state} for user ${whatsappId}`);
         await sendTextMessage(whatsappId, "Apologies, I'm a bit stuck. Let's get you back on track.");
@@ -72,32 +74,23 @@ async function handleIdleState(user, text) {
     const { intent, context } = await getIntent(text);
 
     if (intent === INTENTS.LOG_SALE) {
-        logger.info(`Intent detected: LOG_SALE for user ${user.whatsappId}`);
-        let existingProduct = null;
-        if (context.productName) {
-            existingProduct = await findProductByName(user._id, context.productName);
-        }
-        const initialMemory = [{ role: 'user', content: text }];
-        await updateUserState(user.whatsappId, USER_STATES.LOGGING_SALE, { memory: initialMemory, existingProduct });
-        await handleLoggingSale({ ...user, state: USER_STATES.LOGGING_SALE, stateContext: { memory: initialMemory, existingProduct } }, text);
-    } else if (intent === INTENTS.LOG_EXPENSE) {
-        logger.info(`Intent detected: LOG_EXPENSE for user ${user.whatsappId}`);
-        const initialMemory = [{ role: 'user', content: text }];
-        await updateUserState(user.whatsappId, USER_STATES.LOGGING_EXPENSE, { memory: initialMemory });
-        await handleLoggingExpense({ ...user, state: USER_STATES.LOGGING_EXPENSE, stateContext: { memory: initialMemory } }, text);
-    } else if (intent === INTENTS.ADD_PRODUCT) {
-        logger.info(`Intent detected: ADD_PRODUCT for user ${user.whatsappId}`);
         let existingProduct = context.productName ? await findProductByName(user._id, context.productName) : null;
-        const initialMemory = [{ role: 'user', content: text }];
-        await updateUserState(user.whatsappId, USER_STATES.ADDING_PRODUCT, { memory: initialMemory, existingProduct });
-        await handleAddingProduct({ ...user, state: USER_STATES.ADDING_PRODUCT, stateContext: { memory: initialMemory, existingProduct } }, text);
+        await updateUserState(user.whatsappId, USER_STATES.LOGGING_SALE, { memory: [{ role: 'user', content: text }], existingProduct });
+        await handleLoggingSale({ ...user, state: USER_STATES.LOGGING_SALE, stateContext: { memory: [{ role: 'user', content: text }], existingProduct } }, text);
+    } else if (intent === INTENTS.LOG_EXPENSE) {
+        await updateUserState(user.whatsappId, USER_STATES.LOGGING_EXPENSE, { memory: [{ role: 'user', content: text }] });
+        await handleLoggingExpense({ ...user, state: USER_STATES.LOGGING_EXPENSE, stateContext: { memory: [{ role: 'user', content: text }] } }, text);
+    } else if (intent === INTENTS.ADD_PRODUCT) {
+        let existingProduct = context.productName ? await findProductByName(user._id, context.productName) : null;
+        await updateUserState(user.whatsappId, USER_STATES.ADDING_PRODUCT, { memory: [{ role: 'user', content: text }], existingProduct });
+        await handleAddingProduct({ ...user, state: USER_STATES.ADDING_PRODUCT, stateContext: { memory: [{ role: 'user', content: text }], existingProduct } }, text);
     } else if (intent === INTENTS.LOG_CUSTOMER_PAYMENT) {
-        logger.info(`Intent detected: LOG_CUSTOMER_PAYMENT for user ${user.whatsappId}`);
-        const initialMemory = [{ role: 'user', content: text }];
-        await updateUserState(user.whatsappId, USER_STATES.LOGGING_CUSTOMER_PAYMENT, { memory: initialMemory });
-        await handleLoggingCustomerPayment({ ...user, state: USER_STATES.LOGGING_CUSTOMER_PAYMENT, stateContext: { memory: initialMemory } }, text);
-    }
-    else if (intent === INTENTS.ADD_MULTIPLE_PRODUCTS) {
+        await updateUserState(user.whatsappId, USER_STATES.LOGGING_CUSTOMER_PAYMENT, { memory: [{ role: 'user', content: text }] });
+        await handleLoggingCustomerPayment({ ...user, state: USER_STATES.LOGGING_CUSTOMER_PAYMENT, stateContext: { memory: [{ role: 'user', content: text }] } }, text);
+    } else if (intent === INTENTS.ADD_BANK_ACCOUNT) {
+        await updateUserState(user.whatsappId, USER_STATES.ADDING_BANK_ACCOUNT, { memory: [{ role: 'user', content: text }] });
+        await handleAddingBankAccount({ ...user, state: USER_STATES.ADDING_BANK_ACCOUNT, stateContext: { memory: [{ role: 'user', content: text }] } }, text);
+    } else if (intent === INTENTS.ADD_MULTIPLE_PRODUCTS) {
         logger.info(`Intent detected: ADD_MULTIPLE_PRODUCTS for user ${user.whatsappId}`);
         const products = context.products || [];
         if (products.length === 0) {
@@ -123,7 +116,7 @@ async function handleIdleState(user, text) {
         logger.info(`Intent detected: ${intent} for user ${user.whatsappId}`);
         await executeTask(intent, user, context);
     } else {
-        await sendTextMessage(user.whatsappId, "I'm sorry, I can only help with bookkeeping tasks right now. Try 'log a sale' or 'send sales report'.");
+        await sendTextMessage(user.whatsappId, "I'm sorry, I can only help with bookkeeping tasks right now. Try 'log a sale' or 'add a new bank account'.");
     }
 }
 
@@ -184,6 +177,23 @@ async function handleLoggingCustomerPayment(user, text) {
     } else if (aiResponse.status === 'complete') {
         await sendTextMessage(user.whatsappId, "Perfect, let me record that payment... 💰");
         await executeTask(INTENTS.LOG_CUSTOMER_PAYMENT, user, aiResponse.data);
+    }
+}
+
+async function handleAddingBankAccount(user, text) {
+    const currentMemory = user.stateContext.memory || [];
+    if (currentMemory.length === 0 || currentMemory[currentMemory.length - 1].role !== 'user') {
+        currentMemory.push({ role: 'user', content: text });
+    }
+
+    const aiResponse = await gatherBankAccountDetails(currentMemory, user.currency);
+    
+    if (aiResponse.status === 'incomplete') {
+        await updateUserState(user.whatsappId, USER_STATES.ADDING_BANK_ACCOUNT, { memory: aiResponse.memory });
+        await sendTextMessage(user.whatsappId, aiResponse.reply);
+    } else if (aiResponse.status === 'complete') {
+        await sendTextMessage(user.whatsappId, "Got it! Adding your new bank account... 🏦");
+        await executeTask(INTENTS.ADD_BANK_ACCOUNT, user, aiResponse.data);
     }
 }
 

@@ -14,8 +14,8 @@ async function callDeepSeek(messages) {
     const response = await axios.post(DEEPSEEK_API_URL, {
       model: 'deepseek-chat',
       messages: messages,
-      temperature: 0.1, // Low temperature for deterministic extraction
-      response_format: { type: "json_object" } // Enforce JSON output
+      temperature: 0.1,
+      response_format: { type: "json_object" }
     }, {
       headers: {
         'Content-Type': 'application/json',
@@ -30,15 +30,15 @@ async function callDeepSeek(messages) {
 }
 
 /**
- * Extracts a business name from a user's free-form text.
+ * Extracts both business name and email from a single text.
  * @param {string} text The user's message.
- * @returns {Promise<{businessName: string|null}>} An object containing the extracted name.
+ * @returns {Promise<{businessName: string|null, email: string|null}>} An object containing the extracted details.
  */
-export async function extractBusinessName(text) {
+export async function extractOnboardingDetails(text) {
   const messages = [
     {
       role: 'system',
-      content: "You are an expert entity extractor. Your task is to extract the business name from the user's message. The business name could be a proper noun or a descriptive phrase. Respond ONLY with a JSON object in the format {\"businessName\": \"The Extracted Name\"}. If no clear business name can be found, respond with {\"businessName\": null}."
+      content: "You are an expert entity extractor. Your task is to extract a business name and an email address from the user's message. Respond ONLY with a JSON object in the format {\"businessName\": \"The Extracted Name\", \"email\": \"user@example.com\"}. If a piece of information is not found, its value should be null."
     },
     {
       role: 'user',
@@ -49,21 +49,22 @@ export async function extractBusinessName(text) {
   return JSON.parse(responseJson);
 }
 
+
 /**
- * Extracts an email address from a user's free-form text.
- * @param {string} text The user's message.
- * @returns {Promise<{email: string|null}>} An object containing the extracted email.
+ * Extracts a currency from text and standardizes it to a 3-letter ISO code.
+ * @param {string} text The user's message (e.g., "Naira", "dollars", "GHS", "₦").
+ * @returns {Promise<{currency: string|null}>} An object with the ISO code, e.g., { "currency": "NGN" }.
  */
-export async function extractEmail(text) {
+export async function extractCurrency(text) {
     const messages = [
-      {
-        role: 'system',
-        content: "You are an expert entity extractor. Your task is to extract an email address from the user's message. Respond ONLY with a JSON object in the format {\"email\": \"user@example.com\"}. If no valid email address can be found, respond with {\"email\": null}."
-      },
-      {
-        role: 'user',
-        content: `Here is the message: "${text}"`
-      }
+        {
+            role: 'system',
+            content: "You are an expert currency identification system. Your task is to identify the currency mentioned in the user's text and convert it to its standard 3-letter ISO 4217 code. Examples: 'Naira' or '₦' -> 'NGN', 'US dollars' or '$' -> 'USD', 'Ghana Cedis' -> 'GHS', 'pounds' -> 'GBP'. Respond ONLY with a JSON object in the format {\"currency\": \"ISO_CODE\"}. If no currency is found, the value should be null."
+        },
+        {
+            role: 'user',
+            content: `Here is the message: "${text}"`
+        }
     ];
     const responseJson = await callDeepSeek(messages);
     return JSON.parse(responseJson);

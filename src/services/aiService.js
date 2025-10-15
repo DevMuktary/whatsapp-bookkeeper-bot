@@ -63,25 +63,28 @@ The possible intents are:
 - "${INTENTS.LOG_EXPENSE}"
 - "${INTENTS.ADD_PRODUCT}" (for a single product)
 - "${INTENTS.ADD_MULTIPLE_PRODUCTS}" (if two or more products are mentioned)
+- "${INTENTS.CHECK_STOCK}"
+- "${INTENTS.GET_FINANCIAL_SUMMARY}"
 
 Your JSON response format is: {"intent": "INTENT_NAME", "context": { ... extracted details ... }}.
 
 Extraction Rules:
-1.  If the intent is "${INTENTS.ADD_MULTIPLE_PRODUCTS}", the context MUST contain a key "products" which is an ARRAY of product objects. Each object should have: "productName", "quantityAdded", "costPrice", "sellingPrice".
-2.  If the intent is "${INTENTS.ADD_PRODUCT}", the context should be a single object with the keys: "productName", "quantityAdded", "costPrice", "sellingPrice".
-3.  If the user's message is conversational or does not match any intent, respond with {"intent": null, "context": {}}.
+1.  For "${INTENTS.CHECK_STOCK}", the context must contain {"productName": "..."}.
+2.  For "${INTENTS.GET_FINANCIAL_SUMMARY}", the context must contain {"metric": "...", "period": "..."}. 'metric' must be either "sales" or "expenses". 'period' must be one of ["today", "this_week", "this_month", "last_month"].
+3.  For "${INTENTS.ADD_MULTIPLE_PRODUCTS}", the context MUST contain a key "products" which is an ARRAY of product objects.
+4.  If the user's message is ambiguous, conversational, or does not match any intent, respond with {"intent": null, "context": {}}.
 
 Example 1:
-User: "Add 100 bags of rice to my inventory. I bought them for 50000 each and I will sell them for 60000."
-Your Response: {"intent": "${INTENTS.ADD_PRODUCT}", "context": {"productName": "bags of rice", "quantityAdded": 100, "costPrice": 50000, "sellingPrice": 60000}}
+User: "how many units of MacBook Pro do I have?"
+Your Response: {"intent": "${INTENTS.CHECK_STOCK}", "context": {"productName": "MacBook Pro"}}
 
 Example 2:
-User: "restock 20 shirts (cost 3k, sell 5k) and 15 trousers (cost 4k, sell 7k)"
-Your Response: {"intent": "${INTENTS.ADD_MULTIPLE_PRODUCTS}", "context": {"products": [{"productName": "shirts", "quantityAdded": 20, "costPrice": 3000, "sellingPrice": 5000}, {"productName": "trousers", "quantityAdded": 15, "costPrice": 4000, "sellingPrice": 7000}]}}
+User: "what are my total sales for this month"
+Your Response: {"intent": "${INTENTS.GET_FINANCIAL_SUMMARY}", "context": {"metric": "sales", "period": "this_month"}}
 
 Example 3:
-User: "I want to add some new items"
-Your Response: {"intent": "${INTENTS.ADD_PRODUCT}", "context": {}}
+User: "show me today's expenses"
+Your Response: {"intent": "${INTENTS.GET_FINANCIAL_SUMMARY}", "context": {"metric": "expenses", "period": "today"}}
 `;
 
     const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: text }];
@@ -90,16 +93,12 @@ Your Response: {"intent": "${INTENTS.ADD_PRODUCT}", "context": {}}
 }
 
 export async function gatherSaleDetails(conversationHistory) {
-    const systemPrompt = `You are a friendly and efficient bookkeeping assistant named Fynax. Your current goal is to collect all the necessary details to log a sale.
-You must fill a JSON object with these exact keys: "productName", "unitsSold", "amountPerUnit", "customerName", "saleType". The 'saleType' must be one of ['cash', 'credit', 'bank'].
+    const systemPrompt = `You are a friendly and efficient bookkeeping assistant named Fynax. Your current goal is to collect all the necessary details to log a sale. You must fill a JSON object with these exact keys: "productName", "unitsSold", "amountPerUnit", "customerName", "saleType". The 'saleType' must be one of ['cash', 'credit', 'bank'].
 
 CONVERSATION RULES:
-1.  Analyze the conversation history provided by the user.
-2.  If any of the required keys are missing, ask a clear, friendly question to get ONLY the missing information. Do NOT ask for multiple things at once.
-3.  Be conversational. For example, if a user provides a product name, acknowledge it before asking the next question.
-4.  Once ALL keys are filled, your FINAL response must be a JSON object containing ONLY {"status": "complete", "data": { ... the final sale object ... }}.
-5.  While you are still collecting information, your response must be a JSON object in the format {"status": "incomplete", "reply": "Your question or comment to the user."}.
-`;
+1.  Analyze the conversation history. If any keys are missing, ask a clear, friendly question for ONLY the missing information.
+2.  Once ALL keys are filled, your FINAL response must be a JSON object containing ONLY {"status": "complete", "data": { ... the final sale object ... }}.
+3.  While collecting information, your response must be a JSON object in the format {"status": "incomplete", "reply": "Your question or comment to the user."}.`;
 
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     const responseJson = await callDeepSeek(messages, 0.5); 
@@ -110,15 +109,12 @@ CONVERSATION RULES:
 }
 
 export async function gatherExpenseDetails(conversationHistory) {
-    const systemPrompt = `You are a friendly and efficient bookkeeping assistant named Fynax. Your current goal is to collect all the necessary details to log an expense.
-You must fill a JSON object with these exact keys: "category", "amount", "description". The 'description' should be a brief summary of the expense.
+    const systemPrompt = `You are a friendly and efficient bookkeeping assistant named Fynax. Your goal is to collect details to log an expense. You must fill a JSON object with these exact keys: "category", "amount", "description".
 
 CONVERSATION RULES:
-1.  Analyze the conversation history.
-2.  If any required keys are missing, ask a clear, friendly question for the missing information.
-3.  Once ALL keys are filled, your FINAL response must be a JSON object containing ONLY {"status": "complete", "data": { ... the final expense object ... }}.
-4.  While collecting information, your response must be a JSON object in the format {"status": "incomplete", "reply": "Your question to the user."}.
-`;
+1.  Analyze the conversation history. If any keys are missing, ask a clear, friendly question for the missing information.
+2.  Once ALL keys are filled, your FINAL response must be a JSON object containing ONLY {"status": "complete", "data": { ... the final expense object ... }}.
+3.  While collecting information, your response must be a JSON object in the format {"status": "incomplete", "reply": "Your question to the user."}.`;
 
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     const responseJson = await callDeepSeek(messages, 0.5);
@@ -133,19 +129,16 @@ export async function gatherProductDetails(conversationHistory, existingProduct 
         ? `This is an existing product. Its current cost price is ${existingProduct.costPrice} and selling price is ${existingProduct.sellingPrice}.`
         : 'This is a brand new product.';
 
-    const systemPrompt = `You are a friendly and efficient inventory manager named Fynax. Your goal is to collect details to add or update a product.
-You must fill a JSON object with these exact keys: "productName", "quantityAdded", "costPrice", "sellingPrice".
+    const systemPrompt = `You are a friendly inventory manager named Fynax. Your goal is to collect details to add or update a product. You must fill a JSON object with keys: "productName", "quantityAdded", "costPrice", "sellingPrice".
 
 CONTEXT: ${existingDataInfo}
 
 CONVERSATION RULES:
 1.  Analyze the conversation history.
-2.  If the user says the price is the "same as before", "unchanged", or similar, YOU MUST use the existing product data for the price.
-3.  Only ask for information that is truly missing. For example, if you already have the productName and quantityAdded, your next question should be about the costPrice.
-4.  If all required information is already present in the conversation, immediately proceed to the 'complete' status.
-5.  Once ALL keys are filled, your FINAL response must be a JSON object containing ONLY {"status": "complete", "data": { ... the final product object ... }}.
-6.  While collecting information, your response must be a JSON object in the format {"status": "incomplete", "reply": "Your question to the user."}.
-`;
+2.  If the user says the price is the "same as before", you MUST use the existing product data.
+3.  Only ask for information that is truly missing.
+4.  Once ALL keys are filled, your FINAL response must be a JSON object containing ONLY {"status": "complete", "data": { ... the final product object ... }}.
+5.  While collecting information, your response must be a JSON object in the format {"status": "incomplete", "reply": "Your question to the user."}.`;
 
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     const responseJson = await callDeepSeek(messages, 0.5);

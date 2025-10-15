@@ -197,25 +197,41 @@ CONVERSATION RULES:
 }
 
 export async function gatherTransactionEdits(conversationHistory, originalTransaction) {
+    let editableFieldsPrompt;
+    switch (originalTransaction.type) {
+        case 'SALE':
+            editableFieldsPrompt = "The user can change 'unitsSold' (synonyms: unit, quantity, items) and 'amountPerUnit' (synonyms: price, cost). The total 'amount' is calculated automatically and CANNOT be edited directly. If the user tries to change the total amount, you must ask them to change the units sold or the price per unit instead.";
+            break;
+        case 'EXPENSE':
+            editableFieldsPrompt = "The user can change 'amount', 'description', and 'category'.";
+            break;
+        case 'CUSTOMER_PAYMENT':
+            editableFieldsPrompt = "The user can change the 'amount'.";
+            break;
+        default:
+            editableFieldsPrompt = "The primary editable field is 'amount'.";
+    }
+
     const systemPrompt = `You are an assistant helping a user edit a transaction. Your goal is to identify what fields they want to change and with what new values.
 
 CONTEXT: The original transaction is: ${JSON.stringify(originalTransaction, null, 2)}
+EDITING RULES: ${editableFieldsPrompt}
 
-CONVERSATION RULES:
-1.  Analyze the user's message to see what they want to change (e.g., "change the amount to 5000", "the customer was wrong"). The possible editable fields are 'amount', 'description', 'category', 'paymentMethod'.
-2.  After identifying a change, ask "Got it. Is there anything else you'd like to change?".
-3.  If the user says "no", "that's all", or similar, your FINAL response must be a JSON object containing ONLY {"status": "complete", "data": { ... an object of the changed fields ... }}.
-4.  While you are still collecting changes, your response must be a JSON object in the format {"status": "incomplete", "reply": "Your confirmation and follow-up question."}.
+CONVERSATION FLOW:
+1.  Analyze the user's message to see what they want to change. Be smart about synonyms (e.g., 'unit' means 'unitsSold').
+2.  After identifying a valid change, confirm it and ask "Got it. Is there anything else you'd like to change?".
+3.  If the user says "no", "that's all", or similar, your FINAL response must be a JSON object with {"status": "complete", "data": { ... an object of ONLY the changed fields ... }}.
+4.  While you are still collecting changes, your response must be a JSON object with {"status": "incomplete", "reply": "Your confirmation and follow-up question."}.
 
-Example:
-User: "The amount should have been 2500"
-Your Response: {"status": "incomplete", "reply": "Okay, I've updated the amount to 2500. Is there anything else you want to change?"}
-User: "no that's it"
-Your Response: {"status": "complete", "data": {"amount": 2500}}
+Example for a SALE:
+User: "change the unit to 3"
+Your Response: {"status": "incomplete", "reply": "Okay, I've updated the units sold to 3. Anything else to change?"}
+User: "no"
+Your Response: {"status": "complete", "data": {"unitsSold": 3}}
 `;
 
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
-    const responseJson = await callDeepSeek(messages, 0.7); // Higher temp for more conversational edits
+    const responseJson = await callDeepSeek(messages, 0.7);
     const response = JSON.parse(responseJson);
     const updatedHistory = [...conversationHistory, { role: 'assistant', content: responseJson }];
 

@@ -6,7 +6,7 @@ import { uploadMedia, sendDocument, sendTextMessage, sendInteractiveButtons } fr
 import { USER_STATES, INTENTS } from '../utils/constants.js';
 import logger from '../utils/logger.js';
 import { executeTask } from './taskHandler.js';
-import { handleMessage } from './messageHandler.js'; // <-- NEW: Import the main message handler
+import { handleMessage } from './messageHandler.js';
 import { ObjectId } from 'mongodb';
 
 export async function handleInteractiveMessage(message) {
@@ -16,10 +16,9 @@ export async function handleInteractiveMessage(message) {
 
     try {
         if (interactive.type === 'button_reply') {
-            // Pass the full message object so we can reconstruct it if needed
             await handleButtonReply(user, interactive.button_reply.id, message);
         } else if (interactive.type === 'list_reply') {
-            await handleListReply(user, interactive.list_reply.id);
+            await handleListReply(user, interactive.list_reply.id, message);
         }
     } catch (error) {
         logger.error(`Error in interactive handler for ${whatsappId}:`, error);
@@ -29,21 +28,17 @@ export async function handleInteractiveMessage(message) {
 
 async function handleButtonReply(user, buttonId, originalMessage) {
     switch (user.state) {
-        // --- NEW: Handle Quick Start button clicks from IDLE state ---
         case USER_STATES.IDLE:
-            // This is a special case for the post-onboarding quick start menu.
-            // We will treat this button click as if the user typed the text.
             logger.info(`Handling quick start button click from IDLE state for user ${user.whatsappId}`);
             const mockTextMessage = {
                 from: originalMessage.from,
                 text: {
-                    body: buttonId // The button ID is the command text, e.g., "log a sale"
+                    body: buttonId 
                 },
                 type: 'text'
             };
             await handleMessage(mockTextMessage);
             break;
-        // --- End of New Section ---
 
         case USER_STATES.AWAITING_BULK_PRODUCT_CONFIRMATION:
             await handleBulkProductConfirmation(user, buttonId);
@@ -73,8 +68,22 @@ async function handleButtonReply(user, buttonId, originalMessage) {
     }
 }
 
-async function handleListReply(user, listId) {
+async function handleListReply(user, listId, originalMessage) {
     switch (user.state) {
+        // --- NEW: Handle Main Menu list clicks from IDLE state ---
+        case USER_STATES.IDLE:
+            logger.info(`Handling main menu list click from IDLE state for user ${user.whatsappId}`);
+            const mockTextMessage = {
+                from: originalMessage.from,
+                text: {
+                    body: listId // The list ID is the command text, e.g., "generate sales report"
+                },
+                type: 'text'
+            };
+            await handleMessage(mockTextMessage);
+            break;
+        // --- End of New Section ---
+
         case USER_STATES.AWAITING_TRANSACTION_SELECTION:
             await handleTransactionSelection(user, listId);
             break;
@@ -130,12 +139,15 @@ async function handleInvoiceConfirmation(user, buttonId) {
             }
         } else if (buttonId === 'invoice_no') {
             await sendTextMessage(user.whatsappId, "No problem! Let me know if you need anything else.");
+            await sendMainMenu(user.whatsappId); // Send main menu after they say no
         }
     } catch (error) {
         logger.error(`Error handling invoice confirmation for user ${user.whatsappId}:`, error);
         await sendTextMessage(user.whatsappId, "I ran into a problem while creating the invoice. Please try again.");
     } finally {
-        await updateUserState(user.whatsappId, USER_STATES.IDLE, {});
+        if (buttonId === 'invoice_yes') {
+            await updateUserState(user.whatsappId, USER_STATES.IDLE, {});
+        }
     }
 }
 
@@ -158,7 +170,7 @@ async function handleTransactionSelection(user, listId) {
     const transaction = await findTransactionById(new ObjectId(txIdStr));
     if (!transaction) {
         await sendTextMessage(user.whatsappId, "I couldn't find that transaction. Please try again.");
-        await updateUserState(user.whatsappId, USER_STATES.IDLE);
+        await updateUserState(user.whatsappId, USER_STATES.IDLE, {});
         return;
     }
     const formattedAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(transaction.amount);
@@ -176,7 +188,7 @@ async function handleReconcileAction(user, buttonId) {
     const { transaction } = user.stateContext;
     if (!transaction) {
         await sendTextMessage(user.whatsappId, "I've lost track of the transaction. Please start over.");
-        await updateUserState(user.whatsappId, USER_STATES.IDLE);
+        await updateUserState(user.whatsappId, USER_STATES.IDLE, {});
         return;
     }
 
@@ -228,13 +240,14 @@ async function handleDeleteConfirmation(user, buttonId) {
         const { transactionId } = user.stateContext;
         if (!transactionId) {
             await sendTextMessage(user.whatsappId, "I've lost track of which transaction to delete. Please start over.");
-            await updateUserState(user.whatsappId, USER_STATES.IDLE);
+            await updateUserState(user.whatsappId, USER_STATES.IDLE, {});
             return;
         }
         await sendTextMessage(user.whatsappId, "Okay, deleting the transaction and reversing its effects... ⏳");
         await executeTask(INTENTS.RECONCILE_TRANSACTION, user, { transactionId, action: 'delete' });
     } else if (buttonId === 'cancel_delete') {
         await sendTextMessage(user.whatsappId, "Okay, I've cancelled the deletion. The transaction has not been changed.");
-        await updateUserState(user.whatsappId, USER_STATES.IDLE);
+        await updateUserState(user.whatsappId, USER_STATES.IDLE, {});
+        await sendMainMenu(user.whatsappId);
     }
 }

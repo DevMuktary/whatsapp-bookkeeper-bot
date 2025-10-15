@@ -1,7 +1,7 @@
 import { findOrCreateCustomer, updateBalanceOwed } from '../db/customerService.js';
 import { findOrCreateProduct, updateStock, upsertProduct, findProductByName, getAllProducts } from '../db/productService.js';
 import { createSaleTransaction, createExpenseTransaction, createCustomerPaymentTransaction, getSummaryByDateRange, getTransactionsByDateRange } from '../db/transactionService.js';
-import { createBankAccount, updateBankBalance } from '../db/bankService.js';
+import { createBankAccount, updateBankBalance, findBankAccountByName, getAllBankAccounts } from '../db/bankService.js';
 import { updateUserState } from '../db/userService.js';
 import { sendTextMessage, sendInteractiveButtons, uploadMedia, sendDocument } from '../api/whatsappService.js';
 import { generateSalesReport, generateExpenseReport, generateInventoryReport } from '../services/pdfService.js';
@@ -14,7 +14,6 @@ export async function executeTask(intent, user, data) {
         switch (intent) {
             case INTENTS.LOG_SALE:
                 await executeLogSale(user, data);
-                // State is managed by executeLogSale for the invoice flow
                 return; 
             case INTENTS.LOG_EXPENSE:
                 await executeLogExpense(user, data);
@@ -40,6 +39,9 @@ export async function executeTask(intent, user, data) {
             case INTENTS.ADD_BANK_ACCOUNT:
                 await executeAddBankAccount(user, data);
                 break;
+            case INTENTS.CHECK_BANK_BALANCE:
+                await executeCheckBankBalance(user, data);
+                break;
             default:
                 logger.warn(`No executor found for intent: ${intent}`);
                 await sendTextMessage(user.whatsappId, "I'm not sure how to process that right now, but I'm learning!");
@@ -50,7 +52,6 @@ export async function executeTask(intent, user, data) {
         await sendTextMessage(user.whatsappId, `I ran into an issue trying to complete that task: ${error.message} Please try again. 🛠️`);
     } 
     
-    // Most tasks reset state to IDLE. Sales is a special case.
     if (user.state !== USER_STATES.IDLE) {
         await updateUserState(user.whatsappId, USER_STATES.IDLE, {});
     }
@@ -59,74 +60,37 @@ export async function executeTask(intent, user, data) {
 async function executeLogSale(user, data) {
     const { productName, unitsSold, amountPerUnit, customerName, saleType, linkedBankId } = data;
     const totalAmount = unitsSold * amountPerUnit;
-
     const customer = await findOrCreateCustomer(user._id, customerName);
     const product = await findOrCreateProduct(user._id, productName);
-
     const description = `${unitsSold} x ${productName} sold to ${customerName}`;
-    const transactionData = {
-        userId: user._id,
-        totalAmount,
-        date: new Date(),
-        description,
-        linkedProductId: product._id,
-        linkedCustomerId: customer._id,
-        linkedBankId,
-        paymentMethod: saleType,
-    };
+    const transactionData = { userId: user._id, totalAmount, date: new Date(), description, linkedProductId: product._id, linkedCustomerId: customer._id, linkedBankId, paymentMethod: saleType };
     const transaction = await createSaleTransaction(transactionData);
-
     await updateStock(product._id, -unitsSold, 'SALE', transaction._id);
-
     if (saleType.toLowerCase() === 'credit') {
         await updateBalanceOwed(customer._id, totalAmount);
     } else if (linkedBankId) {
         await updateBankBalance(linkedBankId, totalAmount);
     }
-
     const formattedAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(totalAmount);
     await sendTextMessage(user.whatsappId, `✅ Sale logged successfully! ${description} for ${formattedAmount}.`);
-    
     await updateUserState(user.whatsappId, USER_STATES.AWAITING_INVOICE_CONFIRMATION, { transactionId: transaction._id });
-    await sendInteractiveButtons(
-        user.whatsappId,
-        'Would you like me to generate a PDF invoice for this sale?',
-        [{ id: 'invoice_yes', title: 'Yes, Please' }, { id: 'invoice_no', title: 'No, Thanks' }]
-    );
+    await sendInteractiveButtons(user.whatsappId, 'Would you like me to generate a PDF invoice for this sale?', [{ id: 'invoice_yes', title: 'Yes, Please' }, { id: 'invoice_no', title: 'No, Thanks' }]);
 }
 
 async function executeLogExpense(user, data) {
     const { category, amount, description, linkedBankId } = data;
-
-    const transactionData = {
-        userId: user._id,
-        amount: Number(amount),
-        date: new Date(),
-        description,
-        category,
-        linkedBankId,
-    };
+    const transactionData = { userId: user._id, amount: Number(amount), date: new Date(), description, category, linkedBankId };
     await createExpenseTransaction(transactionData);
-    
     if (linkedBankId) {
         await updateBankBalance(linkedBankId, -Number(amount));
     }
-    
     const formattedAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(amount);
     await sendTextMessage(user.whatsappId, `✅ Expense logged: ${formattedAmount} for "${description}".`);
 }
 
 async function executeAddProduct(user, data) {
     const { productName, quantityAdded, costPrice, sellingPrice } = data;
-
-    const product = await upsertProduct(
-        user._id,
-        productName,
-        Number(quantityAdded),
-        Number(costPrice),
-        Number(sellingPrice)
-    );
-
+    const product = await upsertProduct(user._id, productName, Number(quantityAdded), Number(costPrice), Number(sellingPrice));
     await sendTextMessage(user.whatsappId, `📦 Done! "${product.productName}" has been updated. You now have ${product.quantity} units in stock.`);
 }
 
@@ -136,24 +100,16 @@ async function executeAddMultipleProducts(user, data) {
         await sendTextMessage(user.whatsappId, "I couldn't find any products in your message to add. Please try again!");
         return;
     }
-
     const addedProducts = [];
     for (const p of products) {
         try {
-            const newProd = await upsertProduct(
-                user._id,
-                p.productName,
-                Number(p.quantityAdded),
-                Number(p.costPrice),
-                Number(p.sellingPrice)
-            );
+            const newProd = await upsertProduct(user._id, p.productName, Number(p.quantityAdded), Number(p.costPrice), Number(p.sellingPrice));
             addedProducts.push(newProd);
         } catch (error) {
             logger.error(`Failed to add one of the multiple products: ${p.productName}`, error);
             await sendTextMessage(user.whatsappId, `I had an issue adding "${p.productName}". Please try adding it separately.`);
         }
     }
-
     if (addedProducts.length > 0) {
         const summary = addedProducts.map(p => `"${p.productName}" (${p.quantity} units)`).join(', ');
         await sendTextMessage(user.whatsappId, `✅ Successfully updated ${addedProducts.length} items in your inventory: ${summary}.`);
@@ -166,9 +122,7 @@ async function executeCheckStock(user, data) {
         await sendTextMessage(user.whatsappId, "Please tell me which product you'd like to check.");
         return;
     }
-
     const product = await findProductByName(user._id, productName);
-
     if (product) {
         await sendTextMessage(user.whatsappId, `You have ${product.quantity} units of "${product.productName}" in stock. 📦`);
     } else {
@@ -182,15 +136,11 @@ async function executeGetFinancialSummary(user, data) {
         await sendTextMessage(user.whatsappId, "Please be more specific. You can ask 'what are my sales today?' or 'show me my expenses this month'.");
         return;
     }
-
     const { startDate, endDate } = getDateRange(period);
     const type = metric.toUpperCase() === 'SALES' ? 'SALE' : 'EXPENSE';
-
     const total = await getSummaryByDateRange(user._id, type, startDate, endDate);
-    
     const formattedAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(total);
     const readablePeriod = period.replace('_', ' ');
-
     await sendTextMessage(user.whatsappId, `Your total ${metric} for ${readablePeriod} is ${formattedAmount}. 📊`);
 }
 
@@ -200,14 +150,10 @@ async function executeGenerateReport(user, data) {
         await sendTextMessage(user.whatsappId, "Please specify the report you need, for example: 'send sales report for this month' or 'generate inventory report'.");
         return;
     }
-    
     const reportTypeLower = (reportType || data.reportType).toLowerCase();
-    
     await sendTextMessage(user.whatsappId, `Generating your ${reportTypeLower} report... Please wait a moment. 📄`);
-    
     let pdfBuffer;
     let filename;
-    
     if (reportTypeLower === 'sales' || reportTypeLower === 'expenses') {
         if (!period) {
             await sendTextMessage(user.whatsappId, "Please specify a period for this report, like 'today' or 'this month'.");
@@ -216,17 +162,13 @@ async function executeGenerateReport(user, data) {
         const { startDate, endDate } = getDateRange(period);
         const readablePeriod = `For the Period: ${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`;
         const type = reportTypeLower === 'sales' ? 'SALE' : 'EXPENSE';
-
         const transactions = await getTransactionsByDateRange(user._id, type, startDate, endDate);
         if (transactions.length === 0) {
             await sendTextMessage(user.whatsappId, `You have no ${reportTypeLower} data for ${period.replace('_', ' ')}.`);
             return;
         }
-        pdfBuffer = reportTypeLower === 'sales' 
-            ? await generateSalesReport(user, transactions, readablePeriod)
-            : await generateExpenseReport(user, transactions, readablePeriod);
+        pdfBuffer = reportTypeLower === 'sales' ? await generateSalesReport(user, transactions, readablePeriod) : await generateExpenseReport(user, transactions, readablePeriod);
         filename = `${reportType.charAt(0).toUpperCase() + reportType.slice(1)}_Report_${period}.pdf`;
-
     } else if (reportTypeLower === 'inventory') {
         const products = await getAllProducts(user._id);
         if (products.length === 0) {
@@ -235,12 +177,10 @@ async function executeGenerateReport(user, data) {
         }
         pdfBuffer = await generateInventoryReport(user, products);
         filename = 'Inventory_Report.pdf';
-
     } else {
         await sendTextMessage(user.whatsappId, `Sorry, I can only generate sales, expense, and inventory reports for now.`);
         return;
     }
-
     if (pdfBuffer) {
         const mediaId = await uploadMedia(pdfBuffer, 'application/pdf');
         if (mediaId) {
@@ -254,23 +194,12 @@ async function executeGenerateReport(user, data) {
 async function executeLogCustomerPayment(user, data) {
     const { customerName, amount } = data;
     const paymentAmount = Number(amount);
-
     const customer = await findOrCreateCustomer(user._id, customerName);
-
     const description = `Payment of ${paymentAmount} received from ${customer.customerName}.`;
-    await createCustomerPaymentTransaction({
-        userId: user._id,
-        linkedCustomerId: customer._id,
-        amount: paymentAmount,
-        date: new Date(),
-        description,
-    });
-    
+    await createCustomerPaymentTransaction({ userId: user._id, linkedCustomerId: customer._id, amount: paymentAmount, date: new Date(), description });
     const updatedCustomer = await updateBalanceOwed(customer._id, -paymentAmount);
-    
     const formattedAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(paymentAmount);
     const formattedBalance = new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(updatedCustomer.balanceOwed);
-
     await sendTextMessage(user.whatsappId, `✅ Payment of ${formattedAmount} from ${customer.customerName} has been recorded.`);
     await sendTextMessage(user.whatsappId, `Their new outstanding balance is ${formattedBalance}.`);
 }
@@ -278,9 +207,34 @@ async function executeLogCustomerPayment(user, data) {
 async function executeAddBankAccount(user, data) {
     const { bankName, openingBalance } = data;
     const balance = Number(openingBalance);
-
     const newAccount = await createBankAccount(user._id, bankName, balance);
-
     const formattedBalance = new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(newAccount.balance);
     await sendTextMessage(user.whatsappId, `🏦 Success! Your bank account "${newAccount.bankName}" has been added with a starting balance of ${formattedBalance}.`);
+}
+
+async function executeCheckBankBalance(user, data) {
+    const { bankName } = data;
+    const format = (amount) => new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(amount);
+
+    if (bankName) {
+        // User asked for a specific bank
+        const bank = await findBankAccountByName(user._id, bankName);
+        if (bank) {
+            await sendTextMessage(user.whatsappId, `Your balance in *${bank.bankName}* is ${format(bank.balance)}.`);
+        } else {
+            await sendTextMessage(user.whatsappId, `I couldn't find a bank account named "${bankName}".`);
+        }
+    } else {
+        // User asked for all bank balances
+        const banks = await getAllBankAccounts(user._id);
+        if (banks.length === 0) {
+            await sendTextMessage(user.whatsappId, "You haven't added any bank accounts yet. You can add one by saying 'add bank account'.");
+            return;
+        }
+        let summary = "Here are your current bank balances:\n\n";
+        banks.forEach(bank => {
+            summary += `*${bank.bankName}*: ${format(bank.balance)}\n`;
+        });
+        await sendTextMessage(user.whatsappId, summary);
+    }
 }

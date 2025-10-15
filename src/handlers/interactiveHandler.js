@@ -27,13 +27,27 @@ export async function handleInteractiveMessage(message) {
 
 async function handleButtonReply(user, buttonId) {
     switch (user.state) {
-        case USER_STATES.AWAITING_BULK_PRODUCT_CONFIRMATION: await handleBulkProductConfirmation(user, buttonId); break;
-        case USER_STATES.AWAITING_INVOICE_CONFIRMATION: await handleInvoiceConfirmation(user, buttonId); break;
-        case USER_STATES.AWAITING_BANK_SELECTION_SALE: await handleBankSelection(user, buttonId, INTENTS.LOG_SALE); break;
-        case USER_STATES.AWAITING_BANK_SELECTION_EXPENSE: await handleBankSelection(user, buttonId, INTENTS.LOG_EXPENSE); break;
-        case USER_STATES.AWAITING_RECONCILE_ACTION: await handleReconcileAction(user, buttonId); break;
-        case USER_STATES.AWAITING_EDIT_FIELD_SELECTION: await handleEditFieldSelection(user, buttonId); break;
-        case USER_STATES.AWAITING_DELETE_CONFIRMATION: await handleDeleteConfirmation(user, buttonId); break;
+        case USER_STATES.AWAITING_BULK_PRODUCT_CONFIRMATION:
+            await handleBulkProductConfirmation(user, buttonId);
+            break;
+        case USER_STATES.AWAITING_INVOICE_CONFIRMATION:
+            await handleInvoiceConfirmation(user, buttonId);
+            break;
+        case USER_STATES.AWAITING_BANK_SELECTION_SALE:
+            await handleBankSelection(user, buttonId, INTENTS.LOG_SALE);
+            break;
+        case USER_STATES.AWAITING_BANK_SELECTION_EXPENSE:
+            await handleBankSelection(user, buttonId, INTENTS.LOG_EXPENSE);
+            break;
+        case USER_STATES.AWAITING_RECONCILE_ACTION:
+            await handleReconcileAction(user, buttonId);
+            break;
+        case USER_STATES.AWAITING_EDIT_FIELD_SELECTION:
+            await handleEditFieldSelection(user, buttonId);
+            break;
+        case USER_STATES.AWAITING_DELETE_CONFIRMATION:
+            await handleDeleteConfirmation(user, buttonId);
+            break;
         default:
             logger.warn(`Received a button click in an unhandled state: ${user.state}`);
             await sendTextMessage(user.whatsappId, "Sorry, I wasn't expecting that response right now.");
@@ -156,19 +170,21 @@ async function handleReconcileAction(user, buttonId) {
         ]);
     } else if (buttonId === 'action_edit') {
         let buttons = [];
+        // --- FIX APPLIED HERE ---
         if (transaction.type === 'SALE') {
             buttons = [
-                { id: 'edit_field:unitsSold', title: 'Change Units Sold' },
-                { id: 'edit_field:amountPerUnit', title: 'Change Price Per Unit' },
+                { id: 'edit_field:unitsSold', title: 'Edit Units Sold' },
+                { id: 'edit_field:amountPerUnit', title: 'Edit Unit Price' },
             ];
         } else if (transaction.type === 'EXPENSE') {
             buttons = [
-                { id: 'edit_field:amount', title: 'Change Amount' },
-                { id: 'edit_field:description', title: 'Change Description' },
+                { id: 'edit_field:amount', title: 'Edit Amount' },
+                { id: 'edit_field:description', title: 'Edit Description' },
             ];
         } else { // Customer Payment
-            buttons = [{ id: 'edit_field:amount', title: 'Change Amount' }];
+            buttons = [{ id: 'edit_field:amount', title: 'Edit Amount' }];
         }
+        // --- END OF FIX ---
         await updateUserState(user.whatsappId, USER_STATES.AWAITING_EDIT_FIELD_SELECTION, { transaction });
         await sendInteractiveButtons(user.whatsappId, "Which part of this transaction would you like to edit?", buttons);
     }
@@ -180,8 +196,16 @@ async function handleEditFieldSelection(user, buttonId) {
 
     if (action !== 'edit_field') return;
     
+    // Map internal field names to user-friendly text
+    const fieldMap = {
+        unitsSold: "units sold",
+        amountPerUnit: "price per unit",
+        amount: "amount",
+        description: "description"
+    };
+
     await updateUserState(user.whatsappId, USER_STATES.AWAITING_EDIT_VALUE, { transaction, fieldToEdit });
-    await sendTextMessage(user.whatsappId, `Okay, what is the new value for "${fieldToEdit}"?`);
+    await sendTextMessage(user.whatsappId, `Okay, what is the new value for the *${fieldMap[fieldToEdit] || fieldToEdit}*?`);
 }
 
 async function handleDeleteConfirmation(user, buttonId) {

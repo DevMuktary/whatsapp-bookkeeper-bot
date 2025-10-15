@@ -4,11 +4,6 @@ import { ObjectId } from 'mongodb';
 
 const transactionsCollection = () => getDB().collection('transactions');
 
-/**
- * Creates a new sale transaction in the database.
- * @param {object} saleData - The data for the sale.
- * @returns {Promise<object>} The newly created transaction document.
- */
 export async function createSaleTransaction(saleData) {
     try {
         const transactionDoc = {
@@ -22,7 +17,6 @@ export async function createSaleTransaction(saleData) {
             paymentMethod: saleData.paymentMethod.toUpperCase(),
             createdAt: new Date()
         };
-
         const result = await transactionsCollection().insertOne(transactionDoc);
         logger.info(`Sale transaction created successfully with ID: ${result.insertedId}`);
         return await transactionsCollection().findOne({ _id: result.insertedId });
@@ -32,11 +26,6 @@ export async function createSaleTransaction(saleData) {
     }
 }
 
-/**
- * Creates a new expense transaction in the database.
- * @param {object} expenseData - The data for the expense.
- * @returns {Promise<object>} The newly created transaction document.
- */
 export async function createExpenseTransaction(expenseData) {
     try {
         const transactionDoc = {
@@ -48,7 +37,6 @@ export async function createExpenseTransaction(expenseData) {
             category: expenseData.category,
             createdAt: new Date()
         };
-
         const result = await transactionsCollection().insertOne(transactionDoc);
         logger.info(`Expense transaction created successfully with ID: ${result.insertedId}`);
         return await transactionsCollection().findOne({ _id: result.insertedId });
@@ -58,44 +46,38 @@ export async function createExpenseTransaction(expenseData) {
     }
 }
 
+export async function getSummaryByDateRange(userId, type, startDate, endDate) {
+    try {
+        const pipeline = [
+            { $match: { userId: userId, type: type, date: { $gte: startDate, $lte: endDate } } },
+            { $group: { _id: null, total: { $sum: "$amount" } } }
+        ];
+        const result = await transactionsCollection().aggregate(pipeline).toArray();
+        return result.length > 0 ? result[0].total : 0;
+    } catch (error) {
+        logger.error(`Error getting summary for user ${userId}:`, error);
+        throw new Error('Could not retrieve financial summary.');
+    }
+}
+
 /**
- * Calculates the sum of transactions for a given type and date range.
+ * Fetches all transactions for a given type and date range.
  * @param {ObjectId} userId The user's _id.
  * @param {string} type 'SALE' or 'EXPENSE'.
  * @param {Date} startDate The start of the date range.
  * @param {Date} endDate The end of the date range.
- * @returns {Promise<number>} The total sum of the amounts.
+ * @returns {Promise<Array<object>>} An array of transaction documents.
  */
-export async function getSummaryByDateRange(userId, type, startDate, endDate) {
+export async function getTransactionsByDateRange(userId, type, startDate, endDate) {
     try {
-        const pipeline = [
-            {
-                $match: {
-                    userId: userId,
-                    type: type,
-                    date: {
-                        $gte: startDate,
-                        $lte: endDate
-                    }
-                }
-            },
-            {
-                $group: {
-                    _id: null,
-                    total: { $sum: "$amount" }
-                }
-            }
-        ];
-
-        const result = await transactionsCollection().aggregate(pipeline).toArray();
-        
-        if (result.length > 0) {
-            return result[0].total;
-        } else {
-            return 0; // Return 0 if no transactions are found
-        }
+        const transactions = await transactionsCollection().find({
+            userId,
+            type,
+            date: { $gte: startDate, $lte: endDate }
+        }).sort({ date: 1 }).toArray();
+        return transactions;
     } catch (error) {
-        logger.error(`Error getting summary for user ${userId}:`, error);
-        throw new Error('Could not retrieve financial summary.');
+        logger.error(`Error getting transactions for user ${userId}:`, error);
+        throw new Error('Could not retrieve transactions.');
     }
 }

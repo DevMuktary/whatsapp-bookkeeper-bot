@@ -11,14 +11,61 @@ import { executeTask } from './taskHandler.js';
 
 const CANCEL_KEYWORDS = ['cancel', 'stop', 'exit', 'nevermind', 'abort'];
 
+/**
+ * Parses a price string (e.g., "₦1,000", "2.5m", "50k") into a number.
+ * @param {string} priceStr The string to parse.
+ * @returns {number} The parsed numeric value.
+ */
+const parsePrice = (priceStr) => {
+    const cleaned = priceStr.replace(/₦|,/g, '').toLowerCase();
+    let multiplier = 1;
+    if (cleaned.endsWith('k')) {
+        multiplier = 1000;
+    } else if (cleaned.endsWith('m')) {
+        multiplier = 1000000;
+    }
+    return parseFloat(cleaned) * multiplier;
+};
+
+/**
+ * A reliable, deterministic parser for multi-line product lists.
+ * @param {string} text The raw text message from the user.
+ * @returns {Array<object>} An array of parsed product objects.
+ */
+const parseProductList = (text) => {
+    const products = [];
+    const lines = text.split('\n');
+    const lineRegex = /^\s*\d+\.?\s+(\d+)\s+(.+?)\s*-\s*cost:\s*([^,]+),?\s*sell:\s*(.+)/i;
+
+    for (const line of lines) {
+        const match = line.trim().match(lineRegex);
+        if (match) {
+            try {
+                const [, quantityAdded, productName, costPriceStr, sellingPriceStr] = match;
+                products.push({
+                    quantityAdded: parseInt(quantityAdded.trim(), 10),
+                    productName: productName.trim(),
+                    costPrice: parsePrice(costPriceStr.trim()),
+                    sellingPrice: parsePrice(sellingPriceStr.trim())
+                });
+            } catch (e) {
+                logger.warn(`Failed to parse line: "${line}"`);
+            }
+        }
+    }
+    return products;
+};
+
 export async function handleMessage(message) {
   const whatsappId = message.from;
-  const text = message.text.body.trim().toLowerCase(); 
+  // Use original text for parsing, and lowercase for commands
+  const originalText = message.text.body; 
+  const lowerCaseText = originalText.trim().toLowerCase(); 
 
   try {
     const user = await findOrCreateUser(whatsappId);
 
-    if (CANCEL_KEYWORDS.includes(text)) {
+    if (CANCEL_KEYWORDS.includes(lowerCaseText)) {
         if (user.state === USER_STATES.IDLE) {
             await sendTextMessage(whatsappId, "There's nothing to cancel. What would you like to do?");
             return;
@@ -31,16 +78,16 @@ export async function handleMessage(message) {
 
     switch (user.state) {
       case USER_STATES.NEW_USER: await handleNewUser(user); break;
-      case USER_STATES.ONBOARDING_AWAIT_BUSINESS_AND_EMAIL: await handleOnboardingDetails(user, text); break;
-      case USER_STATES.ONBOARDING_AWAIT_OTP: await handleOtp(user, text); break;
-      case USER_STATES.ONBOARDING_AWAIT_CURRENCY: await handleCurrency(user, text); break;
-      case USER_STATES.IDLE: await handleIdleState(user, text); break;
-      case USER_STATES.LOGGING_SALE: await handleLoggingSale(user, text); break;
-      case USER_STATES.LOGGING_EXPENSE: await handleLoggingExpense(user, text); break;
-      case USER_STATES.ADDING_PRODUCT: await handleAddingProduct(user, text); break;
-      case USER_STATES.LOGGING_CUSTOMER_PAYMENT: await handleLoggingCustomerPayment(user, text); break;
-      case USER_STATES.ADDING_BANK_ACCOUNT: await handleAddingBankAccount(user, text); break;
-      case USER_STATES.AWAITING_EDIT_VALUE: await handleEditValue(user, text); break;
+      case USER_STATES.ONBOARDING_AWAIT_BUSINESS_AND_EMAIL: await handleOnboardingDetails(user, originalText); break;
+      case USER_STATES.ONBOARDING_AWAIT_OTP: await handleOtp(user, originalText); break;
+      case USER_STATES.ONBOARDING_AWAIT_CURRENCY: await handleCurrency(user, originalText); break;
+      case USER_STATES.IDLE: await handleIdleState(user, originalText); break;
+      case USER_STATES.LOGGING_SALE: await handleLoggingSale(user, originalText); break;
+      case USER_STATES.LOGGING_EXPENSE: await handleLoggingExpense(user, originalText); break;
+      case USER_STATES.ADDING_PRODUCT: await handleAddingProduct(user, originalText); break;
+      case USER_STATES.LOGGING_CUSTOMER_PAYMENT: await handleLoggingCustomerPayment(user, originalText); break;
+      case USER_STATES.ADDING_BANK_ACCOUNT: await handleAddingBankAccount(user, originalText); break;
+      case USER_STATES.AWAITING_EDIT_VALUE: await handleEditValue(user, originalText); break;
         
       case USER_STATES.AWAITING_BANK_SELECTION_SALE:
       case USER_STATES.AWAITING_BANK_SELECTION_EXPENSE:
@@ -72,7 +119,27 @@ export async function handleMessage(message) {
 async function handleIdleState(user, text) {
     const { intent, context } = await getIntent(text);
 
-    if (intent === INTENTS.LOG_SALE) {
+    if (intent === INTENTS.ADD_PRODUCTS_FROM_LIST) {
+        logger.info(`Intent detected: ADD_PRODUCTS_FROM_LIST for user ${user.whatsappId}`);
+        const products = parseProductList(text);
+        if (products.length === 0) {
+            await sendTextMessage(user.whatsappId, "I see you sent a list, but I couldn't understand its format. Please try a format like:\n\n`1. 10 Shirts - cost: 5000, sell: 8000`");
+            return;
+        }
+        // If the reliable parser succeeds, we reuse the confirmation flow
+        let summary = "Great! I've parsed your list. Please confirm these items:\n\n";
+        products.forEach((p, index) => {
+            const cost = new Intl.NumberFormat('en-US').format(p.costPrice);
+            const sell = new Intl.NumberFormat('en-US').format(p.sellingPrice);
+            summary += `${index + 1}. *${p.quantityAdded}x ${p.productName}*\n   Cost: ${user.currency} ${cost}, Sell: ${user.currency} ${sell}\n`;
+        });
+        await updateUserState(user.whatsappId, USER_STATES.AWAITING_BULK_PRODUCT_CONFIRMATION, { products });
+        await sendInteractiveButtons(user.whatsappId, summary, [
+            { id: 'confirm_bulk_add', title: '✅ Yes, Proceed' },
+            { id: 'cancel_bulk_add', title: '❌ No, Cancel' }
+        ]);
+
+    } else if (intent === INTENTS.LOG_SALE) {
         let existingProduct = context.productName ? await findProductByName(user._id, context.productName) : null;
         await updateUserState(user.whatsappId, USER_STATES.LOGGING_SALE, { memory: [{ role: 'user', content: text }], existingProduct });
         await handleLoggingSale({ ...user, state: USER_STATES.LOGGING_SALE, stateContext: { memory: [{ role: 'user', content: text }], existingProduct } }, text);
@@ -116,29 +183,6 @@ async function handleIdleState(user, text) {
             "Please select the transaction you would like to modify from the list below.",
             "View Transactions",
             sections
-        );
-
-    } else if (intent === INTENTS.ADD_MULTIPLE_PRODUCTS) {
-        logger.info(`Intent detected: ADD_MULTIPLE_PRODUCTS for user ${user.whatsappId}`);
-        const products = context.products || [];
-        if (products.length === 0) {
-            await sendTextMessage(user.whatsappId, "I see you want to add multiple products, but I had trouble understanding the list. Could you try a simpler format like:\n\n`Add 10 shirts (cost 1k, sell 2k) and 5 trousers (cost 2k, sell 4k)`");
-            return;
-        }
-        let summary = "Great! I've found the following items. Please confirm:\n\n";
-        products.forEach((p, index) => {
-            const cost = new Intl.NumberFormat('en-US').format(p.costPrice);
-            const sell = new Intl.NumberFormat('en-US').format(p.sellingPrice);
-            summary += `${index + 1}. *${p.quantityAdded}x ${p.productName}*\n   Cost: ${user.currency} ${cost}, Sell: ${user.currency} ${sell}\n`;
-        });
-        await updateUserState(user.whatsappId, USER_STATES.AWAITING_BULK_PRODUCT_CONFIRMATION, { products: products });
-        await sendInteractiveButtons(
-            user.whatsappId,
-            summary,
-            [
-                { id: 'confirm_bulk_add', title: '✅ Yes, Proceed' },
-                { id: 'cancel_bulk_add', title: '❌ No, Cancel' }
-            ]
         );
     } else if (intent === INTENTS.CHECK_STOCK || intent === INTENTS.GET_FINANCIAL_SUMMARY || intent === INTENTS.GENERATE_REPORT || intent === INTENTS.CHECK_BANK_BALANCE || intent === INTENTS.GET_FINANCIAL_INSIGHT) {
         logger.info(`Intent detected: ${intent} for user ${user.whatsappId}`);
@@ -298,7 +342,7 @@ async function handleOnboardingDetails(user, text) {
     const tenMinutes = 10 * 60 * 1000;
     const otpExpires = new Date(Date.now() + tenMinutes);
 
-    await updateUser(user.whatsappId, { otp, otpExpires });
+    await updateUser(updatedUser.whatsappId, { otp, otpExpires });
     await updateUserState(user.whatsappId, USER_STATES.ONBOARDING_AWAIT_OTP);
     await sendTextMessage(user.whatsappId, `Perfect! I've just sent a 6-digit verification code to ${updatedUser.email}. 📧 Please enter it here to continue.`);
   } else if (updatedUser.businessName) {

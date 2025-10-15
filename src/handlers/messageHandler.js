@@ -7,12 +7,28 @@ import { USER_STATES, INTENTS } from '../utils/constants.js';
 import logger from '../utils/logger.js';
 import { executeTask } from './taskHandler.js';
 
+const CANCEL_KEYWORDS = ['cancel', 'stop', 'exit', 'nevermind', 'abort'];
+
 export async function handleMessage(message) {
   const whatsappId = message.from;
-  const text = message.text.body;
+  const text = message.text.body.trim().toLowerCase(); // Normalize input for reliable matching
 
   try {
     const user = await findOrCreateUser(whatsappId);
+
+    // --- NEW: Global Cancel Command Check ---
+    if (CANCEL_KEYWORDS.includes(text)) {
+        if (user.state === USER_STATES.IDLE) {
+            await sendTextMessage(whatsappId, "There's nothing to cancel. What would you like to do?");
+            return;
+        }
+
+        logger.info(`User ${whatsappId} cancelled operation from state: ${user.state}`);
+        await updateUserState(whatsappId, USER_STATES.IDLE, {});
+        await sendTextMessage(whatsappId, "Okay, I've cancelled the current operation. What would you like to do next? 👍");
+        return; // Stop further processing
+    }
+    // --- End of New Section ---
 
     switch (user.state) {
       case USER_STATES.NEW_USER: 

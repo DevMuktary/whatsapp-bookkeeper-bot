@@ -56,7 +56,7 @@ export async function extractCurrency(text) {
 }
 
 export async function getIntent(text) {
-    const systemPrompt = `You are an advanced intent classification and entity extraction system for a bookkeeping app. You must respond ONLY with a JSON object.
+    const systemPrompt = `You are an advanced intent classification system for a bookkeeping app. You must respond ONLY with a JSON object.
 
 The possible intents are:
 - "${INTENTS.LOG_SALE}"
@@ -69,22 +69,18 @@ The possible intents are:
 - "${INTENTS.LOG_CUSTOMER_PAYMENT}"
 - "${INTENTS.ADD_BANK_ACCOUNT}"
 - "${INTENTS.CHECK_BANK_BALANCE}"
+- "${INTENTS.RECONCILE_TRANSACTION}"
 
-Your JSON response format is: {"intent": "INTENT_NAME", "context": { ... extracted details ... }}.
+Your JSON response format is: {"intent": "INTENT_NAME", "context": {}}.
 
 Extraction Rules:
-1.  For "${INTENTS.CHECK_BANK_BALANCE}", context must contain {"bankName": "..."}. If the user asks for all balances or doesn't specify one, "bankName" should be null.
-2.  For "${INTENTS.ADD_BANK_ACCOUNT}", context must contain {"bankName": "...", "openingBalance": ...}.
-3.  For "${INTENTS.LOG_CUSTOMER_PAYMENT}", context must contain {"customerName": "...", "amount": ...}.
-4.  If the intent is not clear, respond with {"intent": null, "context": {}}.
+1.  If the user says "I made a mistake", "delete a transaction", "edit a sale", "correct a record", or similar, the intent is "${INTENTS.RECONCILE_TRANSACTION}".
+2.  For "${INTENTS.CHECK_BANK_BALANCE}", if a specific bank is named, extract {"bankName": "..."}.
+3.  If the intent is not clear, respond with {"intent": null, "context": {}}.
 
-Example 1:
-User: "what's my balance in GTB"
-Your Response: {"intent": "${INTENTS.CHECK_BANK_BALANCE}", "context": {"bankName": "GTB"}}
-
-Example 2:
-User: "show me all my bank balances"
-Your Response: {"intent": "${INTENTS.CHECK_BANK_BALANCE}", "context": {"bankName": null}}
+Example:
+User: "I need to correct my last entry"
+Your Response: {"intent": "${INTENTS.RECONCILE_TRANSACTION}", "context": {}}
 `;
 
     const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: text }];

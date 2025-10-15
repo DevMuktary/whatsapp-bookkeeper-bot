@@ -1,12 +1,11 @@
 import express from 'express';
 import config from '../config/index.js';
 import logger from '../utils/logger.js';
-// TODO: We will import the message handler here in a future phase.
-// import { handleMessage } from '../handlers/messageHandler.js';
+import { handleMessage } from '../handlers/messageHandler.js';
 
 const router = express.Router();
 
-// Route for WhatsApp webhook verification
+// Route for WhatsApp webhook verification (no changes)
 router.get('/', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
@@ -24,21 +23,19 @@ router.get('/', (req, res) => {
 // Route for receiving messages and events from WhatsApp
 router.post('/', (req, res) => {
   const body = req.body;
-
-  // For now, we will just log the incoming payload to confirm it's working.
-  logger.info('Received WhatsApp payload:', JSON.stringify(body, null, 2));
-
-  if (body.object === 'whatsapp_business_account') {
-    // TODO: In Phase 2, we will extract the message and pass it to messageHandler.
-    // const message = body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
-    // if (message) {
-    //   handleMessage(message);
-    // }
-  }
-
-  // We must send a 200 OK response back to Meta immediately.
-  // Failing to do so will result in the webhook being disabled.
+  
+  // Immediately send a 200 OK response to Meta.
   res.sendStatus(200);
+
+  // Asynchronously process the message
+  if (body.object === 'whatsapp_business_account') {
+    const message = body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+    if (message && message.type === 'text') { // Only process text messages for now
+      handleMessage(message);
+    }
+  } else {
+    logger.warn('Received a non-whatsapp_business_account payload');
+  }
 });
 
 export default router;

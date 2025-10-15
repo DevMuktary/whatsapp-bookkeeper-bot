@@ -116,7 +116,8 @@ export async function sendMainMenu(to) {
                 { id: 'generate sales report', title: 'Sales Report', description: 'Get a PDF report of your sales.' },
                 { id: 'generate expense report', title: 'Expense Report', description: 'Get a PDF report of your expenses.' },
                 { id: 'generate inventory report', title: 'Inventory Report', description: 'Get a PDF of your current stock.' },
-                { id: 'get financial insight', title: 'Get Financial Insight', description: 'Receive an AI-powered tip about your business.' }
+                { id: 'generate p&l report', title: 'Profit & Loss Report', description: 'See your revenue, costs, and net profit.' },
+                { id: 'get financial insight', title: 'Get Financial Insight', description: 'Receive an AI-powered tip for your business.' }
             ]
         },
         {
@@ -133,6 +134,7 @@ export async function sendMainMenu(to) {
             rows: [
                 { id: 'edit a transaction', title: 'Edit/Delete Transaction', description: 'Correct a mistake in your records.' },
                 { id: 'add a bank account', title: 'Add a Bank Account', description: 'Set up a new bank account.' },
+                { id: 'check bank balance', title: 'Check Bank Balance', description: 'View current account balances.' },
             ]
         }
     ];

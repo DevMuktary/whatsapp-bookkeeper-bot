@@ -3,7 +3,7 @@ import { findOrCreateProduct, updateStock, upsertProduct, findProductByName } fr
 import { createSaleTransaction, createExpenseTransaction, getSummaryByDateRange, getTransactionsByDateRange } from '../db/transactionService.js';
 import { updateUserState } from '../db/userService.js';
 import { sendTextMessage, sendInteractiveButtons, uploadMedia, sendDocument } from '../api/whatsappService.js';
-import { generateSalesReport } from '../services/pdfService.js';
+import { generateSalesReport, generateExpenseReport } from '../services/pdfService.js';
 import { INTENTS, USER_STATES } from '../utils/constants.js';
 import { getDateRange } from '../utils/dateUtils.js';
 import logger from '../utils/logger.js';
@@ -13,8 +13,6 @@ export async function executeTask(intent, user, data) {
         switch (intent) {
             case INTENTS.LOG_SALE:
                 await executeLogSale(user, data);
-                // We no longer reset the state here, as the invoice flow needs to take over.
-                // State will be reset by the interactiveHandler.
                 return; 
             case INTENTS.LOG_EXPENSE:
                 await executeLogExpense(user, data);
@@ -44,7 +42,6 @@ export async function executeTask(intent, user, data) {
         await sendTextMessage(user.whatsappId, "I ran into an issue trying to complete that task. Please try again. 🛠️");
     } 
     
-    // Most tasks reset state to IDLE. Sales is a special case handled in its function.
     if (user.state !== USER_STATES.IDLE) {
         await updateUserState(user.whatsappId, USER_STATES.IDLE, {});
     }
@@ -78,7 +75,6 @@ async function executeLogSale(user, data) {
     const formattedAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(totalAmount);
     await sendTextMessage(user.whatsappId, `✅ Sale logged successfully! ${description} for ${formattedAmount}.`);
     
-    // --- NEW INVOICE FLOW TRIGGER ---
     await updateUserState(user.whatsappId, USER_STATES.AWAITING_INVOICE_CONFIRMATION, { transactionId: transaction._id });
     await sendInteractiveButtons(
         user.whatsappId,
@@ -195,8 +191,9 @@ async function executeGenerateReport(user, data) {
 
     let pdfBuffer;
     let filename;
+    const reportTypeLower = reportType.toLowerCase();
     
-    if (reportType.toLowerCase() === 'sales') {
+    if (reportTypeLower === 'sales') {
         const transactions = await getTransactionsByDateRange(user._id, 'SALE', startDate, endDate);
         if (transactions.length === 0) {
             await sendTextMessage(user.whatsappId, `You have no sales data for ${period.replace('_', ' ')}.`);
@@ -204,8 +201,16 @@ async function executeGenerateReport(user, data) {
         }
         pdfBuffer = await generateSalesReport(user, transactions, readablePeriod);
         filename = `Sales_Report_${period}.pdf`;
+    } else if (reportTypeLower === 'expenses') {
+        const transactions = await getTransactionsByDateRange(user._id, 'EXPENSE', startDate, endDate);
+        if (transactions.length === 0) {
+            await sendTextMessage(user.whatsappId, `You have no expense data for ${period.replace('_', ' ')}.`);
+            return;
+        }
+        pdfBuffer = await generateExpenseReport(user, transactions, readablePeriod);
+        filename = `Expense_Report_${period}.pdf`;
     } else {
-        await sendTextMessage(user.whatsappId, `Sorry, I can only generate sales reports for now. More report types are coming soon!`);
+        await sendTextMessage(user.whatsappId, `Sorry, I can only generate sales and expense reports for now. More report types are coming soon!`);
         return;
     }
 

@@ -14,7 +14,6 @@ const inventoryLogsCollection = () => getDB().collection('inventory_logs');
  */
 export async function findOrCreateProduct(userId, productName) {
     try {
-        // Case-insensitive search
         const query = { userId, productName: { $regex: new RegExp(`^${productName}$`, 'i') } };
         let product = await productsCollection().findOne(query);
 
@@ -24,7 +23,7 @@ export async function findOrCreateProduct(userId, productName) {
                 userId,
                 productName,
                 quantity: 0,
-                costPrice: 0, // User can set this later via an 'update product' flow
+                costPrice: 0,
                 sellingPrice: 0,
                 createdAt: new Date(),
                 updatedAt: new Date(),
@@ -40,6 +39,63 @@ export async function findOrCreateProduct(userId, productName) {
 }
 
 /**
+ * Updates or inserts a product and logs the inventory change.
+ * @param {ObjectId} userId The user's _id.
+ * @param {string} productName The name of the product.
+ * @param {number} quantityAdded The quantity of stock being added.
+ * @param {number} costPrice The cost per unit.
+ * @param {number} sellingPrice The selling price per unit.
+ * @returns {Promise<object>} The upserted product document.
+ */
+export async function upsertProduct(userId, productName, quantityAdded, costPrice, sellingPrice) {
+    try {
+        const filter = { userId, productName: { $regex: new RegExp(`^${productName}$`, 'i') } };
+        const update = {
+            $set: {
+                userId,
+                productName,
+                costPrice,
+                sellingPrice,
+                updatedAt: new Date(),
+            },
+            $inc: {
+                quantity: quantityAdded,
+            },
+            $setOnInsert: {
+                createdAt: new Date(),
+            }
+        };
+
+        const result = await productsCollection().findOneAndUpdate(filter, update, {
+            upsert: true,
+            returnDocument: 'after'
+        });
+
+        const updatedProduct = result;
+        logger.info(`Upserted product "${productName}" for user ${userId}.`);
+
+        // Create an inventory log for the stock addition
+        if (quantityAdded > 0) {
+            const logEntry = {
+                userId: updatedProduct.userId,
+                productId: updatedProduct._id,
+                quantityChange: quantityAdded,
+                reason: 'STOCK_ADDITION',
+                createdAt: new Date(),
+            };
+            await inventoryLogsCollection().insertOne(logEntry);
+            logger.info(`Inventory log created for ${quantityAdded} units of "${productName}".`);
+        }
+        
+        return updatedProduct;
+    } catch (error) {
+        logger.error(`Error in upsertProduct for user ${userId}:`, error);
+        throw new Error('Could not upsert product.');
+    }
+}
+
+
+/**
  * Updates the stock for a given product and creates an inventory log entry.
  * @param {ObjectId} productId The product's _id.
  * @param {number} quantityChange The amount to change the stock by (e.g., -2 for a sale).
@@ -49,7 +105,6 @@ export async function findOrCreateProduct(userId, productName) {
  */
 export async function updateStock(productId, quantityChange, reason, linkedTransactionId) {
     try {
-        // Step 1: Update the product's quantity
         const updatedProduct = await productsCollection().findOneAndUpdate(
             { _id: productId },
             { 
@@ -63,7 +118,6 @@ export async function updateStock(productId, quantityChange, reason, linkedTrans
             throw new Error(`Product with id ${productId} not found for stock update.`);
         }
 
-        // Step 2: Create an inventory log for the change
         const logEntry = {
             userId: updatedProduct.userId,
             productId,

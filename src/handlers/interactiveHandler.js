@@ -71,8 +71,7 @@ async function handleButtonReply(user, buttonId, originalMessage) {
 async function handleListReply(user, listId, originalMessage) {
     switch (user.state) {
         case USER_STATES.IDLE:
-        case USER_STATES.AWAITING_REPORT_TYPE_SELECTION: // <-- FIX IS HERE
-            logger.info(`Handling list click from ${user.state} for user ${user.whatsappId}`);
+            logger.info(`Handling main menu list click from IDLE state for user ${user.whatsappId}`);
             const mockTextMessage = {
                 from: originalMessage.from,
                 text: {
@@ -82,6 +81,23 @@ async function handleListReply(user, listId, originalMessage) {
             };
             await handleMessage(mockTextMessage);
             break;
+
+        // --- FIX IS HERE ---
+        case USER_STATES.AWAITING_REPORT_TYPE_SELECTION:
+            logger.info(`Handling report selection click for user ${user.whatsappId}`);
+            // The listId is the command, e.g., "generate inventory report".
+            // We can directly call the AI to parse this and then execute the task.
+            const mockReportMessage = {
+                from: originalMessage.from,
+                text: { body: listId },
+                type: 'text'
+            };
+            // Send it to the main handler, which will now be in IDLE state after this resolves.
+            // But first, we must reset the user's state to IDLE so the message handler processes it correctly.
+            await updateUserState(user.whatsappId, USER_STATES.IDLE);
+            await handleMessage(mockReportMessage);
+            break;
+        // --- END OF FIX ---
 
         case USER_STATES.AWAITING_TRANSACTION_SELECTION:
             await handleTransactionSelection(user, listId);

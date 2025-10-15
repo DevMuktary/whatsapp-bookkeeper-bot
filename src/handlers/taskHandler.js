@@ -1,9 +1,9 @@
 import { findOrCreateCustomer, updateBalanceOwed } from '../db/customerService.js';
-import { findOrCreateProduct, updateStock, upsertProduct, findProductByName } from '../db/productService.js';
+import { findOrCreateProduct, updateStock, upsertProduct, findProductByName, getAllProducts } from '../db/productService.js';
 import { createSaleTransaction, createExpenseTransaction, getSummaryByDateRange, getTransactionsByDateRange } from '../db/transactionService.js';
 import { updateUserState } from '../db/userService.js';
 import { sendTextMessage, sendInteractiveButtons, uploadMedia, sendDocument } from '../api/whatsappService.js';
-import { generateSalesReport, generateExpenseReport } from '../services/pdfService.js';
+import { generateSalesReport, generateExpenseReport, generateInventoryReport } from '../services/pdfService.js';
 import { INTENTS, USER_STATES } from '../utils/constants.js';
 import { getDateRange } from '../utils/dateUtils.js';
 import logger from '../utils/logger.js';
@@ -179,45 +179,55 @@ async function executeGetFinancialSummary(user, data) {
 
 async function executeGenerateReport(user, data) {
     const { reportType, period } = data;
-    if (!reportType || !period) {
-        await sendTextMessage(user.whatsappId, "Please specify the report you need, for example: 'send sales report for this month'.");
+    if (!reportType && !data.reportType) { // Handle cases where AI might miss the reportType
+        await sendTextMessage(user.whatsappId, "Please specify the report you need, for example: 'send sales report for this month' or 'generate inventory report'.");
         return;
     }
-
-    await sendTextMessage(user.whatsappId, `Generating your ${reportType} report for ${period.replace('_', ' ')}... Please wait a moment. 📄`);
     
-    const { startDate, endDate } = getDateRange(period);
-    const readablePeriod = `For the Period: ${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`;
-
+    const reportTypeLower = (reportType || data.reportType).toLowerCase();
+    
+    await sendTextMessage(user.whatsappId, `Generating your ${reportTypeLower} report... Please wait a moment. 📄`);
+    
     let pdfBuffer;
     let filename;
-    const reportTypeLower = reportType.toLowerCase();
     
-    if (reportTypeLower === 'sales') {
-        const transactions = await getTransactionsByDateRange(user._id, 'SALE', startDate, endDate);
-        if (transactions.length === 0) {
-            await sendTextMessage(user.whatsappId, `You have no sales data for ${period.replace('_', ' ')}.`);
+    if (reportTypeLower === 'sales' || reportTypeLower === 'expenses') {
+        if (!period) {
+            await sendTextMessage(user.whatsappId, "Please specify a period for this report, like 'today' or 'this month'.");
             return;
         }
-        pdfBuffer = await generateSalesReport(user, transactions, readablePeriod);
-        filename = `Sales_Report_${period}.pdf`;
-    } else if (reportTypeLower === 'expenses') {
-        const transactions = await getTransactionsByDateRange(user._id, 'EXPENSE', startDate, endDate);
+        const { startDate, endDate } = getDateRange(period);
+        const readablePeriod = `For the Period: ${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`;
+        const type = reportTypeLower === 'sales' ? 'SALE' : 'EXPENSE';
+
+        const transactions = await getTransactionsByDateRange(user._id, type, startDate, endDate);
         if (transactions.length === 0) {
-            await sendTextMessage(user.whatsappId, `You have no expense data for ${period.replace('_', ' ')}.`);
+            await sendTextMessage(user.whatsappId, `You have no ${reportTypeLower} data for ${period.replace('_', ' ')}.`);
             return;
         }
-        pdfBuffer = await generateExpenseReport(user, transactions, readablePeriod);
-        filename = `Expense_Report_${period}.pdf`;
+        pdfBuffer = reportTypeLower === 'sales' 
+            ? await generateSalesReport(user, transactions, readablePeriod)
+            : await generateExpenseReport(user, transactions, readablePeriod);
+        filename = `${reportType.charAt(0).toUpperCase() + reportType.slice(1)}_Report_${period}.pdf`;
+
+    } else if (reportTypeLower === 'inventory') {
+        const products = await getAllProducts(user._id);
+        if (products.length === 0) {
+            await sendTextMessage(user.whatsappId, "You haven't added any products to your inventory yet.");
+            return;
+        }
+        pdfBuffer = await generateInventoryReport(user, products);
+        filename = 'Inventory_Report.pdf';
+
     } else {
-        await sendTextMessage(user.whatsappId, `Sorry, I can only generate sales and expense reports for now. More report types are coming soon!`);
+        await sendTextMessage(user.whatsappId, `Sorry, I can only generate sales, expense, and inventory reports for now.`);
         return;
     }
 
     if (pdfBuffer) {
         const mediaId = await uploadMedia(pdfBuffer, 'application/pdf');
         if (mediaId) {
-            await sendDocument(user.whatsappId, mediaId, filename, `Here is your ${reportType} report.`);
+            await sendDocument(user.whatsappId, mediaId, filename, `Here is your ${reportTypeLower} report.`);
         } else {
             await sendTextMessage(user.whatsappId, "I couldn't send the report. There was an issue with the file upload. Please try again.");
         }

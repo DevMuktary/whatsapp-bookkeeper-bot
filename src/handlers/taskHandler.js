@@ -283,6 +283,8 @@ async function executeUpdateTransaction(user, data) {
     if (!originalTx) {
         throw new Error("Could not find the original transaction to update.");
     }
+
+    // --- Step 1: Rollback ---
     logger.info(`Rolling back original transaction ${transactionId}`);
     if (originalTx.type === 'SALE') {
         const unitsSoldMatch = originalTx.description.match(/^(\d+)\s*x/);
@@ -303,15 +305,34 @@ async function executeUpdateTransaction(user, data) {
     } else if (originalTx.type === 'CUSTOMER_PAYMENT') {
         await updateBalanceOwed(originalTx.linkedCustomerId, originalTx.amount);
     }
-    const updatedTxData = { ...originalTx, ...changes, updatedAt: new Date() };
-    const updatedTx = await updateTransactionById(transactionId, updatedTxData);
-    logger.info(`Transaction ${transactionId} updated in DB.`);
+
+    // --- Step 2: Recalculate & Prepare Update Data ---
+    let updateData = { ...changes };
+    if (originalTx.type === 'SALE') {
+        const unitsSoldMatch = originalTx.description.match(/^(\d+)\s*x/);
+        const originalUnitsSold = unitsSoldMatch ? parseInt(unitsSoldMatch[1], 10) : 0;
+        const originalAmountPerUnit = originalUnitsSold > 0 ? (originalTx.amount / originalUnitsSold) : 0;
+        
+        const descParts = originalTx.description.split(' sold to ');
+        const customerName = descParts[1];
+        const productPart = descParts[0].split(' x ');
+        const productName = productPart.slice(1).join(' x ');
+
+        const newUnitsSold = changes.unitsSold ?? originalUnitsSold;
+        const newAmountPerUnit = changes.amountPerUnit ?? originalAmountPerUnit;
+        
+        updateData.amount = newUnitsSold * newAmountPerUnit;
+        updateData.description = `${newUnitsSold} x ${productName} sold to ${customerName}`;
+    }
+    
+    // --- Step 3: Save and Replay ---
+    const updatedTx = await updateTransactionById(transactionId, updateData);
     logger.info(`Re-applying impact for updated transaction ${transactionId}`);
     if (updatedTx.type === 'SALE') {
         const unitsSoldMatch = updatedTx.description.match(/^(\d+)\s*x/);
-        const unitsSold = unitsSoldMatch ? parseInt(unitsSoldMatch[1], 10) : 0;
-        if (updatedTx.linkedProductId && unitsSold > 0) {
-            await updateStock(updatedTx.linkedProductId, -unitsSold, 'SALE_EDIT_REAPPLY');
+        const newUnitsSold = unitsSoldMatch ? parseInt(unitsSoldMatch[1], 10) : 0;
+        if (updatedTx.linkedProductId && newUnitsSold > 0) {
+            await updateStock(updatedTx.linkedProductId, -newUnitsSold, 'SALE_EDIT_REAPPLY');
         }
         if (updatedTx.paymentMethod === 'CREDIT') {
             await updateBalanceOwed(updatedTx.linkedCustomerId, updatedTx.amount);
@@ -326,5 +347,6 @@ async function executeUpdateTransaction(user, data) {
     } else if (updatedTx.type === 'CUSTOMER_PAYMENT') {
         await updateBalanceOwed(updatedTx.linkedCustomerId, -updatedTx.amount);
     }
+    
     await sendTextMessage(user.whatsappId, "✅ The transaction has been successfully updated.");
 }

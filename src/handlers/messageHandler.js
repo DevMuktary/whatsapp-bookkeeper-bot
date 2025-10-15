@@ -1,5 +1,5 @@
 import { findOrCreateUser, updateUser, updateUserState } from '../db/userService.js';
-import { extractOnboardingDetails, extractCurrency, getIntent, gatherSaleDetails, gatherExpenseDetails } from '../services/aiService.js';
+import { extractOnboardingDetails, extractCurrency, getIntent, gatherSaleDetails, gatherExpenseDetails, gatherProductDetails } from '../services/aiService.js';
 import { sendOtp } from '../services/emailService.js';
 import { sendTextMessage } from '../api/whatsappService.js';
 import { USER_STATES, INTENTS } from '../utils/constants.js';
@@ -35,6 +35,9 @@ export async function handleMessage(message) {
       case USER_STATES.LOGGING_EXPENSE:
         await handleLoggingExpense(user, text);
         break;
+      case USER_STATES.ADDING_PRODUCT:
+        await handleAddingProduct(user, text);
+        break;
       default:
         logger.warn(`Unhandled state: ${user.state} for user ${whatsappId}`);
         await sendTextMessage(whatsappId, "Apologies, I'm a bit stuck. Let's get you back on track.");
@@ -60,6 +63,11 @@ async function handleIdleState(user, text) {
         const initialMemory = [{ role: 'user', content: text }];
         await updateUserState(user.whatsappId, USER_STATES.LOGGING_EXPENSE, { memory: initialMemory });
         await handleLoggingExpense({ ...user, state: USER_STATES.LOGGING_EXPENSE, stateContext: { memory: initialMemory } }, text);
+    } else if (intent === INTENTS.ADD_PRODUCT) {
+        logger.info(`Intent detected: ADD_PRODUCT for user ${user.whatsappId}`);
+        const initialMemory = [{ role: 'user', content: text }];
+        await updateUserState(user.whatsappId, USER_STATES.ADDING_PRODUCT, { memory: initialMemory });
+        await handleAddingProduct({ ...user, state: USER_STATES.ADDING_PRODUCT, stateContext: { memory: initialMemory } }, text);
     } else {
         await sendTextMessage(user.whatsappId, "I'm sorry, I can only help with bookkeeping tasks right now. Try saying something like 'I made a sale' or 'I paid for transport'.");
     }
@@ -96,6 +104,23 @@ async function handleLoggingExpense(user, text) {
     } else if (aiResponse.status === 'complete') {
         await sendTextMessage(user.whatsappId, "Okay, noting that down... ✍️");
         await executeTask(INTENTS.LOG_EXPENSE, user, aiResponse.data);
+    }
+}
+
+async function handleAddingProduct(user, text) {
+    const currentMemory = user.stateContext.memory || [];
+    if (currentMemory.length === 0 || currentMemory[currentMemory.length - 1].role !== 'user') {
+        currentMemory.push({ role: 'user', content: text });
+    }
+
+    const aiResponse = await gatherProductDetails(currentMemory);
+
+    if (aiResponse.status === 'incomplete') {
+        await updateUserState(user.whatsappId, USER_STATES.ADDING_PRODUCT, { memory: aiResponse.memory });
+        await sendTextMessage(user.whatsappId, aiResponse.reply);
+    } else if (aiResponse.status === 'complete') {
+        await sendTextMessage(user.whatsappId, "Alright, adding that to your inventory... 📋");
+        await executeTask(INTENTS.ADD_PRODUCT, user, aiResponse.data);
     }
 }
 

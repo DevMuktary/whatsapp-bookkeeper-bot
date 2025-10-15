@@ -29,36 +29,16 @@ export async function handleMessage(message) {
     }
 
     switch (user.state) {
-      case USER_STATES.NEW_USER: 
-        await handleNewUser(user); 
-        break;
-      case USER_STATES.ONBOARDING_AWAIT_BUSINESS_AND_EMAIL: 
-        await handleOnboardingDetails(user, text); 
-        break;
-      case USER_STATES.ONBOARDING_AWAIT_OTP: 
-        await handleOtp(user, text); 
-        break;
-      case USER_STATES.ONBOARDING_AWAIT_CURRENCY: 
-        await handleCurrency(user, text); 
-        break;
-      case USER_STATES.IDLE:
-        await handleIdleState(user, text);
-        break;
-      case USER_STATES.LOGGING_SALE:
-        await handleLoggingSale(user, text);
-        break;
-      case USER_STATES.LOGGING_EXPENSE:
-        await handleLoggingExpense(user, text);
-        break;
-      case USER_STATES.ADDING_PRODUCT:
-        await handleAddingProduct(user, text);
-        break;
-      case USER_STATES.LOGGING_CUSTOMER_PAYMENT:
-        await handleLoggingCustomerPayment(user, text);
-        break;
-      case USER_STATES.ADDING_BANK_ACCOUNT:
-        await handleAddingBankAccount(user, text);
-        break;
+      case USER_STATES.NEW_USER: await handleNewUser(user); break;
+      case USER_STATES.ONBOARDING_AWAIT_BUSINESS_AND_EMAIL: await handleOnboardingDetails(user, text); break;
+      case USER_STATES.ONBOARDING_AWAIT_OTP: await handleOtp(user, text); break;
+      case USER_STATES.ONBOARDING_AWAIT_CURRENCY: await handleCurrency(user, text); break;
+      case USER_STATES.IDLE: await handleIdleState(user, text); break;
+      case USER_STATES.LOGGING_SALE: await handleLoggingSale(user, text); break;
+      case USER_STATES.LOGGING_EXPENSE: await handleLoggingExpense(user, text); break;
+      case USER_STATES.ADDING_PRODUCT: await handleAddingProduct(user, text); break;
+      case USER_STATES.LOGGING_CUSTOMER_PAYMENT: await handleLoggingCustomerPayment(user, text); break;
+      case USER_STATES.ADDING_BANK_ACCOUNT: await handleAddingBankAccount(user, text); break;
       default:
         logger.warn(`Unhandled state: ${user.state} for user ${whatsappId}`);
         await sendTextMessage(whatsappId, "Apologies, I'm a bit stuck. Let's get you back on track.");
@@ -113,7 +93,7 @@ async function handleIdleState(user, text) {
                 { id: 'cancel_bulk_add', title: '❌ No, Cancel' }
             ]
         );
-    } else if (intent === INTENTS.CHECK_STOCK || intent === INTENTS.GET_FINANCIAL_SUMMARY || intent === INTENTS.GENERATE_REPORT) {
+    } else if (intent === INTENTS.CHECK_STOCK || intent === INTENTS.GET_FINANCIAL_SUMMARY || intent === INTENTS.GENERATE_REPORT || intent === INTENTS.CHECK_BANK_BALANCE) {
         logger.info(`Intent detected: ${intent} for user ${user.whatsappId}`);
         await executeTask(intent, user, context);
     } else {
@@ -246,7 +226,7 @@ async function handleOnboardingDetails(user, text) {
     const tenMinutes = 10 * 60 * 1000;
     const otpExpires = new Date(Date.now() + tenMinutes);
 
-    await updateUser(updatedUser.whatsappId, { otp, otpExpires });
+    await updateUser(user.whatsappId, { otp, otpExpires });
     await updateUserState(user.whatsappId, USER_STATES.ONBOARDING_AWAIT_OTP);
     await sendTextMessage(user.whatsappId, `Perfect! I've just sent a 6-digit verification code to ${updatedUser.email}. 📧 Please enter it here to continue.`);
   } else if (updatedUser.businessName) {

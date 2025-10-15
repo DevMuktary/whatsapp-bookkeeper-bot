@@ -1,5 +1,6 @@
 import { findOrCreateUser, updateUser, updateUserState } from '../db/userService.js';
 import { findProductByName } from '../db/productService.js';
+import { getAllBankAccounts } from '../db/bankService.js';
 import { extractOnboardingDetails, extractCurrency, getIntent, gatherSaleDetails, gatherExpenseDetails, gatherProductDetails, gatherPaymentDetails, gatherBankAccountDetails } from '../services/aiService.js';
 import { sendOtp } from '../services/emailService.js';
 import { sendTextMessage, sendInteractiveButtons } from '../api/whatsappService.js';
@@ -126,12 +127,27 @@ async function handleLoggingSale(user, text) {
         currentMemory.push({ role: 'user', content: text });
     }
     const aiResponse = await gatherSaleDetails(currentMemory, existingProduct);
+
     if (aiResponse.status === 'incomplete') {
         await updateUserState(user.whatsappId, USER_STATES.LOGGING_SALE, { memory: aiResponse.memory, existingProduct });
         await sendTextMessage(user.whatsappId, aiResponse.reply);
     } else if (aiResponse.status === 'complete') {
-        await sendTextMessage(user.whatsappId, "Got it! Let me record that for you... 📝");
-        await executeTask(INTENTS.LOG_SALE, user, aiResponse.data);
+        const saleData = aiResponse.data;
+        
+        if (saleData.saleType.toLowerCase() === 'credit') {
+            await sendTextMessage(user.whatsappId, "Got it! Let me record that credit sale... 📝");
+            await executeTask(INTENTS.LOG_SALE, user, saleData);
+        } else {
+            const banks = await getAllBankAccounts(user._id);
+            if (banks.length === 0) {
+                await sendTextMessage(user.whatsappId, "FYI: You haven't set up any bank accounts. I'll log this sale, but I can't track it against a specific account.");
+                await executeTask(INTENTS.LOG_SALE, user, saleData);
+            } else {
+                await updateUserState(user.whatsappId, USER_STATES.AWAITING_BANK_SELECTION_SALE, { transactionData: saleData });
+                const buttons = banks.map(bank => ({ id: `select_bank:${bank._id}`, title: bank.bankName }));
+                await sendInteractiveButtons(user.whatsappId, 'Which account received the payment?', buttons);
+            }
+        }
     }
 }
 
@@ -141,12 +157,22 @@ async function handleLoggingExpense(user, text) {
         currentMemory.push({ role: 'user', content: text });
     }
     const aiResponse = await gatherExpenseDetails(currentMemory);
+
     if (aiResponse.status === 'incomplete') {
         await updateUserState(user.whatsappId, USER_STATES.LOGGING_EXPENSE, { memory: aiResponse.memory });
         await sendTextMessage(user.whatsappId, aiResponse.reply);
     } else if (aiResponse.status === 'complete') {
-        await sendTextMessage(user.whatsappId, "Okay, noting that down... ✍️");
-        await executeTask(INTENTS.LOG_EXPENSE, user, aiResponse.data);
+        const expenseData = aiResponse.data;
+        const banks = await getAllBankAccounts(user._id);
+
+        if (banks.length === 0) {
+            await sendTextMessage(user.whatsappId, "FYI: You haven't set up any bank accounts. I'll log this expense, but I can't track it against a specific account.");
+            await executeTask(INTENTS.LOG_EXPENSE, user, expenseData);
+        } else {
+            await updateUserState(user.whatsappId, USER_STATES.AWAITING_BANK_SELECTION_EXPENSE, { transactionData: expenseData });
+            const buttons = banks.map(bank => ({ id: `select_bank:${bank._id}`, title: bank.bankName }));
+            await sendInteractiveButtons(user.whatsappId, 'Which account was used for this payment?', buttons);
+        }
     }
 }
 

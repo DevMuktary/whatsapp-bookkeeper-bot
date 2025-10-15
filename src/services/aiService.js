@@ -73,23 +73,26 @@ The possible intents are:
 - "${INTENTS.LOG_EXPENSE}"
 - "${INTENTS.ADD_PRODUCT}"
 - "${INTENTS.ADD_MULTIPLE_PRODUCTS}"
+- "${INTENTS.ADD_PRODUCTS_FROM_LIST}"
 - "${INTENTS.LOG_CUSTOMER_PAYMENT}"
 - "${INTENTS.ADD_BANK_ACCOUNT}"
 
+Your JSON response format is: {"intent": "INTENT_NAME", "context": {}}.
 
 Extraction Rules & Examples:
-1.  **Insight:** If user asks "how is my business doing?", "give me advice", "financial insight", the intent is "${INTENTS.GET_FINANCIAL_INSIGHT}".
-2.  **Reconciliation:** If user says "I made a mistake", "delete transaction", "edit a sale", the intent is "${INTENTS.RECONCILE_TRANSACTION}".
-3.  **Reports:** For "${INTENTS.GENERATE_REPORT}", extract "reportType" and "period". 'reportType' can be "sales", "expenses", "inventory", or "pnl".
-    - User: "my p&l report" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "pnl"}}
+1.  **List Input:** If the user's message is a multi-line list, usually starting with numbers, the intent is ALWAYS "${INTENTS.ADD_PRODUCTS_FROM_LIST}". Do NOT try to extract any context.
+    - User: "1. 50 phone cases - cost: ₦1000, sell: ₦2500\\n2. 20 screen guards - cost: ₦500, sell: ₦1500" -> {"intent": "${INTENTS.ADD_PRODUCTS_FROM_LIST}", "context": {}}
+
+2.  **Reports:** For "${INTENTS.GENERATE_REPORT}", extract "reportType" and "period". Be flexible.
+    - User: "my sales report" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "sales"}}
     - User: "sales report for this month" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "sales", "period": "this_month"}}
     - User: "generate sales report for this month" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "sales", "period": "this_month"}}
     - User: "send my inventory report" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "inventory"}}
+    
+3.  **Single-line Multi-add:** For "${INTENTS.ADD_MULTIPLE_PRODUCTS}", extract products ONLY if they are on a single line.
+    - User: "restock 20 shirts (cost 3k, sell 5k) and 15 trousers (cost 4k, sell 7k)" -> {"intent": "${INTENTS.ADD_MULTIPLE_PRODUCTS}", "context": {"products": [...]}}
 
-4.  **Summaries:** For "${INTENTS.GET_FINANCIAL_SUMMARY}", extract "metric" and "period".
-    - User: "what were my expenses this week" -> {"intent": "${INTENTS.GET_FINANCIAL_SUMMARY}", "context": {"metric": "expenses", "period": "this_week"}}
-
-5.  If the intent is not clear, respond with {"intent": null, "context": {}}.
+4.  If the intent is not clear, respond with {"intent": null, "context": {}}.
 `;
 
     const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: text }];

@@ -6,7 +6,7 @@ const usersCollection = () => getDB().collection('users');
 
 /**
  * Finds a user by their WhatsApp ID or creates a new one if they don't exist.
- * New users are started in the initial onboarding state.
+ * New users are started in the NEW_USER state to trigger the welcome sequence.
  * @param {string} whatsappId The user's WhatsApp ID (phone number).
  * @returns {Promise<object>} The user document.
  */
@@ -22,7 +22,7 @@ export async function findOrCreateUser(whatsappId) {
         email: null,
         isEmailVerified: false,
         currency: null,
-        state: USER_STATES.ONBOARDING_AWAIT_BUSINESS_NAME,
+        state: USER_STATES.NEW_USER, // <-- IMPORTANT CHANGE HERE
         stateContext: {},
         otp: null,
         otpExpires: null,

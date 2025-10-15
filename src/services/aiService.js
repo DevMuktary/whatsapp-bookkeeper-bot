@@ -63,36 +63,38 @@ export async function getIntent(text) {
     const systemPrompt = `You are an advanced intent classification system. Respond ONLY with a JSON object.
 
 The possible intents are:
-- "${INTENTS.RECONCILE_TRANSACTION}"
-- "${INTENTS.GET_FINANCIAL_INSIGHT}"
-- "${INTENTS.GENERATE_REPORT}"
-- "${INTENTS.GET_FINANCIAL_SUMMARY}"
-- "${INTENTS.CHECK_BANK_BALANCE}"
-- "${INTENTS.CHECK_STOCK}"
 - "${INTENTS.LOG_SALE}"
 - "${INTENTS.LOG_EXPENSE}"
 - "${INTENTS.ADD_PRODUCT}"
 - "${INTENTS.ADD_MULTIPLE_PRODUCTS}"
 - "${INTENTS.ADD_PRODUCTS_FROM_LIST}"
+- "${INTENTS.CHECK_STOCK}"
+- "${INTENTS.GET_FINANCIAL_SUMMARY}"
+- "${INTENTS.GENERATE_REPORT}"
 - "${INTENTS.LOG_CUSTOMER_PAYMENT}"
 - "${INTENTS.ADD_BANK_ACCOUNT}"
+- "${INTENTS.CHECK_BANK_BALANCE}"
+- "${INTENTS.RECONCILE_TRANSACTION}"
+- "${INTENTS.GET_FINANCIAL_INSIGHT}"
+- "${INTENTS.CHITCHAT}"
 
 Your JSON response format is: {"intent": "INTENT_NAME", "context": {}}.
 
 Extraction Rules & Examples:
-1.  **List Input:** If the user's message is a multi-line list, usually starting with numbers, the intent is ALWAYS "${INTENTS.ADD_PRODUCTS_FROM_LIST}". Do NOT try to extract any context.
-    - User: "1. 50 phone cases - cost: ₦1000, sell: ₦2500\\n2. 20 screen guards - cost: ₦500, sell: ₦1500" -> {"intent": "${INTENTS.ADD_PRODUCTS_FROM_LIST}", "context": {}}
+1.  **Chitchat:** If the message is a simple greeting, acknowledgement, or compliment like "hi", "ok", "good", "alright", "thank you", "thanks", "lol", and it contains NO bookkeeping request, the intent is "${INTENTS.CHITCHAT}".
+    - User: "ok" -> {"intent": "${INTENTS.CHITCHAT}", "context": {}}
+    - User: "thanks!" -> {"intent": "${INTENTS.CHITCHAT}", "context": {}}
+    - User: "ok, log a sale" -> {"intent": "${INTENTS.LOG_SALE}", "context": {}} (This is NOT chitchat)
 
-2.  **Reports:** For "${INTENTS.GENERATE_REPORT}", extract "reportType" and "period". Be flexible.
+2.  **List Input:** If the user's message is a multi-line list starting with numbers, the intent is ALWAYS "${INTENTS.ADD_PRODUCTS_FROM_LIST}".
+    - User: "1. 50 phone cases..." -> {"intent": "${INTENTS.ADD_PRODUCTS_FROM_LIST}", "context": {}}
+
+3.  **Reports:** For "${INTENTS.GENERATE_REPORT}", extract "reportType" and "period". Be flexible.
     - User: "my sales report" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "sales"}}
     - User: "sales report for this month" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "sales", "period": "this_month"}}
     - User: "generate sales report for this month" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "sales", "period": "this_month"}}
-    - User: "send my inventory report" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "inventory"}}
-    
-3.  **Single-line Multi-add:** For "${INTENTS.ADD_MULTIPLE_PRODUCTS}", extract products ONLY if they are on a single line.
-    - User: "restock 20 shirts (cost 3k, sell 5k) and 15 trousers (cost 4k, sell 7k)" -> {"intent": "${INTENTS.ADD_MULTIPLE_PRODUCTS}", "context": {"products": [...]}}
 
-4.  If the intent is not clear, respond with {"intent": null, "context": {}}.
+4.  If a clear bookkeeping intent is present, prioritize it over chitchat. If no bookkeeping intent is clear, and it's not chitchat, respond with {"intent": null, "context": {}}.
 `;
 
     const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: text }];

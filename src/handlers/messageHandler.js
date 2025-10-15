@@ -59,9 +59,13 @@ async function handleIdleState(user, text) {
 
     if (intent === INTENTS.LOG_SALE) {
         logger.info(`Intent detected: LOG_SALE for user ${user.whatsappId}`);
+        let existingProduct = null;
+        if (context.productName) {
+            existingProduct = await findProductByName(user._id, context.productName);
+        }
         const initialMemory = [{ role: 'user', content: text }];
-        await updateUserState(user.whatsappId, USER_STATES.LOGGING_SALE, { memory: initialMemory });
-        await handleLoggingSale({ ...user, state: USER_STATES.LOGGING_SALE, stateContext: { memory: initialMemory } }, text);
+        await updateUserState(user.whatsappId, USER_STATES.LOGGING_SALE, { memory: initialMemory, existingProduct });
+        await handleLoggingSale({ ...user, state: USER_STATES.LOGGING_SALE, stateContext: { memory: initialMemory, existingProduct } }, text);
     } else if (intent === INTENTS.LOG_EXPENSE) {
         logger.info(`Intent detected: LOG_EXPENSE for user ${user.whatsappId}`);
         const initialMemory = [{ role: 'user', content: text }];
@@ -110,13 +114,13 @@ async function handleIdleState(user, text) {
 }
 
 async function handleLoggingSale(user, text) {
-    const currentMemory = user.stateContext.memory || [];
+    const { memory: currentMemory = [], existingProduct } = user.stateContext;
     if (currentMemory.length === 0 || currentMemory[currentMemory.length - 1].role !== 'user') {
         currentMemory.push({ role: 'user', content: text });
     }
-    const aiResponse = await gatherSaleDetails(currentMemory);
+    const aiResponse = await gatherSaleDetails(currentMemory, existingProduct);
     if (aiResponse.status === 'incomplete') {
-        await updateUserState(user.whatsappId, USER_STATES.LOGGING_SALE, { memory: aiResponse.memory });
+        await updateUserState(user.whatsappId, USER_STATES.LOGGING_SALE, { memory: aiResponse.memory, existingProduct });
         await sendTextMessage(user.whatsappId, aiResponse.reply);
     } else if (aiResponse.status === 'complete') {
         await sendTextMessage(user.whatsappId, "Got it! Let me record that for you... 📝");
@@ -193,12 +197,12 @@ async function handleOnboardingDetails(user, text) {
     const otpExpires = new Date(Date.now() + tenMinutes);
 
     await updateUser(updatedUser.whatsappId, { otp, otpExpires });
-    await updateUserState(updatedUser.whatsappId, USER_STATES.ONBOARDING_AWAIT_OTP);
-    await sendTextMessage(updatedUser.whatsappId, `Perfect! I've just sent a 6-digit verification code to ${updatedUser.email}. 📧 Please enter it here to continue.`);
+    await updateUserState(user.whatsappId, USER_STATES.ONBOARDING_AWAIT_OTP);
+    await sendTextMessage(user.whatsappId, `Perfect! I've just sent a 6-digit verification code to ${updatedUser.email}. 📧 Please enter it here to continue.`);
   } else if (updatedUser.businessName) {
-    await sendTextMessage(updatedUser.whatsappId, `Got it! Your business is "${updatedUser.businessName}". Now, what's your email address?`);
+    await sendTextMessage(user.whatsappId, `Got it! Your business is "${updatedUser.businessName}". Now, what's your email address?`);
   } else if (updatedUser.email) {
-    await sendTextMessage(updatedUser.whatsappId, `Thanks! I have your email as ${updatedUser.email}. What's your business name?`);
+    await sendTextMessage(user.whatsappId, `Thanks! I have your email as ${updatedUser.email}. What's your business name?`);
   } else {
     await sendTextMessage(user.whatsappId, "I'm sorry, I couldn't quite understand that. Could you please provide your business name and email address?");
   }

@@ -18,12 +18,6 @@ async function sendMessage(data) {
   }
 }
 
-/**
- * Uploads a media file to WhatsApp servers to get a media ID.
- * @param {Buffer} buffer The file buffer.
- * @param {string} mimeType The MIME type of the file (e.g., 'application/pdf').
- * @returns {Promise<string|null>} The media ID or null if failed.
- */
 export async function uploadMedia(buffer, mimeType) {
     try {
         const form = new FormData();
@@ -44,11 +38,6 @@ export async function uploadMedia(buffer, mimeType) {
     }
 }
 
-/**
- * Sends a simple text message.
- * @param {string} to The recipient's WhatsApp ID.
- * @param {string} text The content of the message.
- */
 export async function sendTextMessage(to, text) {
   const data = {
     messaging_product: 'whatsapp',
@@ -59,13 +48,6 @@ export async function sendTextMessage(to, text) {
   await sendMessage(data);
 }
 
-/**
- * Sends a document (like a PDF) to the user using a media ID.
- * @param {string} to The recipient's WhatsApp ID.
- * @param {string} mediaId The ID of the uploaded media.
- * @param {string} filename The desired filename for the document.
- * @param {string} caption A short description of the document.
- */
 export async function sendDocument(to, mediaId, filename, caption) {
     const data = {
         messaging_product: 'whatsapp',
@@ -80,12 +62,6 @@ export async function sendDocument(to, mediaId, filename, caption) {
     await sendMessage(data);
 }
 
-/**
- * Sends an interactive message with up to 3 buttons.
- * @param {string} to The recipient's WhatsApp ID.
- * @param {string} bodyText The main text of the message.
- * @param {Array<object>} buttons An array of button objects, e.g., [{id: 'yes_btn', title: 'Yes'}]
- */
 export async function sendInteractiveButtons(to, bodyText, buttons) {
   const formattedButtons = buttons.map(btn => ({
     type: 'reply',
@@ -105,14 +81,6 @@ export async function sendInteractiveButtons(to, bodyText, buttons) {
   await sendMessage(data);
 }
 
-/**
- * Sends an interactive list message.
- * @param {string} to The recipient's WhatsApp ID.
- * @param {string} headerText The header text for the entire list.
- * @param {string} bodyText The main text content of the message.
- * @param {string} buttonText The text on the button that opens the list.
- * @param {Array<object>} sections An array of section objects. Each section has a title and rows.
- */
 export async function sendInteractiveList(to, headerText, bodyText, buttonText, sections) {
     const data = {
         messaging_product: 'whatsapp',
@@ -134,4 +102,45 @@ export async function sendInteractiveList(to, headerText, bodyText, buttonText, 
         }
     };
     await sendMessage(data);
+}
+
+/**
+ * Sends a structured main menu of options to the user.
+ * @param {string} to The recipient's WhatsApp ID.
+ */
+export async function sendMainMenu(to) {
+    const sections = [
+        {
+            title: "📊 Reporting & Insights",
+            rows: [
+                { id: 'generate sales report', title: 'Sales Report', description: 'Get a PDF report of your sales.' },
+                { id: 'generate expense report', title: 'Expense Report', description: 'Get a PDF report of your expenses.' },
+                { id: 'generate inventory report', title: 'Inventory Report', description: 'Get a PDF of your current stock.' },
+                { id: 'get financial insight', title: 'Get Financial Insight', description: 'Receive an AI-powered tip about your business.' }
+            ]
+        },
+        {
+            title: "✍️ Data Entry",
+            rows: [
+                { id: 'log a sale', title: 'Log a Sale', description: 'Record a new sale.' },
+                { id: 'log an expense', title: 'Log an Expense', description: 'Record a new business expense.' },
+                { id: 'add a new product', title: 'Add a Product', description: 'Add a single new item to inventory.' },
+                { id: 'log a customer payment', title: 'Log Customer Payment', description: 'Record a payment from a customer.' },
+            ]
+        },
+        {
+            title: "⚙️ Management",
+            rows: [
+                { id: 'edit a transaction', title: 'Edit/Delete Transaction', description: 'Correct a mistake in your records.' },
+                { id: 'add a bank account', title: 'Add a Bank Account', description: 'Set up a new bank account.' },
+            ]
+        }
+    ];
+
+    await sendInteractiveList(to,
+        'Main Menu',
+        'What would you like to do next? You can select an option from the menu or type your request.',
+        'Show Menu',
+        sections
+    );
 }

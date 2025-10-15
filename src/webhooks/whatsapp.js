@@ -25,7 +25,6 @@ router.get('/', (req, res) => {
 router.post('/', (req, res) => {
   const body = req.body;
   
-  // Immediately send a 200 OK response to Meta.
   res.sendStatus(200);
 
   if (body.object === 'whatsapp_business_account') {
@@ -33,7 +32,7 @@ router.post('/', (req, res) => {
     if (message) {
       if (message.type === 'text') {
         handleMessage(message);
-      } else if (message.type === 'interactive') {
+      } else if (message.type === 'interactive' && (message.interactive.type === 'button_reply' || message.interactive.type === 'list_reply')) {
         handleInteractiveMessage(message);
       }
     }

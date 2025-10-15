@@ -40,6 +40,22 @@ export async function handleMessage(message) {
       case USER_STATES.ADDING_PRODUCT: await handleAddingProduct(user, text); break;
       case USER_STATES.LOGGING_CUSTOMER_PAYMENT: await handleLoggingCustomerPayment(user, text); break;
       case USER_STATES.ADDING_BANK_ACCOUNT: await handleAddingBankAccount(user, text); break;
+
+      // --- NEW: Gracefully handle text messages when expecting interactive replies ---
+      case USER_STATES.AWAITING_BANK_SELECTION_SALE:
+      case USER_STATES.AWAITING_BANK_SELECTION_EXPENSE:
+        await sendTextMessage(whatsappId, "Please select one of the bank accounts from the buttons I sent, or type 'cancel' to start over.");
+        break;
+      case USER_STATES.AWAITING_BULK_PRODUCT_CONFIRMATION:
+      case USER_STATES.AWAITING_INVOICE_CONFIRMATION:
+      case USER_STATES.AWAITING_DELETE_CONFIRMATION:
+        await sendTextMessage(whatsappId, "Please choose one of the options from the buttons I sent, or type 'cancel'.");
+        break;
+      case USER_STATES.AWAITING_TRANSACTION_SELECTION_FOR_DELETE:
+        await sendTextMessage(whatsappId, "Please select an item from the list I sent to proceed, or type 'cancel'.");
+        break;
+      // --- End of New Section ---
+        
       default:
         logger.warn(`Unhandled state: ${user.state} for user ${whatsappId}`);
         await sendTextMessage(whatsappId, "Apologies, I'm a bit stuck. Let's get you back on track.");
@@ -80,19 +96,16 @@ async function handleIdleState(user, text) {
             return;
         }
 
-        // --- FIX APPLIED HERE ---
         const rows = recentTransactions.map(tx => {
             const formattedAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(tx.amount);
-            // Ensure title is never longer than 24 characters
             const title = tx.description.length > 24 ? tx.description.substring(0, 21) + '...' : tx.description;
             
             return {
                 id: `select_tx_del:${tx._id}`,
                 title: title,
-                description: `${tx.type} - ${formattedAmount}` // Move details to description
+                description: `${tx.type} - ${formattedAmount}`
             };
         });
-        // --- END OF FIX ---
 
         const sections = [{ title: "Recent Transactions", rows: rows }];
         

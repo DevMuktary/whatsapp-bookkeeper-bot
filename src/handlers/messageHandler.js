@@ -1,6 +1,6 @@
 import { findOrCreateUser, updateUser, updateUserState } from '../db/userService.js';
 import { findProductByName } from '../db/productService.js';
-import { extractOnboardingDetails, extractCurrency, getIntent, gatherSaleDetails, gatherExpenseDetails, gatherProductDetails } from '../services/aiService.js';
+import { extractOnboardingDetails, extractCurrency, getIntent, gatherSaleDetails, gatherExpenseDetails, gatherProductDetails, gatherPaymentDetails } from '../services/aiService.js';
 import { sendOtp } from '../services/emailService.js';
 import { sendTextMessage, sendInteractiveButtons } from '../api/whatsappService.js';
 import { USER_STATES, INTENTS } from '../utils/constants.js';
@@ -39,6 +39,9 @@ export async function handleMessage(message) {
       case USER_STATES.ADDING_PRODUCT:
         await handleAddingProduct(user, text);
         break;
+      case USER_STATES.LOGGING_CUSTOMER_PAYMENT:
+        await handleLoggingCustomerPayment(user, text);
+        break;
       default:
         logger.warn(`Unhandled state: ${user.state} for user ${whatsappId}`);
         await sendTextMessage(whatsappId, "Apologies, I'm a bit stuck. Let's get you back on track.");
@@ -66,33 +69,30 @@ async function handleIdleState(user, text) {
         await handleLoggingExpense({ ...user, state: USER_STATES.LOGGING_EXPENSE, stateContext: { memory: initialMemory } }, text);
     } else if (intent === INTENTS.ADD_PRODUCT) {
         logger.info(`Intent detected: ADD_PRODUCT for user ${user.whatsappId}`);
-        
-        let existingProduct = null;
-        if (context.productName) {
-            existingProduct = await findProductByName(user._id, context.productName);
-        }
-
+        let existingProduct = context.productName ? await findProductByName(user._id, context.productName) : null;
         const initialMemory = [{ role: 'user', content: text }];
         await updateUserState(user.whatsappId, USER_STATES.ADDING_PRODUCT, { memory: initialMemory, existingProduct });
         await handleAddingProduct({ ...user, state: USER_STATES.ADDING_PRODUCT, stateContext: { memory: initialMemory, existingProduct } }, text);
-    } else if (intent === INTENTS.ADD_MULTIPLE_PRODUCTS) {
+    } else if (intent === INTENTS.LOG_CUSTOMER_PAYMENT) {
+        logger.info(`Intent detected: LOG_CUSTOMER_PAYMENT for user ${user.whatsappId}`);
+        const initialMemory = [{ role: 'user', content: text }];
+        await updateUserState(user.whatsappId, USER_STATES.LOGGING_CUSTOMER_PAYMENT, { memory: initialMemory });
+        await handleLoggingCustomerPayment({ ...user, state: USER_STATES.LOGGING_CUSTOMER_PAYMENT, stateContext: { memory: initialMemory } }, text);
+    }
+    else if (intent === INTENTS.ADD_MULTIPLE_PRODUCTS) {
         logger.info(`Intent detected: ADD_MULTIPLE_PRODUCTS for user ${user.whatsappId}`);
-        
         const products = context.products || [];
         if (products.length === 0) {
             await sendTextMessage(user.whatsappId, "I see you want to add multiple products, but I had trouble understanding the list. Could you try a simpler format like:\n\n`Add 10 shirts (cost 1k, sell 2k) and 5 trousers (cost 2k, sell 4k)`");
             return;
         }
-
         let summary = "Great! I've found the following items. Please confirm:\n\n";
         products.forEach((p, index) => {
             const cost = new Intl.NumberFormat('en-US').format(p.costPrice);
             const sell = new Intl.NumberFormat('en-US').format(p.sellingPrice);
             summary += `${index + 1}. *${p.quantityAdded}x ${p.productName}*\n   Cost: ${user.currency} ${cost}, Sell: ${user.currency} ${sell}\n`;
         });
-        
         await updateUserState(user.whatsappId, USER_STATES.AWAITING_BULK_PRODUCT_CONFIRMATION, { products: products });
-        
         await sendInteractiveButtons(
             user.whatsappId,
             summary,
@@ -114,9 +114,7 @@ async function handleLoggingSale(user, text) {
     if (currentMemory.length === 0 || currentMemory[currentMemory.length - 1].role !== 'user') {
         currentMemory.push({ role: 'user', content: text });
     }
-    
     const aiResponse = await gatherSaleDetails(currentMemory);
-    
     if (aiResponse.status === 'incomplete') {
         await updateUserState(user.whatsappId, USER_STATES.LOGGING_SALE, { memory: aiResponse.memory });
         await sendTextMessage(user.whatsappId, aiResponse.reply);
@@ -131,9 +129,7 @@ async function handleLoggingExpense(user, text) {
     if (currentMemory.length === 0 || currentMemory[currentMemory.length - 1].role !== 'user') {
         currentMemory.push({ role: 'user', content: text });
     }
-
     const aiResponse = await gatherExpenseDetails(currentMemory);
-
     if (aiResponse.status === 'incomplete') {
         await updateUserState(user.whatsappId, USER_STATES.LOGGING_EXPENSE, { memory: aiResponse.memory });
         await sendTextMessage(user.whatsappId, aiResponse.reply);
@@ -145,19 +141,31 @@ async function handleLoggingExpense(user, text) {
 
 async function handleAddingProduct(user, text) {
     const { memory: currentMemory = [], existingProduct } = user.stateContext;
-
     if (currentMemory.length === 0 || currentMemory[currentMemory.length - 1].role !== 'user') {
         currentMemory.push({ role: 'user', content: text });
     }
-
     const aiResponse = await gatherProductDetails(currentMemory, existingProduct);
-
     if (aiResponse.status === 'incomplete') {
         await updateUserState(user.whatsappId, USER_STATES.ADDING_PRODUCT, { memory: aiResponse.memory, existingProduct });
         await sendTextMessage(user.whatsappId, aiResponse.reply);
     } else if (aiResponse.status === 'complete') {
         await sendTextMessage(user.whatsappId, "Alright, adding that to your inventory... 📋");
         await executeTask(INTENTS.ADD_PRODUCT, user, aiResponse.data);
+    }
+}
+
+async function handleLoggingCustomerPayment(user, text) {
+    const currentMemory = user.stateContext.memory || [];
+    if (currentMemory.length === 0 || currentMemory[currentMemory.length - 1].role !== 'user') {
+        currentMemory.push({ role: 'user', content: text });
+    }
+    const aiResponse = await gatherPaymentDetails(currentMemory);
+    if (aiResponse.status === 'incomplete') {
+        await updateUserState(user.whatsappId, USER_STATES.LOGGING_CUSTOMER_PAYMENT, { memory: aiResponse.memory });
+        await sendTextMessage(user.whatsappId, aiResponse.reply);
+    } else if (aiResponse.status === 'complete') {
+        await sendTextMessage(user.whatsappId, "Perfect, let me record that payment... 💰");
+        await executeTask(INTENTS.LOG_CUSTOMER_PAYMENT, user, aiResponse.data);
     }
 }
 
@@ -185,12 +193,12 @@ async function handleOnboardingDetails(user, text) {
     const otpExpires = new Date(Date.now() + tenMinutes);
 
     await updateUser(updatedUser.whatsappId, { otp, otpExpires });
-    await updateUserState(user.whatsappId, USER_STATES.ONBOARDING_AWAIT_OTP);
-    await sendTextMessage(user.whatsappId, `Perfect! I've just sent a 6-digit verification code to ${updatedUser.email}. 📧 Please enter it here to continue.`);
+    await updateUserState(updatedUser.whatsappId, USER_STATES.ONBOARDING_AWAIT_OTP);
+    await sendTextMessage(updatedUser.whatsappId, `Perfect! I've just sent a 6-digit verification code to ${updatedUser.email}. 📧 Please enter it here to continue.`);
   } else if (updatedUser.businessName) {
-    await sendTextMessage(user.whatsappId, `Got it! Your business is "${updatedUser.businessName}". Now, what's your email address?`);
+    await sendTextMessage(updatedUser.whatsappId, `Got it! Your business is "${updatedUser.businessName}". Now, what's your email address?`);
   } else if (updatedUser.email) {
-    await sendTextMessage(user.whatsappId, `Thanks! I have your email as ${updatedUser.email}. What's your business name?`);
+    await sendTextMessage(updatedUser.whatsappId, `Thanks! I have your email as ${updatedUser.email}. What's your business name?`);
   } else {
     await sendTextMessage(user.whatsappId, "I'm sorry, I couldn't quite understand that. Could you please provide your business name and email address?");
   }

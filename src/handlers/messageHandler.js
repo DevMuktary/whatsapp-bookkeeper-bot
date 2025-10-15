@@ -4,7 +4,7 @@ import { getAllBankAccounts } from '../db/bankService.js';
 import { getRecentTransactions } from '../db/transactionService.js';
 import { extractOnboardingDetails, extractCurrency, getIntent, gatherSaleDetails, gatherExpenseDetails, gatherProductDetails, gatherPaymentDetails, gatherBankAccountDetails } from '../services/aiService.js';
 import { sendOtp } from '../services/emailService.js';
-import { sendTextMessage, sendInteractiveButtons, sendInteractiveList } from '../api/whatsappService.js';
+import { sendTextMessage, sendInteractiveButtons, sendInteractiveList, sendMainMenu } from '../api/whatsappService.js';
 import { USER_STATES, INTENTS } from '../utils/constants.js';
 import logger from '../utils/logger.js';
 import { executeTask } from './taskHandler.js';
@@ -56,9 +56,9 @@ const parseProductList = (text) => {
     return products;
 };
 
+
 export async function handleMessage(message) {
   const whatsappId = message.from;
-  // Use original text for parsing, and lowercase for commands
   const originalText = message.text.body; 
   const lowerCaseText = originalText.trim().toLowerCase(); 
 
@@ -72,7 +72,8 @@ export async function handleMessage(message) {
         }
         logger.info(`User ${whatsappId} cancelled operation from state: ${user.state}`);
         await updateUserState(whatsappId, USER_STATES.IDLE, {});
-        await sendTextMessage(whatsappId, "Okay, I've cancelled the current operation. What would you like to do next? 👍");
+        await sendTextMessage(whatsappId, "Okay, I've cancelled the current operation. 👍");
+        await sendMainMenu(whatsappId); // Send main menu after cancelling
         return; 
     }
 
@@ -119,14 +120,17 @@ export async function handleMessage(message) {
 async function handleIdleState(user, text) {
     const { intent, context } = await getIntent(text);
 
-    if (intent === INTENTS.ADD_PRODUCTS_FROM_LIST) {
+    if (intent === INTENTS.CHITCHAT) {
+        logger.info(`Intent detected: CHITCHAT for user ${user.whatsappId}`);
+        await sendTextMessage(user.whatsappId, "You're welcome! 👍");
+        await sendMainMenu(user.whatsappId);
+    } else if (intent === INTENTS.ADD_PRODUCTS_FROM_LIST) {
         logger.info(`Intent detected: ADD_PRODUCTS_FROM_LIST for user ${user.whatsappId}`);
         const products = parseProductList(text);
         if (products.length === 0) {
             await sendTextMessage(user.whatsappId, "I see you sent a list, but I couldn't understand its format. Please try a format like:\n\n`1. 10 Shirts - cost: 5000, sell: 8000`");
             return;
         }
-        // If the reliable parser succeeds, we reuse the confirmation flow
         let summary = "Great! I've parsed your list. Please confirm these items:\n\n";
         products.forEach((p, index) => {
             const cost = new Intl.NumberFormat('en-US').format(p.costPrice);
@@ -138,7 +142,6 @@ async function handleIdleState(user, text) {
             { id: 'confirm_bulk_add', title: '✅ Yes, Proceed' },
             { id: 'cancel_bulk_add', title: '❌ No, Cancel' }
         ]);
-
     } else if (intent === INTENTS.LOG_SALE) {
         let existingProduct = context.productName ? await findProductByName(user._id, context.productName) : null;
         await updateUserState(user.whatsappId, USER_STATES.LOGGING_SALE, { memory: [{ role: 'user', content: text }], existingProduct });
@@ -184,11 +187,13 @@ async function handleIdleState(user, text) {
             "View Transactions",
             sections
         );
+
     } else if (intent === INTENTS.CHECK_STOCK || intent === INTENTS.GET_FINANCIAL_SUMMARY || intent === INTENTS.GENERATE_REPORT || intent === INTENTS.CHECK_BANK_BALANCE || intent === INTENTS.GET_FINANCIAL_INSIGHT) {
         logger.info(`Intent detected: ${intent} for user ${user.whatsappId}`);
         await executeTask(intent, user, context);
     } else {
-        await sendTextMessage(user.whatsappId, "I'm sorry, I can only help with bookkeeping tasks right now. Try 'log a sale' or 'delete a transaction'.");
+        await sendTextMessage(user.whatsappId, "I'm not sure I understood that. You can choose an option from the main menu or ask me something like 'log a sale'.");
+        await sendMainMenu(user.whatsappId);
     }
 }
 

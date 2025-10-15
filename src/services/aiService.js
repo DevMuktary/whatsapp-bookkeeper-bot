@@ -76,6 +76,7 @@ The possible intents are:
 - "${INTENTS.CHECK_BANK_BALANCE}"
 - "${INTENTS.RECONCILE_TRANSACTION}"
 - "${INTENTS.GET_FINANCIAL_INSIGHT}"
+- "${INTENTS.SHOW_MAIN_MENU}"
 - "${INTENTS.CHITCHAT}"
 
 Your JSON response format is: {"intent": "INTENT_NAME", "context": {}}.
@@ -86,15 +87,18 @@ Extraction Rules & Examples:
     - User: "thanks!" -> {"intent": "${INTENTS.CHITCHAT}", "context": {}}
     - User: "ok, log a sale" -> {"intent": "${INTENTS.LOG_SALE}", "context": {}} (This is NOT chitchat)
 
-2.  **List Input:** If the user's message is a multi-line list starting with numbers, the intent is ALWAYS "${INTENTS.ADD_PRODUCTS_FROM_LIST}".
-    - User: "1. 50 phone cases..." -> {"intent": "${INTENTS.ADD_PRODUCTS_FROM_LIST}", "context": {}}
+2.  **Main Menu:** If the user asks for the "menu", "main menu", "show options", the intent is "${INTENTS.SHOW_MAIN_MENU}".
 
-3.  **Reports:** For "${INTENTS.GENERATE_REPORT}", extract "reportType" and "period". Be flexible.
+3.  **List Input:** If the user's message is a multi-line list starting with numbers, the intent is ALWAYS "${INTENTS.ADD_PRODUCTS_FROM_LIST}". Do NOT try to extract any context.
+    - User: "1. 50 phone cases - cost: ₦1000, sell: ₦2500\\n2. 20 screen guards - cost: ₦500, sell: ₦1500" -> {"intent": "${INTENTS.ADD_PRODUCTS_FROM_LIST}", "context": {}}
+
+4.  **Reports:** For "${INTENTS.GENERATE_REPORT}", extract "reportType" and "period". Be flexible.
     - User: "my sales report" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "sales"}}
     - User: "sales report for this month" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "sales", "period": "this_month"}}
     - User: "generate sales report for this month" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "sales", "period": "this_month"}}
+    - User: "send my inventory report" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "inventory"}}
 
-4.  If a clear bookkeeping intent is present, prioritize it over chitchat. If no bookkeeping intent is clear, and it's not chitchat, respond with {"intent": null, "context": {}}.
+5.  If a clear bookkeeping intent is present, prioritize it. If no bookkeeping intent is clear, and it's not chitchat or menu, respond with {"intent": null, "context": {}}.
 `;
 
     const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: text }];

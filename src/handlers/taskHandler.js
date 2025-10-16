@@ -1,103 +1,62 @@
-import { findOrCreateCustomer, updateBalanceOwed } from '../db/customerService.js';
+import { findOrCreateCustomer, updateBalanceOwed, getCustomersWithBalance } from '../db/customerService.js';
 import { findOrCreateProduct, updateStock, upsertProduct, findProductByName, getAllProducts } from '../db/productService.js';
 import { createSaleTransaction, createExpenseTransaction, createCustomerPaymentTransaction, getSummaryByDateRange, getTransactionsByDateRange, findTransactionById, deleteTransactionById, updateTransactionById } from '../db/transactionService.js';
 import { createBankAccount, updateBankBalance, findBankAccountByName, getAllBankAccounts } from '../db/bankService.js';
 import { updateUserState } from '../db/userService.js';
-import { sendTextMessage, sendInteractiveButtons, uploadMedia, sendDocument, sendMainMenu } from '../api/whatsappService.js';
+import { sendTextMessage, sendInteractiveButtons, uploadMedia, sendDocument, sendMainMenu, sendReportMenu } from '../api/whatsappService.js';
 import { generateSalesReport, generateExpenseReport, generateInventoryReport, generatePnLReport } from '../services/pdfService.js';
 import { getFinancialInsight } from '../services/aiService.js';
 import { INTENTS, USER_STATES } from '../utils/constants.js';
 import { getDateRange } from '../utils/dateUtils.js';
 import logger from '../utils/logger.js';
 
-/**
- * Helper function to calculate P&L data.
- * This is the financial "engine" of the bot.
- */
 async function _calculatePnLData(userId, period) {
     const { startDate, endDate } = getDateRange(period);
-
-    // 1. Get total sales and expenses
     const totalSales = await getSummaryByDateRange(userId, 'SALE', startDate, endDate);
     const totalExpenses = await getSummaryByDateRange(userId, 'EXPENSE', startDate, endDate);
-
-    // 2. Calculate Cost of Goods Sold (COGS)
     let totalCogs = 0;
     const salesTransactions = await getTransactionsByDateRange(userId, 'SALE', startDate, endDate);
     for (const sale of salesTransactions) {
         if (sale.linkedProductId) {
-            // We need the full product details to get the costPrice
-            const product = await findProductByName(userId, sale.description.split(' x ')[1].split(' sold to ')[0]);
-            if (product) {
-                const unitsSold = parseInt(sale.description.split(' x ')[0], 10) || 0;
-                totalCogs += (product.costPrice * unitsSold);
+            const productPart = sale.description.split(' x ')[1];
+            if (productPart) {
+                const productName = productPart.split(' sold to ')[0];
+                const product = await findProductByName(userId, productName);
+                if (product && product.costPrice) {
+                    const unitsSold = parseInt(sale.description.split(' x ')[0], 10) || 0;
+                    totalCogs += (product.costPrice * unitsSold);
+                }
             }
         }
     }
-    
-    // 3. Get top expenses
     const allExpenses = await getTransactionsByDateRange(userId, 'EXPENSE', startDate, endDate);
     const expenseMap = allExpenses.reduce((acc, tx) => {
         acc[tx.category] = (acc[tx.category] || 0) + tx.amount;
         return acc;
     }, {});
     const topExpenses = Object.entries(expenseMap)
-        .sort(([,a], [,b]) => b - a)
+        .sort(([, a], [, b]) => b - a)
         .slice(0, 3)
         .map(([category, total]) => ({ _id: category, total }));
-
-    // 4. Calculate final numbers
     const grossProfit = totalSales - totalCogs;
     const netProfit = grossProfit - totalExpenses;
-
     return { totalSales, totalCogs, grossProfit, totalExpenses, netProfit, topExpenses };
 }
-
 
 export async function executeTask(intent, user, data) {
     let success = false;
     try {
         switch (intent) {
-            case INTENTS.LOG_SALE:
-                await executeLogSale(user, data);
-                success = true;
-                return; 
-            case INTENTS.LOG_EXPENSE:
-                await executeLogExpense(user, data);
-                success = true;
-                break;
-            case INTENTS.ADD_PRODUCT:
-                await executeAddProduct(user, data);
-                success = true;
-                break;
-            case INTENTS.ADD_MULTIPLE_PRODUCTS:
-                await executeAddMultipleProducts(user, data);
-                success = true;
-                break;
-            case INTENTS.CHECK_STOCK:
-                await executeCheckStock(user, data);
-                success = true;
-                break;
-            case INTENTS.GET_FINANCIAL_SUMMARY:
-                await executeGetFinancialSummary(user, data);
-                success = true;
-                break;
-            case INTENTS.GENERATE_REPORT:
-                await executeGenerateReport(user, data);
-                success = true;
-                break;
-            case INTENTS.LOG_CUSTOMER_PAYMENT:
-                await executeLogCustomerPayment(user, data);
-                success = true;
-                break;
-            case INTENTS.ADD_BANK_ACCOUNT:
-                await executeAddBankAccount(user, data);
-                success = true;
-                break;
-            case INTENTS.CHECK_BANK_BALANCE:
-                await executeCheckBankBalance(user, data);
-                success = true;
-                break;
+            case INTENTS.LOG_SALE: await executeLogSale(user, data); success = true; return; 
+            case INTENTS.LOG_EXPENSE: await executeLogExpense(user, data); success = true; break;
+            case INTENTS.ADD_PRODUCT: await executeAddProduct(user, data); success = true; break;
+            case INTENTS.ADD_MULTIPLE_PRODUCTS: await executeAddMultipleProducts(user, data); success = true; break;
+            case INTENTS.CHECK_STOCK: await executeCheckStock(user, data); success = true; break;
+            case INTENTS.GET_FINANCIAL_SUMMARY: await executeGetFinancialSummary(user, data); success = true; break;
+            case INTENTS.GENERATE_REPORT: await executeGenerateReport(user, data); success = true; break;
+            case INTENTS.LOG_CUSTOMER_PAYMENT: await executeLogCustomerPayment(user, data); success = true; break;
+            case INTENTS.ADD_BANK_ACCOUNT: await executeAddBankAccount(user, data); success = true; break;
+            case INTENTS.CHECK_BANK_BALANCE: await executeCheckBankBalance(user, data); success = true; break;
             case INTENTS.RECONCILE_TRANSACTION:
                 if (data.action === 'delete') {
                     await executeDeleteTransaction(user, data);
@@ -106,10 +65,8 @@ export async function executeTask(intent, user, data) {
                 }
                 success = true;
                 break;
-            case INTENTS.GET_FINANCIAL_INSIGHT:
-                await executeGetFinancialInsight(user, data);
-                success = true;
-                break;
+            case INTENTS.GET_FINANCIAL_INSIGHT: await executeGetFinancialInsight(user, data); success = true; break;
+            case INTENTS.GET_CUSTOMER_BALANCES: await executeGetCustomerBalances(user); success = true; break;
             default:
                 logger.warn(`No executor found for intent: ${intent}`);
                 await sendTextMessage(user.whatsappId, "I'm not sure how to process that right now.");
@@ -131,6 +88,9 @@ export async function executeTask(intent, user, data) {
 async function executeLogSale(user, data) {
     const { productName, unitsSold, amountPerUnit, customerName, saleType, linkedBankId } = data;
     const totalAmount = unitsSold * amountPerUnit;
+    if (isNaN(totalAmount)) {
+        throw new Error("Could not calculate the total amount for the sale. Please ensure the price is correct.");
+    }
     const customer = await findOrCreateCustomer(user._id, customerName);
     const product = await findOrCreateProduct(user._id, productName);
     const description = `${unitsSold} x ${productName} sold to ${customerName}`;
@@ -222,7 +182,10 @@ async function executeGenerateReport(user, data) {
         return;
     }
     
-    const reportTypeLower = reportType.toLowerCase();
+    let reportTypeLower = reportType.toLowerCase();
+    if (reportTypeLower.includes('profit')) {
+        reportTypeLower = 'pnl';
+    }
     const readablePeriodStr = period.replace('_', ' ');
 
     await sendTextMessage(user.whatsappId, `Generating your ${reportTypeLower} report for ${readablePeriodStr}... Please wait. 📄`);
@@ -424,4 +387,20 @@ async function executeGetFinancialInsight(user, data) {
     const insight = await getFinancialInsight(pnlData, user.currency);
 
     await sendTextMessage(user.whatsappId, insight);
+}
+
+async function executeGetCustomerBalances(user) {
+    const customers = await getCustomersWithBalance(user._id);
+    if (customers.length === 0) {
+        await sendTextMessage(user.whatsappId, "Great news! It looks like no customers currently owe you money. 👍");
+        return;
+    }
+    
+    let summary = "Here is a list of customers with outstanding balances:\n\n";
+    customers.forEach(customer => {
+        const formattedBalance = new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(customer.balanceOwed);
+        summary += `*${customer.customerName}*: ${formattedBalance}\n`;
+    });
+    
+    await sendTextMessage(user.whatsappId, summary);
 }

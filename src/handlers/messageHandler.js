@@ -106,7 +106,6 @@ export async function handleMessage(message) {
         await sendTextMessage(whatsappId, "Please select an item from the list I sent to proceed, or type 'cancel'.");
         break;
       case USER_STATES.AWAITING_REPORT_TYPE_SELECTION:
-        // If they type instead of clicking the list, re-prompt them.
         await sendTextMessage(whatsappId, "Please select a report from the list I sent, or type 'cancel'.");
         break;
         
@@ -127,7 +126,7 @@ async function handleIdleState(user, text) {
 
     if (intent === INTENTS.CHITCHAT) {
         logger.info(`Intent detected: CHITCHAT for user ${user.whatsappId}`);
-        await sendTextMessage(user.whatsappId, "You're welcome! 👍");
+        await sendTextMessage(user.whatsappId, "No problem! What can I help you with?");
         await sendMainMenu(user.whatsappId);
     } else if (intent === INTENTS.SHOW_MAIN_MENU) {
         logger.info(`Intent detected: SHOW_MAIN_MENU for user ${user.whatsappId}`);
@@ -170,7 +169,7 @@ async function handleIdleState(user, text) {
     } else if (intent === INTENTS.LOG_CUSTOMER_PAYMENT) {
         await updateUserState(user.whatsappId, USER_STATES.LOGGING_CUSTOMER_PAYMENT, { memory: [{ role: 'user', content: text }] });
         await handleLoggingCustomerPayment({ ...user, state: USER_STATES.LOGGING_CUSTOMER_PAYMENT, stateContext: { memory: [{ role: 'user', content: text }] } }, text);
-    } else if (intent === INTENTS.ADD_BANK_ACCOUNT || text.toLowerCase().includes('manage bank')) { // Catching menu click
+    } else if (intent === INTENTS.ADD_BANK_ACCOUNT || text.toLowerCase().includes('manage bank')) {
         await updateUserState(user.whatsappId, USER_STATES.ADDING_BANK_ACCOUNT, { memory: [{ role: 'user', content: text }] });
         await handleAddingBankAccount({ ...user, state: USER_STATES.ADDING_BANK_ACCOUNT, stateContext: { memory: [{ role: 'user', content: text }] } }, text);
     } else if (intent === INTENTS.RECONCILE_TRANSACTION) {
@@ -178,6 +177,7 @@ async function handleIdleState(user, text) {
         const recentTransactions = await getRecentTransactions(user._id, 5);
         if (recentTransactions.length === 0) {
             await sendTextMessage(user.whatsappId, "You don't have any recent transactions to modify.");
+            await sendMainMenu(user.whatsappId);
             return;
         }
         const rows = recentTransactions.map(tx => {
@@ -189,15 +189,13 @@ async function handleIdleState(user, text) {
         await updateUserState(user.whatsappId, USER_STATES.AWAITING_TRANSACTION_SELECTION);
         await sendInteractiveList(user.whatsappId, "Modify Transaction", "Please select the transaction you would like to modify.", "View Transactions", sections);
     } else if (intent === INTENTS.GENERATE_REPORT) {
-        // If the AI identified the report type and period, execute directly.
-        // Otherwise, show the report menu.
         if (context.reportType) {
             await executeTask(intent, user, context);
         } else {
             await updateUserState(user.whatsappId, USER_STATES.AWAITING_REPORT_TYPE_SELECTION);
             await sendReportMenu(user.whatsappId);
         }
-    } else if (intent === INTENTS.CHECK_STOCK || intent === INTENTS.GET_FINANCIAL_SUMMARY || intent === INTENTS.CHECK_BANK_BALANCE || intent === INTENTS.GET_FINANCIAL_INSIGHT) {
+    } else if (intent === INTENTS.CHECK_STOCK || intent === INTENTS.GET_FINANCIAL_SUMMARY || intent === INTENTS.CHECK_BANK_BALANCE || intent === INTENTS.GET_FINANCIAL_INSIGHT || intent === INTENTS.GET_CUSTOMER_BALANCES) {
         logger.info(`Intent detected: ${intent} for user ${user.whatsappId}`);
         await executeTask(intent, user, context);
     } else {
@@ -220,7 +218,6 @@ async function handleLoggingSale(user, text) {
         const saleData = aiResponse.data;
         if (isNaN(parsePrice(saleData.amountPerUnit))) {
             await sendTextMessage(user.whatsappId, "There was an issue with the price. Let's try that again. What is the price per unit?");
-            // Keep the user in the LOGGING_SALE state to correct the price.
             return;
         }
         

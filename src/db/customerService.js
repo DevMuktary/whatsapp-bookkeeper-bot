@@ -47,11 +47,6 @@ export async function updateBalanceOwed(customerId, amountChange) {
     }
 }
 
-/**
- * Finds a single customer by their MongoDB _id.
- * @param {ObjectId} customerId The _id of the customer.
- * @returns {Promise<object|null>} The customer document or null if not found.
- */
 export async function findCustomerById(customerId) {
     try {
         const customer = await customersCollection().findOne({ _id: customerId });
@@ -59,5 +54,23 @@ export async function findCustomerById(customerId) {
     } catch (error) {
         logger.error(`Error finding customer by ID ${customerId}:`, error);
         throw new Error('Could not find customer.');
+    }
+}
+
+/**
+ * Fetches all customers who have an outstanding balance.
+ * @param {ObjectId} userId The user's _id.
+ * @returns {Promise<Array<object>>} An array of customer documents with balanceOwed > 0.
+ */
+export async function getCustomersWithBalance(userId) {
+    try {
+        const customers = await customersCollection().find({ 
+            userId, 
+            balanceOwed: { $gt: 0 } 
+        }).sort({ balanceOwed: -1 }).toArray();
+        return customers;
+    } catch (error) {
+        logger.error(`Error getting customers with balance for user ${userId}:`, error);
+        throw new Error('Could not retrieve customers with balances.');
     }
 }

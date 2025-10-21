@@ -4,15 +4,30 @@ import { ObjectId } from 'mongodb';
 
 const transactionsCollection = () => getDB().collection('transactions');
 
+/**
+ * Creates a new sale transaction in the database.
+ * Supports single item/service sales and multi-item sales.
+ * @param {object} saleData - The data for the sale.
+ * @param {ObjectId} saleData.userId
+ * @param {Array<object>} saleData.items - Array of items sold [{productId?, productName, quantity, pricePerUnit}]
+ * @param {string} saleData.customerName - Name of the customer.
+ * @param {number} saleData.totalAmount - The final calculated total amount.
+ * @param {Date} saleData.date
+ * @param {string} saleData.description - General description (can be auto-generated).
+ * @param {ObjectId} saleData.linkedCustomerId
+ * @param {ObjectId} saleData.linkedBankId
+ * @param {string} saleData.paymentMethod - 'CASH', 'CREDIT', 'BANK'
+ * @returns {Promise<object>} The newly created transaction document.
+ */
 export async function createSaleTransaction(saleData) {
     try {
         const transactionDoc = {
             userId: saleData.userId,
             type: 'SALE',
-            amount: saleData.totalAmount,
+            amount: saleData.totalAmount, // Store the final total
             date: saleData.date,
             description: saleData.description,
-            linkedProductId: saleData.linkedProductId,
+            items: saleData.items, // Store the array of items/services
             linkedCustomerId: saleData.linkedCustomerId,
             linkedBankId: saleData.linkedBankId || null,
             paymentMethod: saleData.paymentMethod.toUpperCase(),
@@ -57,6 +72,7 @@ export async function createCustomerPaymentTransaction(paymentData) {
             date: paymentData.date,
             description: paymentData.description,
             linkedCustomerId: paymentData.linkedCustomerId,
+            linkedBankId: paymentData.linkedBankId || null, // Added bank link
             createdAt: new Date()
         };
         const result = await transactionsCollection().insertOne(transactionDoc);
@@ -101,7 +117,7 @@ export async function getRecentTransactions(userId, limit = 5) {
     try {
         const transactions = await transactionsCollection()
             .find({ userId })
-            .sort({ date: -1 })
+            .sort({ date: -1 }) // Sort by date descending
             .limit(limit)
             .toArray();
         return transactions;
@@ -122,12 +138,6 @@ export async function findTransactionById(transactionId) {
     }
 }
 
-/**
- * Updates a transaction document by its ID.
- * @param {ObjectId} transactionId The _id of the transaction.
- * @param {object} updateData The fields to update.
- * @returns {Promise<object>} The updated transaction document.
- */
 export async function updateTransactionById(transactionId, updateData) {
     try {
         const result = await transactionsCollection().findOneAndUpdate(

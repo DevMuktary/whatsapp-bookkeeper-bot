@@ -5,6 +5,32 @@ import { INTENTS } from '../utils/constants.js';
 
 const DEEPSEEK_API_URL = 'https://api.deepseek.com/chat/completions';
 
+/**
+ * Parses a price string (e.g., "₦1,000", "2.5m", "50k", "10000") into a number.
+ * @param {string|number} priceInput The string or number to parse.
+ * @returns {number} The parsed numeric value, or NaN if invalid.
+ */
+const parsePrice = (priceInput) => {
+    if (typeof priceInput === 'number') return priceInput;
+    if (typeof priceInput !== 'string') return NaN;
+
+    const cleaned = priceInput.replace(/₦|,/g, '').toLowerCase().trim();
+    let multiplier = 1;
+    let numericPart = cleaned;
+
+    if (cleaned.endsWith('k')) {
+        multiplier = 1000;
+        numericPart = cleaned.slice(0, -1);
+    } else if (cleaned.endsWith('m')) {
+        multiplier = 1000000;
+        numericPart = cleaned.slice(0, -1);
+    }
+
+    const value = parseFloat(numericPart);
+    return isNaN(value) ? NaN : value * multiplier;
+};
+
+
 async function callDeepSeek(messages, temperature = 0.1, enforceJson = true) {
   try {
     const payload = {
@@ -85,15 +111,47 @@ Extraction Rules & Examples:
 1.  **Chitchat:** If the message is a simple greeting, acknowledgement, or compliment like "hi", "ok", "good", "alright", "thank you", "thanks", "lol", and it contains NO bookkeeping request, the intent is "${INTENTS.CHITCHAT}".
 2.  **Main Menu:** If the user asks for the "menu", "main menu", "show options", "show menu", the intent is "${INTENTS.SHOW_MAIN_MENU}".
 3.  **List Input:** If the user's message is a multi-line list starting with numbers, the intent is ALWAYS "${INTENTS.ADD_PRODUCTS_FROM_LIST}".
-4.  **Reconciliation:** If the user says "I made a mistake", "delete transaction", "edit transaction", the intent is "${INTENTS.RECONCILE_TRANSACTION}".
+4.  **Reconciliation:** If the user says "I made a mistake", "delete transaction", "edit a sale", "correct a record", "edit transaction", the intent is "${INTENTS.RECONCILE_TRANSACTION}".
 5.  **Customer Balances:** If the user asks "who is owing me?", "customer balance", "who owes me", "show debtors", the intent is "${INTENTS.GET_CUSTOMER_BALANCES}".
-6.  **Reports:** For "${INTENTS.GENERATE_REPORT}", extract "reportType" and "period". Be flexible. 'reportType' can be "sales", "expenses", "inventory", "pnl", "profit and loss", "profit & loss".
-7.  If a clear bookkeeping intent is present, prioritize it. If no bookkeeping intent is clear, and it's not chitchat or menu, respond with {"intent": null, "context": {}}.
+6.  **Reports:** For "${INTENTS.GENERATE_REPORT}", extract "reportType" and "period". Be flexible. 'reportType' can be "sales", "expenses", "inventory", or "pnl", "profit and loss", "profit & loss".
+7.  **Sales:** Extract item name, quantity, price per unit (if specified), customer name, sale type (cash/credit/bank). Quantity defaults to 1 if not mentioned. If price per unit is missing, the context should reflect that.
+    - User: "sold consulting service to Mr John for 50k" -> {"intent": "${INTENTS.LOG_SALE}", "context": {"productName": "consulting service", "unitsSold": 1, "totalAmount": 50000, "customerName": "Mr John"}}
+    - User: "sold 3 cloth A for 1500 each to Ridwan on credit" -> {"intent": "${INTENTS.LOG_SALE}", "context": {"productName": "cloth A", "unitsSold": 3, "amountPerUnit": 1500, "customerName": "Ridwan", "saleType": "credit"}}
+
+8.  If a clear bookkeeping intent is present, prioritize it. If no intent is clear, respond with {"intent": null, "context": {}}.
 `;
 
     const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: text }];
     const responseJson = await callDeepSeek(messages);
-    return JSON.parse(responseJson);
+    let result = JSON.parse(responseJson);
+
+    // Post-processing to clean up extracted numbers
+    if (result.intent === INTENTS.LOG_SALE && result.context) {
+        if (result.context.amountPerUnit) {
+            result.context.amountPerUnit = parsePrice(result.context.amountPerUnit);
+        }
+        if (result.context.totalAmount) {
+             result.context.totalAmount = parsePrice(result.context.totalAmount);
+             // If totalAmount was extracted but amountPerUnit wasn't, calculate it
+             if (!result.context.amountPerUnit && result.context.unitsSold) {
+                 result.context.amountPerUnit = result.context.totalAmount / result.context.unitsSold;
+             }
+        }
+        if (!result.context.unitsSold) {
+            result.context.unitsSold = 1; // Default quantity to 1 if not specified
+        }
+    }
+     if (result.intent === INTENTS.LOG_EXPENSE && result.context && result.context.amount) {
+         result.context.amount = parsePrice(result.context.amount);
+     }
+     if (result.intent === INTENTS.LOG_CUSTOMER_PAYMENT && result.context && result.context.amount) {
+         result.context.amount = parsePrice(result.context.amount);
+     }
+      if (result.intent === INTENTS.ADD_BANK_ACCOUNT && result.context && result.context.openingBalance) {
+         result.context.openingBalance = parsePrice(result.context.openingBalance);
+     }
+
+    return result;
 }
 
 export async function getFinancialInsight(pnlData, currency) {
@@ -124,49 +182,69 @@ Analyze this data and provide ONE insight. Here are some patterns to look for:
     return insight;
 }
 
+/**
+ * Handles the conversation for logging a sale, potentially involving multiple items.
+ * @param {Array} conversationHistory The history of messages in this interaction.
+ * @param {object|null} existingProduct Product details if found in inventory, null otherwise.
+ * @param {boolean} isService Indicates if the item is confirmed as a service.
+ * @returns {Promise<object>} AI response with status, reply, data, and memory.
+ */
 export async function gatherSaleDetails(conversationHistory, existingProduct = null, isService = false) {
-    const existingDataInfo = existingProduct 
-        ? `The user is selling an existing product called "${existingProduct.productName}". Its default selling price is ${existingProduct.sellingPrice}.`
-        : isService 
-            ? 'The user is logging a service they provided.'
-            : 'The user is selling a new product or the product was not found in the inventory.';
+    const productInfo = isService 
+        ? "The user confirmed this is a service, not a product from inventory." 
+        : (existingProduct 
+            ? `This sale involves an existing product: "${existingProduct.productName}". Its default selling price is ${existingProduct.sellingPrice}.`
+            : 'This might be a new product or a service.');
 
-    const itemKey = isService ? 'serviceName' : 'productName';
-    const quantityKey = isService ? 'quantity' : 'unitsSold'; // Use 'quantity' for services too, default 1
-    const priceKey = isService ? 'amount' : 'amountPerUnit';
+    const requiredFields = ["customerName", "saleType"]; // Base required fields
 
-    const systemPrompt = `You are a friendly and efficient bookkeeping assistant named Fynax. Your current goal is to collect details for a sale (either a product or a service).
-You must fill a JSON object with these exact keys: "${itemKey}", "${quantityKey}", "${priceKey}", "customerName", "saleType". The 'saleType' must be one of ['cash', 'credit', 'bank'].
+    const systemPrompt = `You are a friendly bookkeeping assistant (Fynax) logging a sale. Your goal is to collect sale details. 
+You MUST track items being sold in an 'items' array. Each item MUST have 'productName', 'quantity', and 'pricePerUnit'.
 
-CONTEXT: ${existingDataInfo}
+CONTEXT: ${productInfo}
 
 CONVERSATION RULES:
-1.  Analyze the conversation history.
-2.  ${isService ? "For services, the quantity is usually 1 unless specified. Do NOT ask for quantity unless the user mentions multiple units of service." : "If the 'amountPerUnit' is missing but an existing product price is available, YOU MUST use the existing selling price. Do not ask for the price."}
-3.  Only ask for information that is truly missing. Ask one question at a time.
-4.  Once ALL keys are filled, your FINAL response must be a JSON object with {"status": "complete", "data": { ... the final sale object ... }}.
-5.  While collecting information, your response must be a JSON object with {"status": "incomplete", "reply": "Your question or comment."}.
+1.  **Item Details:** From the user's messages, extract 'productName', 'quantity' (default 1), and 'pricePerUnit'. If 'pricePerUnit' is missing and an existing product price is available, use it. If it's a service, ask for the total price/amount directly.
+2.  **Required Info:** You also need 'customerName' and 'saleType' (cash, credit, bank). Ask for these if missing.
+3.  **Add Item:** Once you have productName, quantity, and pricePerUnit for an item, add it to an 'items' array in your internal memory.
+4.  **Ask for More Items:** After adding an item, ALWAYS ask clearly: "Okay, added [Item Name]. Anything else to add to this sale?".
+5.  **Completion:** ONLY when the user says "no", "done", "that's all", AND you have the 'customerName' and 'saleType', respond with {"status": "complete", "data": {"items": [...], "customerName": "...", "saleType": "..."}}.
+6.  **In Progress:** While gathering info or items, respond with {"status": "incomplete", "reply": "Your question..."}.
+
+Example (Service):
+User: "Consulting for Mr John, 50k"
+Bot: {"status": "incomplete", "reply": "Okay, 'Consulting service' for ₦50,000. Got it. Was this paid by cash, credit, or bank transfer?"}
+User: "Cash"
+Bot: {"status": "incomplete", "reply": "Okay, added Consulting service (₦50,000). Anything else to add to this sale?"}
+User: "no"
+Bot: {"status": "complete", "data": {"items": [{"productName": "Consulting service", "quantity": 1, "pricePerUnit": 50000}], "customerName": "Mr John", "saleType": "cash"}}
+
+Example (Product):
+User: "sold 2 shirts for 10k each to Ayo"
+Bot: {"status": "incomplete", "reply": "Okay, added 2 x shirts (₦10,000 each). Anything else to add to this sale?"}
+User: "yes, 1 trouser for 15k"
+Bot: {"status": "incomplete", "reply": "Okay, added 1 x trouser (₦15,000). Anything else to add to this sale?"}
+User: "that's all"
+Bot: {"status": "incomplete", "reply": "Got it. Was this paid by cash, credit, or bank?"}
+User: "credit"
+Bot: {"status": "complete", "data": {"items": [{"productName": "shirts", "quantity": 2, "pricePerUnit": 10000}, {"productName": "trouser", "quantity": 1, "pricePerUnit": 15000}], "customerName": "Ayo", "saleType": "credit"}}
 `;
 
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     const responseJson = await callDeepSeek(messages, 0.5); 
     const response = JSON.parse(responseJson);
-    const updatedHistory = [...conversationHistory, { role: 'assistant', content: responseJson }];
     
-    // Default quantity to 1 for services if not provided
-    if (response.status === 'complete' && isService && !response.data[quantityKey]) {
-        response.data[quantityKey] = 1;
-    }
-     // Rename service keys to match product keys for consistency downstream
-     if (response.status === 'complete' && isService) {
-        response.data.productName = response.data.serviceName;
-        response.data.unitsSold = response.data.quantity;
-        response.data.amountPerUnit = response.data.amount;
-        delete response.data.serviceName;
-        delete response.data.quantity;
-        delete response.data.amount;
+    // Attempt to parse prices in the final data object
+    if (response.status === 'complete' && response.data && response.data.items) {
+        response.data.items = response.data.items.map(item => ({
+            ...item,
+            pricePerUnit: parsePrice(item.pricePerUnit),
+            quantity: item.quantity ? parseInt(item.quantity, 10) : 1
+        }));
     }
 
+    const updatedHistory = [...conversationHistory, { role: 'assistant', content: responseJson }];
+    
     return { ...response, memory: updatedHistory };
 }
 
@@ -181,8 +259,13 @@ CONVERSATION RULES:
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     const responseJson = await callDeepSeek(messages, 0.5);
     const response = JSON.parse(responseJson);
-    const updatedHistory = [...conversationHistory, { role: 'assistant', content: responseJson }];
 
+    // Attempt to parse price in the final data object
+    if (response.status === 'complete' && response.data && response.data.amount) {
+        response.data.amount = parsePrice(response.data.amount);
+    }
+
+    const updatedHistory = [...conversationHistory, { role: 'assistant', content: responseJson }];
     return { ...response, memory: updatedHistory };
 }
 
@@ -205,8 +288,15 @@ CONVERSATION RULES:
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     const responseJson = await callDeepSeek(messages, 0.5);
     const response = JSON.parse(responseJson);
-    const updatedHistory = [...conversationHistory, { role: 'assistant', content: responseJson }];
 
+    // Attempt to parse prices in the final data object
+     if (response.status === 'complete' && response.data) {
+         response.data.costPrice = parsePrice(response.data.costPrice);
+         response.data.sellingPrice = parsePrice(response.data.sellingPrice);
+         response.data.quantityAdded = parseInt(response.data.quantityAdded, 10);
+     }
+
+    const updatedHistory = [...conversationHistory, { role: 'assistant', content: responseJson }];
     return { ...response, memory: updatedHistory };
 }
 
@@ -226,8 +316,12 @@ CONVERSATION RULES:
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     const responseJson = await callDeepSeek(messages, 0.5);
     const response = JSON.parse(responseJson);
-    const updatedHistory = [...conversationHistory, { role: 'assistant', content: responseJson }];
 
+    if (response.status === 'complete' && response.data && response.data.amount) {
+        response.data.amount = parsePrice(response.data.amount);
+    }
+
+    const updatedHistory = [...conversationHistory, { role: 'assistant', content: responseJson }];
     return { ...response, memory: updatedHistory };
 }
 
@@ -247,7 +341,11 @@ CONVERSATION RULES:
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     const responseJson = await callDeepSeek(messages, 0.5);
     const response = JSON.parse(responseJson);
-    const updatedHistory = [...conversationHistory, { role: 'assistant', content: responseJson }];
 
+    if (response.status === 'complete' && response.data && response.data.openingBalance) {
+        response.data.openingBalance = parsePrice(response.data.openingBalance);
+    }
+
+    const updatedHistory = [...conversationHistory, { role: 'assistant', content: responseJson }];
     return { ...response, memory: updatedHistory };
 }

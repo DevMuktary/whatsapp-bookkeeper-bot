@@ -38,9 +38,12 @@ async function callDeepSeek(messages, temperature = 0.1, enforceJson = true) {
       messages: messages,
       temperature: temperature,
     };
-    if (enforceJson) {
+    // Only add response_format if enforceJson is true AND the prompt requests JSON
+    const lastMessageContent = messages[messages.length - 1].content.toLowerCase();
+    if (enforceJson && messages.some(m => m.role === 'system' && m.content.toLowerCase().includes('json'))) {
         payload.response_format = { type: "json_object" };
     }
+
 
     const response = await axios.post(DEEPSEEK_API_URL, payload, {
       headers: {
@@ -48,9 +51,29 @@ async function callDeepSeek(messages, temperature = 0.1, enforceJson = true) {
         'Authorization': `Bearer ${config.deepseek.apiKey}`
       }
     });
+    // Check if the expected response was JSON but we didn't get it (due to prompt issues)
+     if (enforceJson && payload.response_format && typeof response.data.choices[0].message.content !== 'string') {
+        // This case should ideally not happen if prompt is correct, but as a fallback:
+        return JSON.stringify(response.data.choices[0].message.content);
+     }
+     // If the response *is* a string but looks like JSON, parse it
+     if (typeof response.data.choices[0].message.content === 'string' && response.data.choices[0].message.content.trim().startsWith('{')) {
+         try {
+             // Attempt to parse, but handle potential errors if it's not valid JSON
+             return JSON.parse(response.data.choices[0].message.content);
+         } catch (parseError) {
+             logger.warn("AI response looked like JSON but failed to parse:", response.data.choices[0].message.content);
+             // Fallback to returning the raw string if parsing fails
+             return response.data.choices[0].message.content;
+         }
+     }
+
+    // Otherwise, return the content as is (likely for non-JSON requests like insights)
     return response.data.choices[0].message.content;
+
   } catch (error) {
-    logger.error('Error calling DeepSeek API:', error.response ? error.response.data : error.message);
+    // Log the detailed error from the API if available
+    logger.error('Error calling DeepSeek API:', error.response ? JSON.stringify(error.response.data, null, 2) : error.message);
     throw new Error('Failed to communicate with the AI service.');
   }
 }
@@ -67,7 +90,8 @@ export async function extractOnboardingDetails(text) {
     }
   ];
   const responseJson = await callDeepSeek(messages);
-  return JSON.parse(responseJson);
+  // Ensure response is parsed JSON
+  return typeof responseJson === 'string' ? JSON.parse(responseJson) : responseJson;
 }
 
 export async function extractCurrency(text) {
@@ -82,7 +106,7 @@ export async function extractCurrency(text) {
         }
     ];
     const responseJson = await callDeepSeek(messages);
-    return JSON.parse(responseJson);
+    return typeof responseJson === 'string' ? JSON.parse(responseJson) : responseJson;
 }
 
 export async function getIntent(text) {
@@ -115,15 +139,12 @@ Extraction Rules & Examples:
 5.  **Customer Balances:** If the user asks "who is owing me?", "customer balance", "who owes me", "show debtors", the intent is "${INTENTS.GET_CUSTOMER_BALANCES}".
 6.  **Reports:** For "${INTENTS.GENERATE_REPORT}", extract "reportType" and "period". Be flexible. 'reportType' can be "sales", "expenses", "inventory", or "pnl", "profit and loss", "profit & loss".
 7.  **Sales:** Extract item name, quantity, price per unit (if specified), customer name, sale type (cash/credit/bank). Quantity defaults to 1 if not mentioned. If price per unit is missing, the context should reflect that.
-    - User: "sold consulting service to Mr John for 50k" -> {"intent": "${INTENTS.LOG_SALE}", "context": {"productName": "consulting service", "unitsSold": 1, "totalAmount": 50000, "customerName": "Mr John"}}
-    - User: "sold 3 cloth A for 1500 each to Ridwan on credit" -> {"intent": "${INTENTS.LOG_SALE}", "context": {"productName": "cloth A", "unitsSold": 3, "amountPerUnit": 1500, "customerName": "Ridwan", "saleType": "credit"}}
-
-8.  If a clear bookkeeping intent is present, prioritize it. If no intent is clear, respond with {"intent": null, "context": {}}.
+8.  If a clear bookkeeping intent is present, prioritize it. If no intent is clear, respond with {"intent": null, "context": {}}. You MUST respond ONLY with a JSON object.
 `;
 
     const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: text }];
     const responseJson = await callDeepSeek(messages);
-    let result = JSON.parse(responseJson);
+    let result = typeof responseJson === 'string' ? JSON.parse(responseJson) : responseJson;
 
     // Post-processing to clean up extracted numbers
     if (result.intent === INTENTS.LOG_SALE && result.context) {
@@ -132,13 +153,12 @@ Extraction Rules & Examples:
         }
         if (result.context.totalAmount) {
              result.context.totalAmount = parsePrice(result.context.totalAmount);
-             // If totalAmount was extracted but amountPerUnit wasn't, calculate it
-             if (!result.context.amountPerUnit && result.context.unitsSold) {
+             if (!result.context.amountPerUnit && result.context.unitsSold && result.context.totalAmount) {
                  result.context.amountPerUnit = result.context.totalAmount / result.context.unitsSold;
              }
         }
         if (!result.context.unitsSold) {
-            result.context.unitsSold = 1; // Default quantity to 1 if not specified
+            result.context.unitsSold = 1; 
         }
     }
      if (result.intent === INTENTS.LOG_EXPENSE && result.context && result.context.amount) {
@@ -178,25 +198,17 @@ Analyze this data and provide ONE insight. Here are some patterns to look for:
 `;
 
     const messages = [{ role: 'system', content: systemPrompt }];
+    // This call does NOT enforce JSON, so it's fine.
     const insight = await callDeepSeek(messages, 0.7, false); 
     return insight;
 }
 
-/**
- * Handles the conversation for logging a sale, potentially involving multiple items.
- * @param {Array} conversationHistory The history of messages in this interaction.
- * @param {object|null} existingProduct Product details if found in inventory, null otherwise.
- * @param {boolean} isService Indicates if the item is confirmed as a service.
- * @returns {Promise<object>} AI response with status, reply, data, and memory.
- */
 export async function gatherSaleDetails(conversationHistory, existingProduct = null, isService = false) {
     const productInfo = isService 
         ? "The user confirmed this is a service, not a product from inventory." 
         : (existingProduct 
             ? `This sale involves an existing product: "${existingProduct.productName}". Its default selling price is ${existingProduct.sellingPrice}.`
             : 'This might be a new product or a service.');
-
-    const requiredFields = ["customerName", "saleType"]; // Base required fields
 
     const systemPrompt = `You are a friendly bookkeeping assistant (Fynax) logging a sale. Your goal is to collect sale details. 
 You MUST track items being sold in an 'items' array. Each item MUST have 'productName', 'quantity', and 'pricePerUnit'.
@@ -211,30 +223,13 @@ CONVERSATION RULES:
 5.  **Completion:** ONLY when the user says "no", "done", "that's all", AND you have the 'customerName' and 'saleType', respond with {"status": "complete", "data": {"items": [...], "customerName": "...", "saleType": "..."}}.
 6.  **In Progress:** While gathering info or items, respond with {"status": "incomplete", "reply": "Your question..."}.
 
-Example (Service):
-User: "Consulting for Mr John, 50k"
-Bot: {"status": "incomplete", "reply": "Okay, 'Consulting service' for ₦50,000. Got it. Was this paid by cash, credit, or bank transfer?"}
-User: "Cash"
-Bot: {"status": "incomplete", "reply": "Okay, added Consulting service (₦50,000). Anything else to add to this sale?"}
-User: "no"
-Bot: {"status": "complete", "data": {"items": [{"productName": "Consulting service", "quantity": 1, "pricePerUnit": 50000}], "customerName": "Mr John", "saleType": "cash"}}
-
-Example (Product):
-User: "sold 2 shirts for 10k each to Ayo"
-Bot: {"status": "incomplete", "reply": "Okay, added 2 x shirts (₦10,000 each). Anything else to add to this sale?"}
-User: "yes, 1 trouser for 15k"
-Bot: {"status": "incomplete", "reply": "Okay, added 1 x trouser (₦15,000). Anything else to add to this sale?"}
-User: "that's all"
-Bot: {"status": "incomplete", "reply": "Got it. Was this paid by cash, credit, or bank?"}
-User: "credit"
-Bot: {"status": "complete", "data": {"items": [{"productName": "shirts", "quantity": 2, "pricePerUnit": 10000}, {"productName": "trouser", "quantity": 1, "pricePerUnit": 15000}], "customerName": "Ayo", "saleType": "credit"}}
+You MUST respond ONLY with a JSON object in the specified formats.
 `;
 
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     const responseJson = await callDeepSeek(messages, 0.5); 
-    const response = JSON.parse(responseJson);
+    let response = typeof responseJson === 'string' ? JSON.parse(responseJson) : responseJson;
     
-    // Attempt to parse prices in the final data object
     if (response.status === 'complete' && response.data && response.data.items) {
         response.data.items = response.data.items.map(item => ({
             ...item,
@@ -243,7 +238,7 @@ Bot: {"status": "complete", "data": {"items": [{"productName": "shirts", "quanti
         }));
     }
 
-    const updatedHistory = [...conversationHistory, { role: 'assistant', content: responseJson }];
+    const updatedHistory = [...conversationHistory, { role: 'assistant', content: JSON.stringify(response) }]; // Store the JSON string in history
     
     return { ...response, memory: updatedHistory };
 }
@@ -254,18 +249,17 @@ export async function gatherExpenseDetails(conversationHistory) {
 CONVERSATION RULES:
 1.  Analyze the conversation history. If any keys are missing, ask a clear, friendly question for the missing information.
 2.  Once ALL keys are filled, your FINAL response must be a JSON object containing ONLY {"status": "complete", "data": { ... the final expense object ... }}.
-3.  While collecting information, your response must be a JSON object in the format {"status": "incomplete", "reply": "Your question to the user."}.`;
+3.  While collecting information, your response must be a JSON object in the format {"status": "incomplete", "reply": "Your question to the user."}. You MUST respond ONLY with a JSON object.`;
 
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     const responseJson = await callDeepSeek(messages, 0.5);
-    const response = JSON.parse(responseJson);
+    let response = typeof responseJson === 'string' ? JSON.parse(responseJson) : responseJson;
 
-    // Attempt to parse price in the final data object
     if (response.status === 'complete' && response.data && response.data.amount) {
         response.data.amount = parsePrice(response.data.amount);
     }
 
-    const updatedHistory = [...conversationHistory, { role: 'assistant', content: responseJson }];
+    const updatedHistory = [...conversationHistory, { role: 'assistant', content: JSON.stringify(response) }];
     return { ...response, memory: updatedHistory };
 }
 
@@ -283,20 +277,19 @@ CONVERSATION RULES:
 2.  If the user says the price is the "same as before", you MUST use the existing product data.
 3.  Only ask for information that is truly missing.
 4.  Once ALL keys are filled, your FINAL response must be a JSON object containing ONLY {"status": "complete", "data": { ... the final product object ... }}.
-5.  While collecting information, your response must be a JSON object in the format {"status": "incomplete", "reply": "Your question to the user."}.`;
+5.  While collecting information, your response must be a JSON object in the format {"status": "incomplete", "reply": "Your question to the user."}. You MUST respond ONLY with a JSON object.`;
 
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     const responseJson = await callDeepSeek(messages, 0.5);
-    const response = JSON.parse(responseJson);
+    let response = typeof responseJson === 'string' ? JSON.parse(responseJson) : responseJson;
 
-    // Attempt to parse prices in the final data object
      if (response.status === 'complete' && response.data) {
          response.data.costPrice = parsePrice(response.data.costPrice);
          response.data.sellingPrice = parsePrice(response.data.sellingPrice);
          response.data.quantityAdded = parseInt(response.data.quantityAdded, 10);
      }
 
-    const updatedHistory = [...conversationHistory, { role: 'assistant', content: responseJson }];
+    const updatedHistory = [...conversationHistory, { role: 'assistant', content: JSON.stringify(response) }];
     return { ...response, memory: updatedHistory };
 }
 
@@ -311,17 +304,17 @@ CONVERSATION RULES:
 2.  DO NOT ask the user to specify or confirm the currency.
 3.  If any required keys are missing, ask a clear question for the missing information.
 4.  Once ALL keys are filled, your FINAL response must be a JSON object with {"status": "complete", "data": {"customerName": "...", "amount": ...}}.
-5.  While collecting information, your response must be a JSON object with {"status": "incomplete", "reply": "Your question to the user."}.
+5.  While collecting information, your response must be a JSON object with {"status": "incomplete", "reply": "Your question to the user."}. You MUST respond ONLY with a JSON object.
 `;
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     const responseJson = await callDeepSeek(messages, 0.5);
-    const response = JSON.parse(responseJson);
+    let response = typeof responseJson === 'string' ? JSON.parse(responseJson) : responseJson;
 
     if (response.status === 'complete' && response.data && response.data.amount) {
         response.data.amount = parsePrice(response.data.amount);
     }
 
-    const updatedHistory = [...conversationHistory, { role: 'assistant', content: responseJson }];
+    const updatedHistory = [...conversationHistory, { role: 'assistant', content: JSON.stringify(response) }];
     return { ...response, memory: updatedHistory };
 }
 
@@ -336,16 +329,16 @@ CONVERSATION RULES:
 2.  DO NOT ask for the currency.
 3.  If any required keys are missing, ask a clear question for the missing information.
 4.  Once ALL keys are filled, your FINAL response must be a JSON object with {"status": "complete", "data": {"bankName": "...", "openingBalance": ...}}.
-5.  While collecting information, your response must be a JSON object with {"status": "incomplete", "reply": "Your question to the user."}.
+5.  While collecting information, your response must be a JSON object with {"status": "incomplete", "reply": "Your question to the user."}. You MUST respond ONLY with a JSON object.
 `;
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     const responseJson = await callDeepSeek(messages, 0.5);
-    const response = JSON.parse(responseJson);
+    let response = typeof responseJson === 'string' ? JSON.parse(responseJson) : responseJson;
 
     if (response.status === 'complete' && response.data && response.data.openingBalance) {
         response.data.openingBalance = parsePrice(response.data.openingBalance);
     }
 
-    const updatedHistory = [...conversationHistory, { role: 'assistant', content: responseJson }];
+    const updatedHistory = [...conversationHistory, { role: 'assistant', content: JSON.stringify(response) }];
     return { ...response, memory: updatedHistory };
 }

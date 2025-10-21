@@ -83,23 +83,11 @@ Your JSON response format is: {"intent": "INTENT_NAME", "context": {}}.
 
 Extraction Rules & Examples:
 1.  **Chitchat:** If the message is a simple greeting, acknowledgement, or compliment like "hi", "ok", "good", "alright", "thank you", "thanks", "lol", and it contains NO bookkeeping request, the intent is "${INTENTS.CHITCHAT}".
-    - User: "ok" -> {"intent": "${INTENTS.CHITCHAT}", "context": {}}
-    - User: "thanks!" -> {"intent": "${INTENTS.CHITCHAT}", "context": {}}
-    - User: "ok, log a sale" -> {"intent": "${INTENTS.LOG_SALE}", "context": {}} (This is NOT chitchat)
-
 2.  **Main Menu:** If the user asks for the "menu", "main menu", "show options", "show menu", the intent is "${INTENTS.SHOW_MAIN_MENU}".
-
 3.  **List Input:** If the user's message is a multi-line list starting with numbers, the intent is ALWAYS "${INTENTS.ADD_PRODUCTS_FROM_LIST}".
-
-4.  **Reconciliation:** If the user says "I made a mistake", "delete transaction", "edit a sale", "correct a record", "edit transaction", the intent is "${INTENTS.RECONCILE_TRANSACTION}".
-
+4.  **Reconciliation:** If the user says "I made a mistake", "delete transaction", "edit transaction", the intent is "${INTENTS.RECONCILE_TRANSACTION}".
 5.  **Customer Balances:** If the user asks "who is owing me?", "customer balance", "who owes me", "show debtors", the intent is "${INTENTS.GET_CUSTOMER_BALANCES}".
-
-6.  **Reports:** For "${INTENTS.GENERATE_REPORT}", extract "reportType" and "period". Be flexible. 'reportType' can be "sales", "expenses", "inventory", or "pnl", "profit and loss", "profit & loss".
-    - User: "my p&l report" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "pnl"}}
-    - User: "generate profit and loss report" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "pnl"}}
-    - User: "sales report for this month" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "sales", "period": "this_month"}}
-
+6.  **Reports:** For "${INTENTS.GENERATE_REPORT}", extract "reportType" and "period". Be flexible. 'reportType' can be "sales", "expenses", "inventory", "pnl", "profit and loss", "profit & loss".
 7.  If a clear bookkeeping intent is present, prioritize it. If no bookkeeping intent is clear, and it's not chitchat or menu, respond with {"intent": null, "context": {}}.
 `;
 
@@ -136,22 +124,28 @@ Analyze this data and provide ONE insight. Here are some patterns to look for:
     return insight;
 }
 
-export async function gatherSaleDetails(conversationHistory, existingProduct = null) {
+export async function gatherSaleDetails(conversationHistory, existingProduct = null, isService = false) {
     const existingDataInfo = existingProduct 
         ? `The user is selling an existing product called "${existingProduct.productName}". Its default selling price is ${existingProduct.sellingPrice}.`
-        : 'The user is selling a new product or the product was not found in the inventory.';
+        : isService 
+            ? 'The user is logging a service they provided.'
+            : 'The user is selling a new product or the product was not found in the inventory.';
 
-    const systemPrompt = `You are a friendly and efficient bookkeeping assistant named Fynax. Your current goal is to collect all the necessary details to log a sale.
-You must fill a JSON object with these exact keys: "productName", "unitsSold", "amountPerUnit", "customerName", "saleType". The 'saleType' must be one of ['cash', 'credit', 'bank'].
+    const itemKey = isService ? 'serviceName' : 'productName';
+    const quantityKey = isService ? 'quantity' : 'unitsSold'; // Use 'quantity' for services too, default 1
+    const priceKey = isService ? 'amount' : 'amountPerUnit';
+
+    const systemPrompt = `You are a friendly and efficient bookkeeping assistant named Fynax. Your current goal is to collect details for a sale (either a product or a service).
+You must fill a JSON object with these exact keys: "${itemKey}", "${quantityKey}", "${priceKey}", "customerName", "saleType". The 'saleType' must be one of ['cash', 'credit', 'bank'].
 
 CONTEXT: ${existingDataInfo}
 
 CONVERSATION RULES:
 1.  Analyze the conversation history.
-2.  If the 'amountPerUnit' is missing but an existing product price is available, YOU MUST use the existing selling price. Do not ask for the price.
-3.  Only ask for information that is truly missing.
-4.  Once ALL keys are filled, your FINAL response must be a JSON object containing ONLY {"status": "complete", "data": { ... the final sale object ... }}.
-5.  While collecting information, your response must be a JSON object in the format {"status": "incomplete", "reply": "Your question or comment to the user."}.
+2.  ${isService ? "For services, the quantity is usually 1 unless specified. Do NOT ask for quantity unless the user mentions multiple units of service." : "If the 'amountPerUnit' is missing but an existing product price is available, YOU MUST use the existing selling price. Do not ask for the price."}
+3.  Only ask for information that is truly missing. Ask one question at a time.
+4.  Once ALL keys are filled, your FINAL response must be a JSON object with {"status": "complete", "data": { ... the final sale object ... }}.
+5.  While collecting information, your response must be a JSON object with {"status": "incomplete", "reply": "Your question or comment."}.
 `;
 
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
@@ -159,6 +153,20 @@ CONVERSATION RULES:
     const response = JSON.parse(responseJson);
     const updatedHistory = [...conversationHistory, { role: 'assistant', content: responseJson }];
     
+    // Default quantity to 1 for services if not provided
+    if (response.status === 'complete' && isService && !response.data[quantityKey]) {
+        response.data[quantityKey] = 1;
+    }
+     // Rename service keys to match product keys for consistency downstream
+     if (response.status === 'complete' && isService) {
+        response.data.productName = response.data.serviceName;
+        response.data.unitsSold = response.data.quantity;
+        response.data.amountPerUnit = response.data.amount;
+        delete response.data.serviceName;
+        delete response.data.quantity;
+        delete response.data.amount;
+    }
+
     return { ...response, memory: updatedHistory };
 }
 

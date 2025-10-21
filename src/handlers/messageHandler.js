@@ -12,20 +12,25 @@ import { executeTask } from './taskHandler.js';
 const CANCEL_KEYWORDS = ['cancel', 'stop', 'exit', 'nevermind', 'abort'];
 
 /**
- * Parses a price string (e.g., "₦1,000", "2.5m", "50k") into a number.
- * @param {string} priceStr The string to parse.
- * @returns {number} The parsed numeric value.
+ * Parses a price string (e.g., "₦1,000", "2.5m", "50k", "10000") into a number.
+ * @param {string|number} priceInput The string or number to parse.
+ * @returns {number} The parsed numeric value, or NaN if invalid.
  */
-const parsePrice = (priceStr) => {
-    if (!priceStr) return NaN;
-    const cleaned = priceStr.toString().replace(/₦|,/g, '').toLowerCase();
+const parsePrice = (priceInput) => {
+    if (typeof priceInput === 'number') return priceInput;
+    if (typeof priceInput !== 'string') return NaN;
+    const cleaned = priceInput.replace(/₦|,/g, '').toLowerCase().trim();
     let multiplier = 1;
+    let numericPart = cleaned;
     if (cleaned.endsWith('k')) {
         multiplier = 1000;
+        numericPart = cleaned.slice(0, -1);
     } else if (cleaned.endsWith('m')) {
         multiplier = 1000000;
+        numericPart = cleaned.slice(0, -1);
     }
-    return parseFloat(cleaned) * multiplier;
+    const value = parseFloat(numericPart);
+    return isNaN(value) ? NaN : value * multiplier;
 };
 
 /**
@@ -36,22 +41,31 @@ const parsePrice = (priceStr) => {
 const parseProductList = (text) => {
     const products = [];
     const lines = text.split('\n');
-    const lineRegex = /^\s*\d+\.?\s+(\d+)\s+(.+?)\s*-\s*cost:\s*([^,]+),?\s*sell:\s*(.+)/i;
+    // Regex updated to be more flexible with separators like ':' or '-' and optional spaces
+    const lineRegex = /^\s*\d+\.?\s+(\d+)\s+(.+?)\s*[-:]\s*cost\s*[-:]?\s*([^,]+),?\s*sell\s*[-:]?\s*(.+)/i;
 
     for (const line of lines) {
         const match = line.trim().match(lineRegex);
         if (match) {
             try {
                 const [, quantityAdded, productName, costPriceStr, sellingPriceStr] = match;
-                products.push({
-                    quantityAdded: parseInt(quantityAdded.trim(), 10),
-                    productName: productName.trim(),
-                    costPrice: parsePrice(costPriceStr.trim()),
-                    sellingPrice: parsePrice(sellingPriceStr.trim())
-                });
+                const costPrice = parsePrice(costPriceStr.trim());
+                const sellingPrice = parsePrice(sellingPriceStr.trim());
+                if (!isNaN(costPrice) && !isNaN(sellingPrice)) {
+                     products.push({
+                        quantityAdded: parseInt(quantityAdded.trim(), 10),
+                        productName: productName.trim(),
+                        costPrice: costPrice,
+                        sellingPrice: sellingPrice
+                    });
+                } else {
+                     logger.warn(`Failed to parse prices in line: "${line}"`);
+                }
             } catch (e) {
-                logger.warn(`Failed to parse line: "${line}"`);
+                logger.warn(`Failed to parse line structure: "${line}"`, e);
             }
+        } else {
+            logger.debug(`Line did not match regex: "${line}"`);
         }
     }
     return products;
@@ -60,8 +74,8 @@ const parseProductList = (text) => {
 
 export async function handleMessage(message) {
   const whatsappId = message.from;
-  const originalText = message.text.body; 
-  const lowerCaseText = originalText.trim().toLowerCase(); 
+  const originalText = message.text.body;
+  const lowerCaseText = originalText.trim().toLowerCase();
 
   try {
     const user = await findOrCreateUser(whatsappId);
@@ -75,7 +89,7 @@ export async function handleMessage(message) {
         await updateUserState(whatsappId, USER_STATES.IDLE, {});
         await sendTextMessage(whatsappId, "Okay, I've cancelled the current operation. 👍");
         await sendMainMenu(whatsappId); // Send main menu after cancelling
-        return; 
+        return;
     }
 
     switch (user.state) {
@@ -85,16 +99,22 @@ export async function handleMessage(message) {
       case USER_STATES.ONBOARDING_AWAIT_CURRENCY: await handleCurrency(user, originalText); break;
       case USER_STATES.IDLE: await handleIdleState(user, originalText); break;
       case USER_STATES.LOGGING_SALE: await handleLoggingSale(user, originalText); break;
+      case USER_STATES.LOGGING_MULTI_ITEM_SALE: await handleMultiItemSale(user, originalText); break; // Handle adding more items
       case USER_STATES.LOGGING_EXPENSE: await handleLoggingExpense(user, originalText); break;
       case USER_STATES.ADDING_PRODUCT: await handleAddingProduct(user, originalText); break;
       case USER_STATES.LOGGING_CUSTOMER_PAYMENT: await handleLoggingCustomerPayment(user, originalText); break;
       case USER_STATES.ADDING_BANK_ACCOUNT: await handleAddingBankAccount(user, originalText); break;
       case USER_STATES.AWAITING_EDIT_VALUE: await handleEditValue(user, originalText); break;
-        
+
       case USER_STATES.AWAITING_BANK_SELECTION_SALE:
       case USER_STATES.AWAITING_BANK_SELECTION_EXPENSE:
+      case USER_STATES.AWAITING_BANK_SELECTION_PURCHASE:
+      case USER_STATES.AWAITING_BANK_SELECTION_CUST_PAYMENT:
         await sendTextMessage(whatsappId, "Please select one of the bank accounts from the buttons I sent, or type 'cancel' to start over.");
         break;
+      case USER_STATES.AWAITING_SALE_TYPE_CONFIRMATION:
+         await sendTextMessage(whatsappId, "Is this a Product sale or a Service sale? Please choose one of the buttons, or type 'cancel'.");
+         break;
       case USER_STATES.AWAITING_BULK_PRODUCT_CONFIRMATION:
       case USER_STATES.AWAITING_INVOICE_CONFIRMATION:
       case USER_STATES.AWAITING_DELETE_CONFIRMATION:
@@ -108,7 +128,7 @@ export async function handleMessage(message) {
       case USER_STATES.AWAITING_REPORT_TYPE_SELECTION:
         await sendTextMessage(whatsappId, "Please select a report from the list I sent, or type 'cancel'.");
         break;
-        
+
       default:
         logger.warn(`Unhandled state: ${user.state} for user ${whatsappId}`);
         await sendTextMessage(whatsappId, "Apologies, I'm a bit stuck. Let's get you back on track.");
@@ -126,7 +146,7 @@ async function handleIdleState(user, text) {
 
     if (intent === INTENTS.CHITCHAT) {
         logger.info(`Intent detected: CHITCHAT for user ${user.whatsappId}`);
-        await sendTextMessage(user.whatsappId, "No problem! What can I help you with?");
+        await sendTextMessage(user.whatsappId, "Noted! 👍 What can I help you with?");
         await sendMainMenu(user.whatsappId);
     } else if (intent === INTENTS.SHOW_MAIN_MENU) {
         logger.info(`Intent detected: SHOW_MAIN_MENU for user ${user.whatsappId}`);
@@ -154,8 +174,37 @@ async function handleIdleState(user, text) {
         if (context.productName) {
             existingProduct = await findProductByName(user._id, context.productName);
         }
-        await updateUserState(user.whatsappId, USER_STATES.LOGGING_SALE, { memory: [{ role: 'user', content: text }], existingProduct });
-        await handleLoggingSale({ ...user, state: USER_STATES.LOGGING_SALE, stateContext: { memory: [{ role: 'user', content: text }], existingProduct } }, text);
+        // Store initial context from intent detection
+        const initialMemory = [{ role: 'user', content: text }];
+        const initialSaleData = { // Start collecting sale items here
+            items: [],
+            customerName: context.customerName,
+            saleType: context.saleType,
+        };
+        // Add the first item if fully extracted by intent AI
+        if (context.productName && context.unitsSold && (context.amountPerUnit || context.totalAmount || existingProduct)) {
+             initialSaleData.items.push({
+                 productName: context.productName,
+                 quantity: context.unitsSold,
+                 pricePerUnit: context.amountPerUnit || (context.totalAmount / context.unitsSold) || existingProduct?.sellingPrice,
+                 productId: existingProduct?._id,
+                 isService: !existingProduct // Assume service if not found initially
+             });
+        }
+
+        if (!existingProduct && context.productName && (context.amountPerUnit || context.totalAmount)) {
+             // If product not found, ask if it's a product or service
+             await updateUserState(user.whatsappId, USER_STATES.AWAITING_SALE_TYPE_CONFIRMATION, { memory: initialMemory, saleData: initialSaleData, productName: context.productName });
+             await sendInteractiveButtons(user.whatsappId, `I couldn't find "${context.productName}" in your inventory. Is this a Product you want to add now, or a Service you provided?`, [
+                 { id: 'sale_type:product', title: 'Add Product' },
+                 { id: 'sale_type:service', title: 'It\'s a Service' },
+             ]);
+        } else {
+             // If product exists OR not enough info was given to add first item, start the normal flow
+             await updateUserState(user.whatsappId, USER_STATES.LOGGING_SALE, { memory: initialMemory, saleData: initialSaleData, existingProduct });
+             await handleLoggingSale({ ...user, state: USER_STATES.LOGGING_SALE, stateContext: { memory: initialMemory, saleData: initialSaleData, existingProduct } }, text);
+        }
+
     } else if (intent === INTENTS.LOG_EXPENSE) {
         await updateUserState(user.whatsappId, USER_STATES.LOGGING_EXPENSE, { memory: [{ role: 'user', content: text }] });
         await handleLoggingExpense({ ...user, state: USER_STATES.LOGGING_EXPENSE, stateContext: { memory: [{ role: 'user', content: text }] } }, text);
@@ -182,7 +231,11 @@ async function handleIdleState(user, text) {
         }
         const rows = recentTransactions.map(tx => {
             const formattedAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(tx.amount);
-            const title = tx.description.length > 24 ? tx.description.substring(0, 21) + '...' : tx.description;
+            let title = tx.description || tx.type; // Fallback title
+             if (tx.items && tx.items.length > 0) { // Better title for multi-item sales
+                title = tx.items.map(i => `${i.quantity}x ${i.productName}`).join(', ');
+            }
+            title = title.length > 24 ? title.substring(0, 21) + '...' : title;
             return { id: `select_tx:${tx._id}`, title: title, description: `${tx.type} - ${formattedAmount}` };
         });
         const sections = [{ title: "Recent Transactions", rows: rows }];
@@ -205,32 +258,33 @@ async function handleIdleState(user, text) {
 }
 
 async function handleLoggingSale(user, text) {
-    const { memory: currentMemory = [], existingProduct } = user.stateContext;
+    const { memory: currentMemory = [], existingProduct, saleData = { items: [] }, isService = false } = user.stateContext;
+    
+    // Add user message to history if it's new
     if (currentMemory.length === 0 || currentMemory[currentMemory.length - 1].role !== 'user') {
         currentMemory.push({ role: 'user', content: text });
     }
-    const aiResponse = await gatherSaleDetails(currentMemory, existingProduct);
+
+    const aiResponse = await gatherSaleDetails(currentMemory, existingProduct, isService);
 
     if (aiResponse.status === 'incomplete') {
-        await updateUserState(user.whatsappId, USER_STATES.LOGGING_SALE, { memory: aiResponse.memory, existingProduct });
+        // Just update memory and ask the next question
+        await updateUserState(user.whatsappId, USER_STATES.LOGGING_SALE, { ...user.stateContext, memory: aiResponse.memory });
         await sendTextMessage(user.whatsappId, aiResponse.reply);
     } else if (aiResponse.status === 'complete') {
-        const saleData = aiResponse.data;
-        if (isNaN(parsePrice(saleData.amountPerUnit))) {
-            await sendTextMessage(user.whatsappId, "There was an issue with the price. Let's try that again. What is the price per unit?");
-            return;
-        }
+        // AI thinks it's done collecting items AND customer/saleType
+        const finalSaleData = { ...saleData, ...aiResponse.data }; // Combine collected data
         
-        if (saleData.saleType.toLowerCase() === 'credit') {
+        if (finalSaleData.saleType.toLowerCase() === 'credit') {
             await sendTextMessage(user.whatsappId, "Got it! Let me record that credit sale... 📝");
-            await executeTask(INTENTS.LOG_SALE, user, saleData);
-        } else {
+            await executeTask(INTENTS.LOG_SALE, user, finalSaleData);
+        } else { // Cash or Bank
             const banks = await getAllBankAccounts(user._id);
             if (banks.length === 0) {
                 await sendTextMessage(user.whatsappId, "FYI: You haven't set up any bank accounts. I'll log this sale, but I can't track it against a specific account.");
-                await executeTask(INTENTS.LOG_SALE, user, saleData);
+                await executeTask(INTENTS.LOG_SALE, user, finalSaleData);
             } else {
-                await updateUserState(user.whatsappId, USER_STATES.AWAITING_BANK_SELECTION_SALE, { transactionData: saleData });
+                await updateUserState(user.whatsappId, USER_STATES.AWAITING_BANK_SELECTION_SALE, { transactionData: finalSaleData });
                 const buttons = banks.map(bank => ({ id: `select_bank:${bank._id}`, title: bank.bankName }));
                 await sendInteractiveButtons(user.whatsappId, 'Which account received the payment?', buttons);
             }
@@ -238,8 +292,11 @@ async function handleLoggingSale(user, text) {
     }
 }
 
+// Placeholder for the new multi-item sale state handler (if needed for complex prompts)
+// async function handleMultiItemSale(user, text) { ... }
+
 async function handleLoggingExpense(user, text) {
-    const currentMemory = user.stateContext.memory || [];
+    const { memory: currentMemory = [] } = user.stateContext;
     if (currentMemory.length === 0 || currentMemory[currentMemory.length - 1].role !== 'user') {
         currentMemory.push({ role: 'user', content: text });
     }
@@ -250,8 +307,11 @@ async function handleLoggingExpense(user, text) {
         await sendTextMessage(user.whatsappId, aiResponse.reply);
     } else if (aiResponse.status === 'complete') {
         const expenseData = aiResponse.data;
+        if (isNaN(parsePrice(expenseData.amount))) {
+            await sendTextMessage(user.whatsappId, "There was an issue with the amount. Let's try that again. What was the expense amount?");
+            return; // Stay in state
+        }
         const banks = await getAllBankAccounts(user._id);
-
         if (banks.length === 0) {
             await sendTextMessage(user.whatsappId, "FYI: You haven't set up any bank accounts. I'll log this expense, but I can't track it against a specific account.");
             await executeTask(INTENTS.LOG_EXPENSE, user, expenseData);
@@ -273,13 +333,38 @@ async function handleAddingProduct(user, text) {
         await updateUserState(user.whatsappId, USER_STATES.ADDING_PRODUCT, { memory: aiResponse.memory, existingProduct });
         await sendTextMessage(user.whatsappId, aiResponse.reply);
     } else if (aiResponse.status === 'complete') {
-        await sendTextMessage(user.whatsappId, "Alright, adding that to your inventory... 📋");
-        await executeTask(INTENTS.ADD_PRODUCT, user, aiResponse.data);
+        const productData = aiResponse.data;
+        if (isNaN(parsePrice(productData.costPrice)) || isNaN(parsePrice(productData.sellingPrice)) || isNaN(parseInt(productData.quantityAdded, 10))) {
+            await sendTextMessage(user.whatsappId, "There was an issue with the quantity or prices. Please provide valid numbers.");
+             // Potentially ask specifically which field was wrong
+             // For now, reset to allow user to retry cleanly
+             await updateUserState(user.whatsappId, USER_STATES.IDLE);
+             await sendMainMenu(user.whatsappId);
+             return;
+        }
+
+         // Ask which bank was used for the purchase if stock is being added
+        if (productData.quantityAdded > 0) {
+             const banks = await getAllBankAccounts(user._id);
+             if (banks.length > 0) {
+                await updateUserState(user.whatsappId, USER_STATES.AWAITING_BANK_SELECTION_PURCHASE, { transactionData: productData });
+                const buttons = banks.map(bank => ({ id: `select_bank:${bank._id}`, title: bank.bankName }));
+                 buttons.push({ id: 'select_bank:none', title: 'Not from Bank' }); // Option if paid from cash on hand
+                 await sendInteractiveButtons(user.whatsappId, 'Which account did you use to purchase this stock?', buttons);
+             } else {
+                 await sendTextMessage(user.whatsappId, "Adding product... (Note: Add a bank account later to track purchase costs accurately!)");
+                 await executeTask(INTENTS.ADD_PRODUCT, user, productData);
+             }
+         } else {
+             // If just updating details (quantity 0), execute directly
+             await sendTextMessage(user.whatsappId, "Updating product details...");
+             await executeTask(INTENTS.ADD_PRODUCT, user, productData);
+         }
     }
 }
 
 async function handleLoggingCustomerPayment(user, text) {
-    const currentMemory = user.stateContext.memory || [];
+    const { memory: currentMemory = [] } = user.stateContext;
     if (currentMemory.length === 0 || currentMemory[currentMemory.length - 1].role !== 'user') {
         currentMemory.push({ role: 'user', content: text });
     }
@@ -288,25 +373,44 @@ async function handleLoggingCustomerPayment(user, text) {
         await updateUserState(user.whatsappId, USER_STATES.LOGGING_CUSTOMER_PAYMENT, { memory: aiResponse.memory });
         await sendTextMessage(user.whatsappId, aiResponse.reply);
     } else if (aiResponse.status === 'complete') {
-        await sendTextMessage(user.whatsappId, "Perfect, let me record that payment... 💰");
-        await executeTask(INTENTS.LOG_CUSTOMER_PAYMENT, user, aiResponse.data);
+        const paymentData = aiResponse.data;
+         if (isNaN(parsePrice(paymentData.amount))) {
+            await sendTextMessage(user.whatsappId, "There was an issue with the amount. Let's try again. What amount did the customer pay?");
+            return; // Stay in state
+        }
+         const banks = await getAllBankAccounts(user._id);
+         if (banks.length === 0) {
+             await sendTextMessage(user.whatsappId, "FYI: You haven't set up bank accounts. I'll log this payment, but won't link it to an account.");
+             await executeTask(INTENTS.LOG_CUSTOMER_PAYMENT, user, paymentData);
+         } else {
+             await updateUserState(user.whatsappId, USER_STATES.AWAITING_BANK_SELECTION_CUST_PAYMENT, { transactionData: paymentData });
+             const buttons = banks.map(bank => ({ id: `select_bank:${bank._id}`, title: bank.bankName }));
+             await sendInteractiveButtons(user.whatsappId, 'Which account did this payment go into?', buttons);
+         }
     }
 }
 
 async function handleAddingBankAccount(user, text) {
-    const currentMemory = user.stateContext.memory || [];
+    const { memory: currentMemory = [] } = user.stateContext;
     if (currentMemory.length === 0 || currentMemory[currentMemory.length - 1].role !== 'user') {
         currentMemory.push({ role: 'user', content: text });
     }
-
     const aiResponse = await gatherBankAccountDetails(currentMemory, user.currency);
-    
     if (aiResponse.status === 'incomplete') {
         await updateUserState(user.whatsappId, USER_STATES.ADDING_BANK_ACCOUNT, { memory: aiResponse.memory });
         await sendTextMessage(user.whatsappId, aiResponse.reply);
     } else if (aiResponse.status === 'complete') {
+         const bankData = aiResponse.data;
+         if (isNaN(parsePrice(bankData.openingBalance))) {
+             await sendTextMessage(user.whatsappId, "There was an issue with the opening balance. Please provide a valid number.");
+             // Ask again for the balance
+             currentMemory.push({ role: 'assistant', content: aiResponse.reply }); // Keep asking
+             await updateUserState(user.whatsappId, USER_STATES.ADDING_BANK_ACCOUNT, { memory: currentMemory });
+             await sendTextMessage(user.whatsappId, "What is the opening balance?");
+             return;
+         }
         await sendTextMessage(user.whatsappId, "Got it! Adding your new bank account... 🏦");
-        await executeTask(INTENTS.ADD_BANK_ACCOUNT, user, aiResponse.data);
+        await executeTask(INTENTS.ADD_BANK_ACCOUNT, user, bankData);
     }
 }
 
@@ -317,47 +421,40 @@ async function handleEditValue(user, text) {
         await updateUserState(user.whatsappId, USER_STATES.IDLE);
         return;
     }
-    
     let newValue;
     if (['unitsSold', 'amountPerUnit', 'amount'].includes(fieldToEdit)) {
-        newValue = parseFloat(text);
+        newValue = parsePrice(text); // Use robust parser
         if (isNaN(newValue)) {
             await sendTextMessage(user.whatsappId, "That doesn't seem to be a valid number. Please provide a number for this field.");
             return;
         }
     } else {
-        newValue = text;
+        newValue = text; // For description, category etc.
     }
-
     const changes = { [fieldToEdit]: newValue };
-    
     await sendTextMessage(user.whatsappId, "Okay, applying your changes... 🔄");
     await executeTask(INTENTS.RECONCILE_TRANSACTION, user, { transactionId: transaction._id, action: 'edit', changes });
 }
 
 async function handleNewUser(user) {
-  await updateUserState(user.whatsappId, USER_STATES.NEW_USER);
+  await updateUserState(user.whatsappId, USER_STATES.ONBOARDING_AWAIT_BUSINESS_AND_EMAIL);
   await sendTextMessage(user.whatsappId, "👋 Welcome to Fynax Bookkeeper! I'm here to help you manage your business finances effortlessly.");
   await sendTextMessage(user.whatsappId, "To get started, what is your business name and your email address?");
 }
 
 async function handleOnboardingDetails(user, text) {
   const { businessName, email } = await extractOnboardingDetails(text);
-  
   let updates = {};
   if (businessName) updates.businessName = businessName;
   if (email) updates.email = email;
-
   let updatedUser = user;
   if (Object.keys(updates).length > 0) {
     updatedUser = await updateUser(user.whatsappId, updates);
   }
-
   if (updatedUser.businessName && updatedUser.email) {
     const otp = await sendOtp(updatedUser.email, updatedUser.businessName);
     const tenMinutes = 10 * 60 * 1000;
     const otpExpires = new Date(Date.now() + tenMinutes);
-
     await updateUser(updatedUser.whatsappId, { otp, otpExpires });
     await updateUserState(user.whatsappId, USER_STATES.ONBOARDING_AWAIT_OTP);
     await sendTextMessage(user.whatsappId, `Perfect! I've just sent a 6-digit verification code to ${updatedUser.email}. 📧 Please enter it here to continue.`);
@@ -377,7 +474,6 @@ async function handleOtp(user, text) {
     await handleOnboardingDetails(user, user.email);
     return;
   }
-
   if (user.otp === otpAttempt) {
     await updateUser(user.whatsappId, { isEmailVerified: true, otp: null, otpExpires: null });
     await updateUserState(user.whatsappId, USER_STATES.ONBOARDING_AWAIT_CURRENCY);
@@ -393,7 +489,6 @@ async function handleCurrency(user, text) {
     await updateUser(user.whatsappId, { currency });
     await updateUserState(user.whatsappId, USER_STATES.IDLE);
     await sendTextMessage(user.whatsappId, `Excellent! Your account is fully set up with ${currency} as your currency. 🎉`);
-    
     await sendInteractiveButtons(
         user.whatsappId,
         "You're all set! What would you like to do first?",
@@ -403,7 +498,6 @@ async function handleCurrency(user, text) {
             { id: 'add a new product', title: 'Add a Product' },
         ]
     );
-
   } else {
     await sendTextMessage(user.whatsappId, "I didn't recognize that currency. Please tell me your main currency, like 'Naira', 'Dollars', or 'GHS'.");
   }

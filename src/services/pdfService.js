@@ -48,6 +48,7 @@ export function generateSalesReport(user, transactions, periodTitle) {
                 doc.text(new Date(tx.date).toLocaleDateString(), dateX, y);
                 doc.text(tx.description, descX, y, { width: 200, ellipsis: true });
                 doc.text(`${user.currency} ${formattedAmount}`, amountX, y, { align: 'right' });
+                doc.moveDown(); // Ensure rows don't overlap
             });
 
             // --- Footer and Total ---
@@ -62,7 +63,7 @@ export function generateSalesReport(user, transactions, periodTitle) {
             doc.end();
             
         } catch (error) {
-            logger.error('Error generating Sales PDF report:', error);
+            logger.error('Error generating PDF report:', error);
             reject(error);
         }
     });
@@ -116,6 +117,7 @@ export function generateExpenseReport(user, transactions, periodTitle) {
                 doc.text(tx.category, categoryX, y, { width: 90, ellipsis: true });
                 doc.text(tx.description, descX, y, { width: 140, ellipsis: true });
                 doc.text(`${user.currency} ${formattedAmount}`, amountX, y, { align: 'right' });
+                doc.moveDown(); // Ensure rows don't overlap
             });
 
             // --- Footer and Total ---
@@ -186,6 +188,7 @@ export function generateInventoryReport(user, products) {
                 doc.text(new Intl.NumberFormat('en-US').format(p.costPrice), costX, y, { align: 'right', width: 60 });
                 doc.text(new Intl.NumberFormat('en-US').format(p.sellingPrice), sellX, y, { align: 'right', width: 60 });
                 doc.text(new Intl.NumberFormat('en-US').format(itemValue), valueX, y, { align: 'right', width: 80 });
+                doc.moveDown(); // Ensure rows don't overlap
             });
 
             // --- Footer and Total ---
@@ -205,7 +208,6 @@ export function generateInventoryReport(user, products) {
         }
     });
 }
-
 
 /**
  * Generates a Profit & Loss (P&L) report PDF.
@@ -290,8 +292,9 @@ export function generatePnLReport(user, pnlData, periodTitle) {
 
 /**
  * Generates a professional PDF invoice for a single transaction.
+ * Handles both single-item and multi-item sales.
  * @param {object} user - The user object (business details).
- * @param {object} transaction - The transaction document (must include the 'items' array).
+ * @param {object} transaction - The transaction document (must include the `items` array).
  * @param {object} customer - The customer document.
  * @returns {Promise<Buffer>} A promise that resolves with the PDF buffer.
  */
@@ -302,7 +305,6 @@ export function generateInvoice(user, transaction, customer) {
             const buffers = [];
             doc.on('data', buffers.push.bind(buffers));
             doc.on('end', () => resolve(Buffer.concat(buffers)));
-
             const format = (amount) => new Intl.NumberFormat('en-US').format(amount);
 
             // --- Header ---
@@ -324,35 +326,31 @@ export function generateInvoice(user, transaction, customer) {
 
             // --- Table Header ---
             const tableTopY = doc.y;
-            const itemX = 50;
-            const qtyX = 300;
-            const priceX = 370;
-            const lineTotalX = 450;
-            
             doc.font('Helvetica-Bold');
-            doc.text('Item / Service', itemX, tableTopY);
-            doc.text('Qty', qtyX, tableTopY, { align: 'center'});
-            doc.text('Unit Price', priceX, tableTopY, { align: 'right' });
-            doc.text('Total', lineTotalX, tableTopY, { align: 'right' });
-            doc.moveTo(itemX, doc.y).lineTo(550, doc.y).stroke();
+            doc.text('Item', 50, tableTopY);
+            doc.text('Qty', 300, tableTopY, { align: 'center' });
+            doc.text('Unit Price', 370, tableTopY, { align: 'right' });
+            doc.text('Total', 470, tableTopY, { align: 'right' });
+            doc.moveTo(50, doc.y).lineTo(550, doc.y).stroke();
             doc.font('Helvetica');
 
-            // --- Table Rows ---
+            // --- Table Rows (Loop through items) ---
             transaction.items.forEach(item => {
-                const y = doc.y + 5;
-                const lineTotal = item.quantity * item.pricePerUnit;
-                doc.text(item.productName, itemX, y, { width: 240 });
-                doc.text(item.quantity, qtyX, y, { width: 50, align: 'center' });
-                doc.text(format(item.pricePerUnit), priceX, y, { width: 70, align: 'right' });
-                doc.text(format(lineTotal), lineTotalX, y, { width: 90, align: 'right' });
+                const itemY = doc.y + 5;
+                const itemTotal = item.quantity * item.pricePerUnit;
+                doc.text(item.productName, 50, itemY, { width: 240, ellipsis: true });
+                doc.text(item.quantity, 300, itemY, { width: 50, align: 'center' });
+                doc.text(`${user.currency} ${format(item.pricePerUnit)}`, 370, itemY, { width: 80, align: 'right' });
+                doc.text(`${user.currency} ${format(itemTotal)}`, 470, itemY, { width: 80, align: 'right' });
+                doc.moveDown(0.5); // Add a small space between rows
             });
             
             // --- Total ---
             const totalY = doc.y + 20;
-            doc.moveTo(priceX, totalY - 5).lineTo(550, totalY - 5).stroke();
-            doc.font('Helvetica-Bold').fontSize(14).text('Total:', priceX - 40, totalY);
-            doc.text(`${user.currency} ${format(transaction.amount)}`, lineTotalX, totalY, { align: 'right' });
-            doc.moveTo(priceX, doc.y).lineTo(550, doc.y).stroke();
+            doc.moveTo(350, totalY - 5).lineTo(550, totalY - 5).stroke();
+            doc.font('Helvetica-Bold').fontSize(14).text('Grand Total:', 350, totalY);
+            doc.text(`${user.currency} ${format(transaction.amount)}`, 470, totalY, { align: 'right' });
+            doc.moveTo(350, doc.y).lineTo(550, doc.y).stroke();
 
             // --- Footer ---
             doc.fontSize(10).font('Helvetica-Oblique').text('Thank you for your business!', 50, doc.page.height - 50, { align: 'center', width: 500 });

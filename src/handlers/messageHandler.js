@@ -41,7 +41,6 @@ const parsePrice = (priceInput) => {
 const parseProductList = (text) => {
     const products = [];
     const lines = text.split('\n');
-    // Regex updated to be more flexible with separators like ':' or '-' and optional spaces
     const lineRegex = /^\s*\d+\.?\s+(\d+)\s+(.+?)\s*[-:]\s*cost\s*[-:]?\s*([^,]+),?\s*sell\s*[-:]?\s*(.+)/i;
 
     for (const line of lines) {
@@ -99,7 +98,7 @@ export async function handleMessage(message) {
       case USER_STATES.ONBOARDING_AWAIT_CURRENCY: await handleCurrency(user, originalText); break;
       case USER_STATES.IDLE: await handleIdleState(user, originalText); break;
       case USER_STATES.LOGGING_SALE: await handleLoggingSale(user, originalText); break;
-      case USER_STATES.LOGGING_MULTI_ITEM_SALE: await handleMultiItemSale(user, originalText); break; // Handle adding more items
+      case USER_STATES.LOGGING_MULTI_ITEM_SALE: await handleMultiItemSale(user, originalText); break;
       case USER_STATES.LOGGING_EXPENSE: await handleLoggingExpense(user, originalText); break;
       case USER_STATES.ADDING_PRODUCT: await handleAddingProduct(user, originalText); break;
       case USER_STATES.LOGGING_CUSTOMER_PAYMENT: await handleLoggingCustomerPayment(user, originalText); break;
@@ -174,33 +173,36 @@ async function handleIdleState(user, text) {
         if (context.productName) {
             existingProduct = await findProductByName(user._id, context.productName);
         }
-        // Store initial context from intent detection
         const initialMemory = [{ role: 'user', content: text }];
-        const initialSaleData = { // Start collecting sale items here
-            items: [],
-            customerName: context.customerName,
-            saleType: context.saleType,
-        };
-        // Add the first item if fully extracted by intent AI
-        if (context.productName && context.unitsSold && (context.amountPerUnit || context.totalAmount || existingProduct)) {
-             initialSaleData.items.push({
-                 productName: context.productName,
-                 quantity: context.unitsSold,
-                 pricePerUnit: context.amountPerUnit || (context.totalAmount / context.unitsSold) || existingProduct?.sellingPrice,
-                 productId: existingProduct?._id,
-                 isService: !existingProduct // Assume service if not found initially
-             });
+        const initialSaleData = { items: [], customerName: context.customerName, saleType: context.saleType };
+        let firstItem = {};
+
+        // Try to build the first item from context
+        if (context.productName) {
+            firstItem.productName = context.productName;
+            firstItem.quantity = context.unitsSold || 1;
+            firstItem.pricePerUnit = parsePrice(context.amountPerUnit) || (existingProduct ? existingProduct.sellingPrice : NaN);
+            if(context.totalAmount && !isNaN(parsePrice(context.totalAmount)) && isNaN(firstItem.pricePerUnit)) {
+                 firstItem.pricePerUnit = parsePrice(context.totalAmount) / firstItem.quantity;
+            }
+            firstItem.productId = existingProduct?._id;
+            firstItem.isService = !existingProduct; // Initial assumption
         }
 
-        if (!existingProduct && context.productName && (context.amountPerUnit || context.totalAmount)) {
-             // If product not found, ask if it's a product or service
+        // Check if we need to ask Product/Service
+        if (firstItem.productName && !isNaN(firstItem.pricePerUnit) && !existingProduct) {
+             // We have enough to ask the user
+             initialSaleData.items.push(firstItem);
              await updateUserState(user.whatsappId, USER_STATES.AWAITING_SALE_TYPE_CONFIRMATION, { memory: initialMemory, saleData: initialSaleData, productName: context.productName });
              await sendInteractiveButtons(user.whatsappId, `I couldn't find "${context.productName}" in your inventory. Is this a Product you want to add now, or a Service you provided?`, [
                  { id: 'sale_type:product', title: 'Add Product' },
                  { id: 'sale_type:service', title: 'It\'s a Service' },
              ]);
         } else {
-             // If product exists OR not enough info was given to add first item, start the normal flow
+             // If product exists OR not enough info, start normal flow
+             if (firstItem.productName && !isNaN(firstItem.pricePerUnit) && firstItem.quantity) {
+                 initialSaleData.items.push(firstItem); // Add the first item if fully formed
+             }
              await updateUserState(user.whatsappId, USER_STATES.LOGGING_SALE, { memory: initialMemory, saleData: initialSaleData, existingProduct });
              await handleLoggingSale({ ...user, state: USER_STATES.LOGGING_SALE, stateContext: { memory: initialMemory, saleData: initialSaleData, existingProduct } }, text);
         }
@@ -231,10 +233,10 @@ async function handleIdleState(user, text) {
         }
         const rows = recentTransactions.map(tx => {
             const formattedAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(tx.amount);
-            let title = tx.description || tx.type; // Fallback title
-             if (tx.items && tx.items.length > 0) { // Better title for multi-item sales
+             let title = tx.description || tx.type;
+             if (tx.items && tx.items.length > 0) {
                 title = tx.items.map(i => `${i.quantity}x ${i.productName}`).join(', ');
-            }
+             }
             title = title.length > 24 ? title.substring(0, 21) + '...' : title;
             return { id: `select_tx:${tx._id}`, title: title, description: `${tx.type} - ${formattedAmount}` };
         });
@@ -260,7 +262,6 @@ async function handleIdleState(user, text) {
 async function handleLoggingSale(user, text) {
     const { memory: currentMemory = [], existingProduct, saleData = { items: [] }, isService = false } = user.stateContext;
     
-    // Add user message to history if it's new
     if (currentMemory.length === 0 || currentMemory[currentMemory.length - 1].role !== 'user') {
         currentMemory.push({ role: 'user', content: text });
     }
@@ -268,13 +269,27 @@ async function handleLoggingSale(user, text) {
     const aiResponse = await gatherSaleDetails(currentMemory, existingProduct, isService);
 
     if (aiResponse.status === 'incomplete') {
-        // Just update memory and ask the next question
         await updateUserState(user.whatsappId, USER_STATES.LOGGING_SALE, { ...user.stateContext, memory: aiResponse.memory });
         await sendTextMessage(user.whatsappId, aiResponse.reply);
     } else if (aiResponse.status === 'complete') {
-        // AI thinks it's done collecting items AND customer/saleType
         const finalSaleData = { ...saleData, ...aiResponse.data }; // Combine collected data
         
+        // Final validation before execution
+        if (!finalSaleData.items || finalSaleData.items.length === 0) {
+            await sendTextMessage(user.whatsappId, "It seems no items were added to the sale. Please try again.");
+            await updateUserState(user.whatsappId, USER_STATES.IDLE);
+            await sendMainMenu(user.whatsappId);
+            return;
+        }
+        for(const item of finalSaleData.items) {
+            if (isNaN(item.pricePerUnit) || isNaN(item.quantity)) {
+                 await sendTextMessage(user.whatsappId, `There was an issue with the price or quantity for ${item.productName}. Please start the sale again.`);
+                 await updateUserState(user.whatsappId, USER_STATES.IDLE);
+                 await sendMainMenu(user.whatsappId);
+                 return;
+            }
+        }
+
         if (finalSaleData.saleType.toLowerCase() === 'credit') {
             await sendTextMessage(user.whatsappId, "Got it! Let me record that credit sale... 📝");
             await executeTask(INTENTS.LOG_SALE, user, finalSaleData);
@@ -292,7 +307,8 @@ async function handleLoggingSale(user, text) {
     }
 }
 
-// Placeholder for the new multi-item sale state handler (if needed for complex prompts)
+// Handles adding more items during a multi-item sale (if AI needs help)
+// We might not need this if the main gatherSaleDetails AI handles the loop well.
 // async function handleMultiItemSale(user, text) { ... }
 
 async function handleLoggingExpense(user, text) {
@@ -309,7 +325,7 @@ async function handleLoggingExpense(user, text) {
         const expenseData = aiResponse.data;
         if (isNaN(parsePrice(expenseData.amount))) {
             await sendTextMessage(user.whatsappId, "There was an issue with the amount. Let's try that again. What was the expense amount?");
-            return; // Stay in state
+            return;
         }
         const banks = await getAllBankAccounts(user._id);
         if (banks.length === 0) {
@@ -336,27 +352,22 @@ async function handleAddingProduct(user, text) {
         const productData = aiResponse.data;
         if (isNaN(parsePrice(productData.costPrice)) || isNaN(parsePrice(productData.sellingPrice)) || isNaN(parseInt(productData.quantityAdded, 10))) {
             await sendTextMessage(user.whatsappId, "There was an issue with the quantity or prices. Please provide valid numbers.");
-             // Potentially ask specifically which field was wrong
-             // For now, reset to allow user to retry cleanly
              await updateUserState(user.whatsappId, USER_STATES.IDLE);
              await sendMainMenu(user.whatsappId);
              return;
         }
-
-         // Ask which bank was used for the purchase if stock is being added
         if (productData.quantityAdded > 0) {
              const banks = await getAllBankAccounts(user._id);
              if (banks.length > 0) {
                 await updateUserState(user.whatsappId, USER_STATES.AWAITING_BANK_SELECTION_PURCHASE, { transactionData: productData });
                 const buttons = banks.map(bank => ({ id: `select_bank:${bank._id}`, title: bank.bankName }));
-                 buttons.push({ id: 'select_bank:none', title: 'Not from Bank' }); // Option if paid from cash on hand
+                 buttons.push({ id: 'select_bank:none', title: 'Not from Bank' });
                  await sendInteractiveButtons(user.whatsappId, 'Which account did you use to purchase this stock?', buttons);
              } else {
                  await sendTextMessage(user.whatsappId, "Adding product... (Note: Add a bank account later to track purchase costs accurately!)");
                  await executeTask(INTENTS.ADD_PRODUCT, user, productData);
              }
          } else {
-             // If just updating details (quantity 0), execute directly
              await sendTextMessage(user.whatsappId, "Updating product details...");
              await executeTask(INTENTS.ADD_PRODUCT, user, productData);
          }
@@ -376,7 +387,7 @@ async function handleLoggingCustomerPayment(user, text) {
         const paymentData = aiResponse.data;
          if (isNaN(parsePrice(paymentData.amount))) {
             await sendTextMessage(user.whatsappId, "There was an issue with the amount. Let's try again. What amount did the customer pay?");
-            return; // Stay in state
+            return;
         }
          const banks = await getAllBankAccounts(user._id);
          if (banks.length === 0) {
@@ -403,8 +414,7 @@ async function handleAddingBankAccount(user, text) {
          const bankData = aiResponse.data;
          if (isNaN(parsePrice(bankData.openingBalance))) {
              await sendTextMessage(user.whatsappId, "There was an issue with the opening balance. Please provide a valid number.");
-             // Ask again for the balance
-             currentMemory.push({ role: 'assistant', content: aiResponse.reply }); // Keep asking
+             currentMemory.push({ role: 'assistant', content: "Invalid number received." }); // Log invalid attempt
              await updateUserState(user.whatsappId, USER_STATES.ADDING_BANK_ACCOUNT, { memory: currentMemory });
              await sendTextMessage(user.whatsappId, "What is the opening balance?");
              return;
@@ -423,13 +433,13 @@ async function handleEditValue(user, text) {
     }
     let newValue;
     if (['unitsSold', 'amountPerUnit', 'amount'].includes(fieldToEdit)) {
-        newValue = parsePrice(text); // Use robust parser
+        newValue = parsePrice(text);
         if (isNaN(newValue)) {
             await sendTextMessage(user.whatsappId, "That doesn't seem to be a valid number. Please provide a number for this field.");
             return;
         }
     } else {
-        newValue = text; // For description, category etc.
+        newValue = text;
     }
     const changes = { [fieldToEdit]: newValue };
     await sendTextMessage(user.whatsappId, "Okay, applying your changes... 🔄");
@@ -489,15 +499,8 @@ async function handleCurrency(user, text) {
     await updateUser(user.whatsappId, { currency });
     await updateUserState(user.whatsappId, USER_STATES.IDLE);
     await sendTextMessage(user.whatsappId, `Excellent! Your account is fully set up with ${currency} as your currency. 🎉`);
-    await sendInteractiveButtons(
-        user.whatsappId,
-        "You're all set! What would you like to do first?",
-        [
-            { id: 'log a sale', title: 'Log a Sale' },
-            { id: 'log an expense', title: 'Log an Expense' },
-            { id: 'add a new product', title: 'Add a Product' },
-        ]
-    );
+    await sendMainMenu(user.whatsappId); // Send main menu instead of quick start buttons
+
   } else {
     await sendTextMessage(user.whatsappId, "I didn't recognize that currency. Please tell me your main currency, like 'Naira', 'Dollars', or 'GHS'.");
   }

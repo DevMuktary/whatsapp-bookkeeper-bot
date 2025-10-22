@@ -32,6 +32,7 @@ const parsePrice = (priceInput) => {
     return isNaN(value) ? NaN : value * multiplier;
 };
 
+
 async function _calculatePnLData(userId, period) {
     const { startDate, endDate } = getDateRange(period);
     const totalSales = await getSummaryByDateRange(userId, 'SALE', startDate, endDate);
@@ -41,8 +42,8 @@ async function _calculatePnLData(userId, period) {
     for (const sale of salesTransactions) {
         if (sale.items && sale.items.length > 0) {
             for (const item of sale.items) {
-                if (item.productId) { // Only calculate COGS for linked products
-                    const product = await findProductByName(userId, item.productName); // Find by name is safer
+                if (item.productId) { 
+                    const product = await findProductByName(userId, item.productName); 
                     if (product && product.costPrice) {
                         totalCogs += (product.costPrice * item.quantity);
                     }
@@ -71,8 +72,8 @@ export async function executeTask(intent, user, data) {
         switch (intent) {
             case INTENTS.LOG_SALE:
                 await executeLogSale(user, data);
-                success = true;
-                return; // Special case: Invoice flow manages state reset and menu
+                success = true; // Mark as success but let the invoice flow handle menu/state
+                return; // IMPORTANT: Return here to prevent finally block from sending menu prematurely
             case INTENTS.LOG_EXPENSE:
                 await executeLogExpense(user, data);
                 success = true;
@@ -133,18 +134,22 @@ export async function executeTask(intent, user, data) {
     } catch (error) {
         logger.error(`Error executing task for intent ${intent} and user ${user.whatsappId}:`, error);
         await sendTextMessage(user.whatsappId, `I ran into an issue: ${error.message} Please try again. 🛠️`);
-    } finally {
-        // Only reset state if it wasn't already reset (like in invoice flow)
-        // And only send menu if the task was meant to finish here and was successful.
-        if (user.state !== USER_STATES.AWAITING_INVOICE_CONFIRMATION) {
-             if (user.state !== USER_STATES.IDLE) {
-                 await updateUserState(user.whatsappId, USER_STATES.IDLE, {});
-             }
-             if (success) {
-                 await sendMainMenu(user.whatsappId);
-             }
+        // If an error occurs, reset state but don't show menu
+        if (user.state !== USER_STATES.IDLE) {
+             await updateUserState(user.whatsappId, USER_STATES.IDLE, {});
         }
+        return; // Prevent finally block from sending menu on error
+    } 
+    
+    // --- CORRECTED FINALLY LOGIC ---
+    // This block now only runs if no error occurred AND the intent wasn't LOG_SALE
+    if (user.state !== USER_STATES.IDLE) {
+        await updateUserState(user.whatsappId, USER_STATES.IDLE, {});
     }
+    if (success) { // `success` is true only if no error happened
+        await sendMainMenu(user.whatsappId);
+    }
+    // --- END OF CORRECTION ---
 }
 
 async function executeLogSale(user, data) {
@@ -154,13 +159,12 @@ async function executeLogSale(user, data) {
     const customer = await findOrCreateCustomer(user._id, customerName);
     let totalAmount = 0;
     let description = "";
-
-    // Process items: Link products, calculate total, build description
     const processedItems = [];
+
     for (let i = 0; i < items.length; i++) {
         const item = items[i];
-        if (!item.productName || !item.quantity || !item.pricePerUnit || isNaN(item.quantity) || isNaN(item.pricePerUnit)) {
-             throw new Error(`Item ${i+1} has invalid details. Please check quantity and price.`);
+        if (!item.productName || !item.quantity || isNaN(item.quantity) || item.pricePerUnit === undefined || isNaN(item.pricePerUnit)) {
+             throw new Error(`Item ${i+1} (${item.productName || 'Unknown'}) has invalid details. Please check quantity and price.`);
         }
         totalAmount += item.quantity * item.pricePerUnit;
         const product = item.isService ? null : await findProductByName(user._id, item.productName);
@@ -170,7 +174,7 @@ async function executeLogSale(user, data) {
             productName: item.productName,
             quantity: item.quantity,
             pricePerUnit: item.pricePerUnit,
-            isService: item.isService ?? false // Mark if it's a service
+            isService: item.isService ?? false 
         });
         
         description += `${item.quantity} x ${item.productName}`;
@@ -178,19 +182,9 @@ async function executeLogSale(user, data) {
     }
     description += ` sold to ${customerName}`;
 
-    const transactionData = { 
-        userId: user._id, 
-        totalAmount, 
-        items: processedItems, // Save processed items
-        date: new Date(), 
-        description, 
-        linkedCustomerId: customer._id, 
-        linkedBankId, 
-        paymentMethod: saleType 
-    };
+    const transactionData = { userId: user._id, totalAmount, items: processedItems, date: new Date(), description, linkedCustomerId: customer._id, linkedBankId, paymentMethod: saleType };
     const transaction = await createSaleTransaction(transactionData);
 
-    // Update stock only for actual products
     for (const item of processedItems) {
         if (item.productId && !item.isService) {
              await updateStock(item.productId, -item.quantity, 'SALE', transaction._id);
@@ -206,7 +200,6 @@ async function executeLogSale(user, data) {
     const formattedAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(totalAmount);
     await sendTextMessage(user.whatsappId, `✅ Sale logged successfully! ${description} for ${formattedAmount}.`);
     
-    // Store transaction with full items for invoice generation
     const fullTransactionForInvoice = await findTransactionById(transaction._id); 
     await updateUserState(user.whatsappId, USER_STATES.AWAITING_INVOICE_CONFIRMATION, { transaction: fullTransactionForInvoice });
     await sendInteractiveButtons(user.whatsappId, 'Would you like me to generate a PDF invoice for this sale?', [{ id: 'invoice_yes', title: 'Yes, Please' }, { id: 'invoice_no', title: 'No, Thanks' }]);
@@ -216,7 +209,6 @@ async function executeLogExpense(user, data) {
     const { category, amount, description, linkedBankId } = data;
     const expenseAmount = parsePrice(amount);
     if (isNaN(expenseAmount)) throw new Error("Invalid amount provided for the expense.");
-
     const transactionData = { userId: user._id, amount: expenseAmount, date: new Date(), description, category, linkedBankId };
     await createExpenseTransaction(transactionData);
     if (linkedBankId) {
@@ -232,30 +224,18 @@ async function executeAddProduct(user, data) {
     const sell = parsePrice(sellingPrice);
     const quantity = parseInt(quantityAdded, 10);
     if (isNaN(cost) || isNaN(sell) || isNaN(quantity)) throw new Error("Invalid quantity or price provided.");
-
     const product = await upsertProduct(user._id, productName, quantity, cost, sell);
-
-    // If stock was added and a bank was selected, record the purchase cost
     if (quantity > 0 && linkedBankId) {
         const totalCost = cost * quantity;
-        const expenseData = {
-            userId: user._id,
-            amount: totalCost,
-            date: new Date(),
-            description: `Purchase of ${quantity} x ${productName}`,
-            category: 'Inventory Purchase',
-            linkedBankId: linkedBankId,
-        };
+        const expenseData = { userId: user._id, amount: totalCost, date: new Date(), description: `Purchase of ${quantity} x ${productName}`, category: 'Inventory Purchase', linkedBankId: linkedBankId };
         await createExpenseTransaction(expenseData);
         await updateBankBalance(linkedBankId, -totalCost);
         logger.info(`Recorded inventory purchase expense: ${totalCost} from bank ${linkedBankId}`);
     }
-
     await sendTextMessage(user.whatsappId, `📦 Done! "${product.productName}" has been updated. You now have ${product.quantity} units in stock.`);
 }
 
 async function executeAddMultipleProducts(user, data) {
-    // This function assumes the list parser provides clean numbers.
     const products = data.products || [];
     if (products.length === 0) {
         await sendTextMessage(user.whatsappId, "I couldn't find any products in your message to add. Please try again!");
@@ -362,17 +342,13 @@ async function executeLogCustomerPayment(user, data) {
     const { customerName, amount, linkedBankId } = data;
     const paymentAmount = parsePrice(amount);
     if (isNaN(paymentAmount)) throw new Error("Invalid amount provided for the payment.");
-
     const customer = await findOrCreateCustomer(user._id, customerName);
     const description = `Payment of ${paymentAmount} received from ${customer.customerName}.`;
     await createCustomerPaymentTransaction({ userId: user._id, linkedCustomerId: customer._id, amount: paymentAmount, date: new Date(), description, linkedBankId });
     const updatedCustomer = await updateBalanceOwed(customer._id, -paymentAmount);
-    
-    // Update bank balance if provided
     if (linkedBankId) {
         await updateBankBalance(linkedBankId, paymentAmount);
     }
-
     const formattedAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(paymentAmount);
     const formattedBalance = new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(updatedCustomer.balanceOwed);
     await sendTextMessage(user.whatsappId, `✅ Payment of ${formattedAmount} from ${customer.customerName} has been recorded.`);
@@ -422,7 +398,7 @@ async function executeDeleteTransaction(user, data) {
     if (transaction.type === 'SALE') {
         if (transaction.items && transaction.items.length > 0) {
             for (const item of transaction.items) {
-                if (item.productId) { // Only reverse stock for actual products
+                if (item.productId) { 
                     await updateStock(item.productId, item.quantity, 'SALE_DELETED', transaction._id);
                 }
             }
@@ -439,7 +415,7 @@ async function executeDeleteTransaction(user, data) {
         }
     } else if (transaction.type === 'CUSTOMER_PAYMENT') {
         await updateBalanceOwed(transaction.linkedCustomerId, transaction.amount);
-         if (transaction.linkedBankId) { // Reverse bank deposit
+         if (transaction.linkedBankId) { 
             await updateBankBalance(transaction.linkedBankId, -transaction.amount);
         }
     }
@@ -484,26 +460,23 @@ async function executeUpdateTransaction(user, data) {
     }
     let updateData = { ...changes };
     if (originalTx.type === 'SALE') {
-        // Recalculate based on changed items or price
-        const originalItems = originalTx.items || [];
-        let newTotalAmount = 0;
-        let newDescription = "";
-        const updatedItems = originalItems.map(item => {
-             const newItem = { ...item };
-             if (changes.unitsSold !== undefined) newItem.quantity = changes.unitsSold; // Assume edit applies to first item if not specified
-             if (changes.amountPerUnit !== undefined) newItem.pricePerUnit = changes.amountPerUnit;
-             newTotalAmount += newItem.quantity * newItem.pricePerUnit;
-             return newItem;
-        });
-         updateData.items = updatedItems;
-         updateData.amount = newTotalAmount;
-         // Rebuild description simply for now
-         updateData.description = updatedItems.map(i => `${i.quantity} x ${i.productName}`).join(', ') + ` sold to ${originalTx.customerName}`; // Need to fetch customer name again ideally
+        // Assume single item edit for now
+        const originalItem = (originalTx.items && originalTx.items.length > 0) ? originalTx.items[0] : { quantity: 0, pricePerUnit: 0, productName: originalTx.description };
+        const newUnitsSold = changes.unitsSold ?? originalItem.quantity;
+        const newAmountPerUnit = changes.amountPerUnit ?? originalItem.pricePerUnit;
+        updateData.amount = newUnitsSold * newAmountPerUnit;
+        
+        // Find customer name (ideally fetch customer object but for now parse description)
+         let customerName = "customer";
+         const descParts = originalTx.description.split(' sold to ');
+         if(descParts.length > 1) customerName = descParts[1];
+
+        updateData.description = `${newUnitsSold} x ${originalItem.productName} sold to ${customerName}`;
+         // Update the items array as well
+         updateData.items = [{ ...originalItem, quantity: newUnitsSold, pricePerUnit: newAmountPerUnit }];
     } else {
-        // For expense/payment, amount is directly editable
         if (changes.amount !== undefined) updateData.amount = parsePrice(changes.amount);
     }
-    
     const updatedTx = await updateTransactionById(transactionId, updateData);
     logger.info(`Re-applying impact for updated transaction ${transactionId}`);
     if (updatedTx.type === 'SALE') {
@@ -550,12 +523,10 @@ async function executeGetCustomerBalances(user) {
         await sendTextMessage(user.whatsappId, "Great news! It looks like no customers currently owe you money. 👍");
         return;
     }
-    
     let summary = "Here is a list of customers with outstanding balances:\n\n";
     customers.forEach(customer => {
         const formattedBalance = new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(customer.balanceOwed);
         summary += `*${customer.customerName}*: ${formattedBalance}\n`;
     });
-    
     await sendTextMessage(user.whatsappId, summary);
 }

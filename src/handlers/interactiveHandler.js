@@ -30,11 +30,10 @@ async function handleButtonReply(user, buttonId, originalMessage) {
     switch (user.state) {
         case USER_STATES.IDLE:
             logger.info(`Handling quick start button click from IDLE state for user ${user.whatsappId}`);
+            // Treat button click as if user typed the text
             const mockTextMessage = {
                 from: originalMessage.from,
-                text: {
-                    body: buttonId 
-                },
+                text: { body: buttonId },
                 type: 'text'
             };
             await handleMessage(mockTextMessage);
@@ -82,14 +81,16 @@ async function handleListReply(user, listId, originalMessage) {
         case USER_STATES.IDLE:
         case USER_STATES.AWAITING_REPORT_TYPE_SELECTION:
             logger.info(`Handling list click from ${user.state} for user ${user.whatsappId}`);
+            // Treat list selection as if user typed the text
             const mockTextMessage = {
                 from: originalMessage.from,
-                text: {
-                    body: listId 
-                },
+                text: { body: listId },
                 type: 'text'
             };
-            await updateUserState(user.whatsappId, USER_STATES.IDLE);
+            // Reset state first ONLY if coming from report selection
+            if (user.state === USER_STATES.AWAITING_REPORT_TYPE_SELECTION) {
+                 await updateUserState(user.whatsappId, USER_STATES.IDLE);
+            }
             await handleMessage(mockTextMessage);
             break;
 
@@ -108,8 +109,8 @@ async function handleBulkProductConfirmation(user, buttonId) {
         const productsToAdd = user.stateContext.products;
         if (productsToAdd && productsToAdd.length > 0) {
             await sendTextMessage(user.whatsappId, "Great! Adding them to your inventory now... ⏳");
-            // Need to figure out bank selection for bulk add cost
-            await sendTextMessage(user.whatsappId, "(Note: Bulk inventory purchase cost is not yet linked to a bank account.)");
+            // Note: Bank selection for bulk purchase cost is complex and not implemented here.
+            await sendTextMessage(user.whatsappId, "(Note: Bank balance deduction for bulk purchases isn't implemented yet.)");
             await executeTask(INTENTS.ADD_MULTIPLE_PRODUCTS, user, { products: productsToAdd });
         } else {
             await sendTextMessage(user.whatsappId, "Something went wrong, I seem to have lost the list of products. Please send it again.");
@@ -123,40 +124,48 @@ async function handleBulkProductConfirmation(user, buttonId) {
 }
 
 async function handleInvoiceConfirmation(user, buttonId) {
-    let success = false;
+    let shouldSendMenu = true; // Assume we send menu unless invoice generation starts
     try {
         if (buttonId === 'invoice_yes') {
-            const { transaction } = user.stateContext; // Get full transaction from context
+            shouldSendMenu = false; // Don't send menu immediately, wait for PDF generation/sending
+            const { transaction } = user.stateContext; // Get full transaction
             if (!transaction || !transaction._id) {
                 await sendTextMessage(user.whatsappId, "I seem to have lost the details of that sale. Please try logging it again.");
+                await updateUserState(user.whatsappId, USER_STATES.IDLE, {}); // Reset state on error
+                await sendMainMenu(user.whatsappId); // Send menu after error
                 return;
             }
             await sendTextMessage(user.whatsappId, "Perfect! Generating your invoice now... 🧾");
-            
+
             const customer = await findCustomerById(transaction.linkedCustomerId);
             if (!customer) {
                 await sendTextMessage(user.whatsappId, "I couldn't find the customer details for this invoice.");
+                 await updateUserState(user.whatsappId, USER_STATES.IDLE, {});
+                 await sendMainMenu(user.whatsappId);
                 return;
             }
-            const pdfBuffer = await generateInvoice(user, transaction, customer); // Pass full transaction
+            const pdfBuffer = await generateInvoice(user, transaction, customer);
             const mediaId = await uploadMedia(pdfBuffer, 'application/pdf');
             if (mediaId) {
                 const filename = `Invoice_${transaction._id.toString().slice(-8).toUpperCase()}.pdf`;
                 await sendDocument(user.whatsappId, mediaId, filename, `Here is the invoice for your recent sale to ${customer.customerName}.`);
-                success = true;
+                shouldSendMenu = true; // Send menu after successful PDF send
             } else {
                 await sendTextMessage(user.whatsappId, "I created the invoice, but I had trouble uploading it. Please try asking for it again later.");
+                shouldSendMenu = true; // Send menu even if upload failed
             }
         } else if (buttonId === 'invoice_no') {
             await sendTextMessage(user.whatsappId, "No problem! Let me know if you need anything else.");
-            success = true;
+            shouldSendMenu = true;
         }
     } catch (error) {
         logger.error(`Error handling invoice confirmation for user ${user.whatsappId}:`, error);
         await sendTextMessage(user.whatsappId, "I ran into a problem while creating the invoice. Please try again.");
+        shouldSendMenu = true; // Send menu after error
     } finally {
+        // Only reset state and send menu when appropriate
         await updateUserState(user.whatsappId, USER_STATES.IDLE, {});
-        if (success) {
+        if (shouldSendMenu) {
             await sendMainMenu(user.whatsappId);
         }
     }
@@ -167,11 +176,10 @@ async function handleBankSelection(user, buttonId, originalIntent) {
     if (action === 'select_bank') {
         const transactionData = user.stateContext.transactionData;
         
-        // Handle the 'Not from Bank' option for purchases
         if (bankIdStr !== 'none') {
              transactionData.linkedBankId = new ObjectId(bankIdStr);
         } else {
-            transactionData.linkedBankId = null; // Ensure it's explicitly null
+            transactionData.linkedBankId = null; 
         }
 
         await sendTextMessage(user.whatsappId, "Great, noting that down...");
@@ -188,27 +196,27 @@ async function handleSaleTypeConfirmation(user, buttonId) {
     if (action !== 'sale_type') return;
 
     if (type === 'product') {
-        // User wants to add the product first
         await sendTextMessage(user.whatsappId, `Okay, let's add "${productName}" to your inventory first.`);
-        // Transition to adding product, saving the original sale intent details
-        await updateUserState(user.whatsappId, USER_STATES.ADDING_PRODUCT, { 
-            memory: [], // Start fresh memory for adding product
-            existingProduct: null, // It's definitely a new product
-            // Store pending sale info to resume later (more complex, maybe for future refinement)
-            // pendingSale: { memory: memory, saleData: saleData } 
+        await updateUserState(user.whatsappId, USER_STATES.ADDING_PRODUCT, {
+            memory: [],
+            existingProduct: null,
+            // pendingSale: { memory: memory, saleData: saleData } // Consider resuming later
         });
-        // Ask the first question for adding a product
         await sendTextMessage(user.whatsappId, `How many units of "${productName}" are you adding?`);
 
     } else if (type === 'service') {
-        // Mark the first item as a service and continue logging the sale
-        if (saleData.items && saleData.items[0]) {
-            saleData.items[0].isService = true;
+        // Mark the first item as a service
+        const updatedSaleData = { ...saleData };
+        if (updatedSaleData.items && updatedSaleData.items[0]) {
+            updatedSaleData.items[0].isService = true;
+            // Crucially, remove productId if it was incorrectly assumed
+            delete updatedSaleData.items[0].productId;
         }
         await sendTextMessage(user.whatsappId, "Okay, noted as a service. Let's continue logging the sale.");
-        await updateUserState(user.whatsappId, USER_STATES.LOGGING_SALE, { memory, saleData, isService: true });
-        // Re-call the sale handler to continue gathering details
-        await handleMessage({ from: user.whatsappId, text: { body: memory[memory.length -1].content }, type: 'text'}); 
+        // Continue the sale flow, passing isService=true
+        await updateUserState(user.whatsappId, USER_STATES.LOGGING_SALE, { memory, saleData: updatedSaleData, isService: true });
+        // Use the last user message to re-trigger the AI
+        await handleMessage({ from: user.whatsappId, text: { body: memory[memory.length -1]?.content || "" }, type: 'text'});
     }
 }
 
@@ -225,7 +233,7 @@ async function handleTransactionSelection(user, listId) {
     }
     const formattedAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(transaction.amount);
      let description = transaction.description;
-     if (transaction.items && transaction.items.length > 0) { // Better description for multi-item sales
+     if (transaction.items && transaction.items.length > 0) {
         description = transaction.items.map(i => `${i.quantity}x ${i.productName}`).join(', ');
      }
     const summary = `*Transaction Details:*\n\n*Type:* ${transaction.type}\n*Amount:* ${formattedAmount}\n*Description:* ${description}\n*Date:* ${new Date(transaction.date).toLocaleString()}`;
@@ -254,17 +262,14 @@ async function handleReconcileAction(user, buttonId) {
         ]);
     } else if (buttonId === 'action_edit') {
         let buttons = [];
-        // Define editable fields based on transaction type
         if (transaction.type === 'SALE') {
-            // For simplicity, editing multi-item sales might require deleting and re-entering.
-            // Let's allow editing only for single-item sales initially.
             if (transaction.items && transaction.items.length === 1 && transaction.items[0].productId) {
                  buttons = [
                     { id: 'edit_field:unitsSold', title: 'Edit Units Sold' },
                     { id: 'edit_field:amountPerUnit', title: 'Edit Unit Price' },
                  ];
             } else if (transaction.items && transaction.items.length === 1 && transaction.items[0].isService) {
-                buttons = [ { id: 'edit_field:amount', title: 'Edit Amount' } ]; // Edit total amount for service
+                buttons = [ { id: 'edit_field:amount', title: 'Edit Amount' } ]; 
             } else {
                  await sendTextMessage(user.whatsappId, "Editing sales with multiple items isn't supported yet. Please delete and re-enter the transaction.");
                  await updateUserState(user.whatsappId, USER_STATES.IDLE, {});
@@ -284,7 +289,6 @@ async function handleReconcileAction(user, buttonId) {
              await sendMainMenu(user.whatsappId);
              return;
         }
-
         await updateUserState(user.whatsappId, USER_STATES.AWAITING_EDIT_FIELD_SELECTION, { transaction });
         await sendInteractiveButtons(user.whatsappId, "Which part of this transaction would you like to edit?", buttons);
     }

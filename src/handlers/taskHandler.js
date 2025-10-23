@@ -35,20 +35,15 @@ const parsePrice = (priceInput) => {
 
 async function _calculatePnLData(userId, period) {
     const { startDate, endDate } = getDateRange(period);
-
-    // 1. Get total sales (Revenue)
     const totalSales = await getSummaryByDateRange(userId, 'SALE', startDate, endDate);
-
-    // 2. Calculate Cost of Goods Sold (COGS) accurately from SALE transactions
+    const totalExpenses = await getSummaryByDateRange(userId, 'EXPENSE', startDate, endDate);
     let totalCogs = 0;
     const salesTransactions = await getTransactionsByDateRange(userId, 'SALE', startDate, endDate);
     for (const sale of salesTransactions) {
         if (sale.items && sale.items.length > 0) {
             for (const item of sale.items) {
-                // IMPORTANT: Only calculate COGS if it was a product sale (not service)
-                if (item.productId && !item.isService) {
-                    // Need the cost price AT THE TIME OF SALE potentially, but for now use current cost price
-                    const product = await findProductByName(userId, item.productName);
+                if (item.productId && !item.isService) { 
+                    const product = await findProductByName(userId, item.productName); 
                     if (product && product.costPrice != null && !isNaN(product.costPrice)) {
                         totalCogs += (product.costPrice * item.quantity);
                     } else {
@@ -58,14 +53,8 @@ async function _calculatePnLData(userId, period) {
             }
         }
     }
-
-    // 3. Get total OPERATING expenses (Type: EXPENSE, excluding inventory purchases)
-    const totalExpenses = await getSummaryByDateRange(userId, 'EXPENSE', startDate, endDate);
-
-    // 4. Get top OPERATING expenses
     const allExpenses = await getTransactionsByDateRange(userId, 'EXPENSE', startDate, endDate);
     const expenseMap = allExpenses.reduce((acc, tx) => {
-        // Exclude inventory purchase category explicitly if it somehow exists
         if (tx.category?.toLowerCase() !== 'inventory purchase') {
              acc[tx.category] = (acc[tx.category] || 0) + tx.amount;
         }
@@ -75,11 +64,8 @@ async function _calculatePnLData(userId, period) {
         .sort(([, a], [, b]) => b - a)
         .slice(0, 3)
         .map(([category, total]) => ({ _id: category, total }));
-
-    // 5. Calculate final numbers
     const grossProfit = totalSales - totalCogs;
-    const netProfit = grossProfit - totalExpenses; // Total Expenses now correctly excludes COGS
-
+    const netProfit = grossProfit - totalExpenses; 
     return { totalSales, totalCogs, grossProfit, totalExpenses, netProfit, topExpenses };
 }
 
@@ -90,18 +76,18 @@ export async function executeTask(intent, user, data) {
         switch (intent) {
             case INTENTS.LOG_SALE:
                 await executeLogSale(user, data);
-                success = true;
-                return;
+                success = true; 
+                return; 
             case INTENTS.LOG_EXPENSE:
                 await executeLogExpense(user, data);
                 success = true;
                 break;
             case INTENTS.ADD_PRODUCT:
-                await executeAddProduct(user, data); // Corrected Accounting Logic
+                await executeAddProduct(user, data); 
                 success = true;
                 break;
             case INTENTS.ADD_MULTIPLE_PRODUCTS:
-                await executeAddMultipleProducts(user, data); // Needs bank deduction logic too
+                await executeAddMultipleProducts(user, data); 
                 success = true;
                 break;
             case INTENTS.CHECK_STOCK:
@@ -113,7 +99,7 @@ export async function executeTask(intent, user, data) {
                 success = true;
                 break;
             case INTENTS.GENERATE_REPORT:
-                await executeGenerateReport(user, data); // Fixed period bug
+                await executeGenerateReport(user, data); 
                 success = true;
                 break;
             case INTENTS.LOG_CUSTOMER_PAYMENT:
@@ -155,9 +141,11 @@ export async function executeTask(intent, user, data) {
         if (user.state !== USER_STATES.IDLE) {
              await updateUserState(user.whatsappId, USER_STATES.IDLE, {});
         }
-        return;
-    }
-
+        return; 
+    } 
+    
+    // Only reset state and send menu if the task completed successfully 
+    // AND wasn't a sale (which has its own follow-up)
     if (user.state !== USER_STATES.AWAITING_INVOICE_CONFIRMATION) {
          if (user.state !== USER_STATES.IDLE) {
              await updateUserState(user.whatsappId, USER_STATES.IDLE, {});
@@ -168,7 +156,6 @@ export async function executeTask(intent, user, data) {
     }
 }
 
-// --- executeLogSale remains largely the same, logic correct ---
 async function executeLogSale(user, data) {
     const { items, customerName, saleType, linkedBankId } = data;
     if (!items || items.length === 0) throw new Error("No items found in the sale data.");
@@ -191,9 +178,9 @@ async function executeLogSale(user, data) {
             productName: item.productName,
             quantity: item.quantity,
             pricePerUnit: item.pricePerUnit,
-            isService: item.isService ?? false
+            isService: item.isService ?? false 
         });
-
+        
         description += `${item.quantity} x ${item.productName}`;
         if (i < items.length - 1) description += ", ";
     }
@@ -202,13 +189,12 @@ async function executeLogSale(user, data) {
     const transactionData = { userId: user._id, totalAmount, items: processedItems, date: new Date(), description, linkedCustomerId: customer._id, linkedBankId, paymentMethod: saleType };
     const transaction = await createSaleTransaction(transactionData);
 
-    // Update stock only for actual products
     for (const item of processedItems) {
         if (item.productId && !item.isService) {
              await updateStock(item.productId, -item.quantity, 'SALE', transaction._id);
         }
     }
-
+   
     if (saleType.toLowerCase() === 'credit') {
         await updateBalanceOwed(customer._id, totalAmount);
     } else if (linkedBankId) {
@@ -217,8 +203,8 @@ async function executeLogSale(user, data) {
 
     const formattedAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(totalAmount);
     await sendTextMessage(user.whatsappId, `✅ Sale logged successfully! ${description} for ${formattedAmount}.`);
-
-    const fullTransactionForInvoice = await findTransactionById(transaction._id);
+    
+    const fullTransactionForInvoice = await findTransactionById(transaction._id); 
     await updateUserState(user.whatsappId, USER_STATES.AWAITING_INVOICE_CONFIRMATION, { transaction: fullTransactionForInvoice });
     await sendInteractiveButtons(user.whatsappId, 'Would you like me to generate a PDF invoice for this sale?', [{ id: 'invoice_yes', title: 'Yes, Please' }, { id: 'invoice_no', title: 'No, Thanks' }]);
 }
@@ -227,11 +213,10 @@ async function executeLogExpense(user, data) {
     const { category, amount, description, linkedBankId } = data;
     const expenseAmount = parsePrice(amount);
     if (isNaN(expenseAmount)) throw new Error("Invalid amount provided for the expense.");
-    // Prevent logging inventory purchase as expense here
     if (category?.toLowerCase() === 'inventory purchase') {
         logger.warn(`Attempted to log inventory purchase via expense flow for user ${user.whatsappId}. Ignoring.`);
         await sendTextMessage(user.whatsappId, "Please use the 'Add Product' feature to record inventory purchases.");
-        return; // Don't log it
+        return; 
     }
     const transactionData = { userId: user._id, amount: expenseAmount, date: new Date(), description, category, linkedBankId };
     await createExpenseTransaction(transactionData);
@@ -242,39 +227,28 @@ async function executeLogExpense(user, data) {
     await sendTextMessage(user.whatsappId, `✅ Expense logged: ${formattedAmount} for "${description}".`);
 }
 
-// --- executeAddProduct - CORRECTED ACCOUNTING ---
 async function executeAddProduct(user, data) {
     const { productName, quantityAdded, costPrice, sellingPrice, linkedBankId } = data;
     const cost = parsePrice(costPrice);
     const sell = parsePrice(sellingPrice);
     const quantity = parseInt(quantityAdded, 10);
     if (isNaN(cost) || isNaN(sell) || isNaN(quantity)) throw new Error("Invalid quantity or price provided.");
-
-    // Step 1: Update inventory (Asset)
     const product = await upsertProduct(user._id, productName, quantity, cost, sell);
-
-    // Step 2: If stock was added (purchase) and paid from bank, decrease bank balance (Asset Transfer)
     if (quantity > 0 && linkedBankId) {
         const totalCost = cost * quantity;
         if (totalCost > 0) {
             await updateBankBalance(linkedBankId, -totalCost);
             logger.info(`Recorded inventory purchase cost: ${totalCost} deducted from bank ${linkedBankId}`);
-            // DO NOT log an EXPENSE transaction here anymore.
         }
     } else if (quantity > 0 && !linkedBankId) {
          logger.info(`Inventory purchased for ${productName} but no bank specified. Assumed cash purchase.`);
-         // Optionally, could add logic later to deduct from a default "Cash on Hand" account if implemented
     }
-
     await sendTextMessage(user.whatsappId, `📦 Done! "${product.productName}" has been updated/added. You now have ${product.quantity} units in stock.`);
 }
 
 
-// --- executeAddMultipleProducts - Needs similar correction ---
 async function executeAddMultipleProducts(user, data) {
-    // TODO: Implement bank deduction logic for bulk adds, similar to single add.
-    // This requires asking the user which bank was used *after* confirmation.
-    // For now, it adds to inventory but doesn't affect cash flow recorded by the bot.
+    // Note: Bank deduction for bulk adds is not yet implemented.
     const products = data.products || [];
     if (products.length === 0) {
         await sendTextMessage(user.whatsappId, "I couldn't find any products in your message to add. Please try again!");
@@ -321,28 +295,34 @@ async function executeGetFinancialSummary(user, data) {
     const type = metric.toUpperCase() === 'SALES' ? 'SALE' : 'EXPENSE';
     const total = await getSummaryByDateRange(user._id, type, startDate, endDate);
     const formattedAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(total);
-    const readablePeriod = period.replace('_', ' '); // Use replace safely here
+    const readablePeriod = period.replace(/_/g, ' '); // Use replace globally
     await sendTextMessage(user.whatsappId, `Your total ${metric} for ${readablePeriod} is ${formattedAmount}. 📊`);
 }
 
-// --- executeGenerateReport - Fixed period bug ---
 async function executeGenerateReport(user, data) {
-    const { reportType, period = 'this_month' } = data; // Default period here
+    const { reportType } = data;
+    let period = data.period || 'this_month'; // Ensure period has a default
+
     if (!reportType) {
         await sendTextMessage(user.whatsappId, "Please specify which report you need, e.g., 'sales report for this month' or 'inventory report'.");
         return;
     }
+
     let reportTypeLower = reportType.toLowerCase();
     if (reportTypeLower.includes('profit') || reportTypeLower.includes('p&l')) {
         reportTypeLower = 'pnl';
     }
-    const readablePeriodStr = period.replace('_', ' '); // Safe to use replace now
+
+    // --- FIX IS HERE ---
+    // Ensure period is a valid string before using replace
+    const readablePeriodStr = typeof period === 'string' ? period.replace(/_/g, ' ') : 'this month'; 
+    // --- END OF FIX ---
 
     await sendTextMessage(user.whatsappId, `Generating your ${reportTypeLower} report for ${readablePeriodStr}... Please wait. 📄`);
 
     let pdfBuffer;
     let filename;
-    const { startDate, endDate } = getDateRange(period); // Get dates for titles/queries
+    const { startDate, endDate } = getDateRange(period); // Use the (potentially defaulted) period
     const readablePeriodTitle = `For the Period: ${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`;
 
     if (reportTypeLower === 'sales' || reportTypeLower === 'expenses') {
@@ -354,7 +334,7 @@ async function executeGenerateReport(user, data) {
         }
         pdfBuffer = reportTypeLower === 'sales'
             ? await generateSalesReport(user, transactions, readablePeriodTitle)
-            : await generateExpenseReport(user, transactions, readablePeriodTitle); // Pass correct title
+            : await generateExpenseReport(user, transactions, readablePeriodTitle);
         filename = `${reportTypeLower === 'sales' ? 'Sales' : 'Expense'}_Report_${period}.pdf`;
     } else if (reportTypeLower === 'inventory') {
         const products = await getAllProducts(user._id);
@@ -366,7 +346,7 @@ async function executeGenerateReport(user, data) {
         filename = 'Inventory_Report.pdf';
     } else if (reportTypeLower === 'pnl') {
         const pnlData = await _calculatePnLData(user._id, period);
-        pdfBuffer = await generatePnLReport(user, pnlData, readablePeriodTitle); // Pass correct title
+        pdfBuffer = await generatePnLReport(user, pnlData, readablePeriodTitle);
         filename = `P&L_Report_${period}.pdf`;
     } else {
         await sendTextMessage(user.whatsappId, `Sorry, I can only generate sales, expense, inventory, and P&L reports for now.`);
@@ -439,11 +419,30 @@ async function executeDeleteTransaction(user, data) {
         await sendTextMessage(user.whatsappId, "Transaction not found or you don't have permission to delete it.");
         return;
     }
-    // Rollback logic (unchanged, seems correct based on new structure)
-    if (transaction.type === 'SALE') { /* ... */ }
-    else if (transaction.type === 'EXPENSE') { /* ... */ }
-    else if (transaction.type === 'CUSTOMER_PAYMENT') { /* ... */ }
-    
+    if (transaction.type === 'SALE') {
+        if (transaction.items && transaction.items.length > 0) {
+            for (const item of transaction.items) {
+                if (item.productId && !item.isService) { 
+                    await updateStock(item.productId, item.quantity, 'SALE_DELETED', transaction._id);
+                }
+            }
+        }
+        if (transaction.paymentMethod === 'CREDIT') {
+            await updateBalanceOwed(transaction.linkedCustomerId, -transaction.amount);
+        }
+        if (transaction.linkedBankId) {
+            await updateBankBalance(transaction.linkedBankId, -transaction.amount);
+        }
+    } else if (transaction.type === 'EXPENSE') {
+        if (transaction.linkedBankId) {
+            await updateBankBalance(transaction.linkedBankId, transaction.amount);
+        }
+    } else if (transaction.type === 'CUSTOMER_PAYMENT') {
+        await updateBalanceOwed(transaction.linkedCustomerId, transaction.amount);
+         if (transaction.linkedBankId) { 
+            await updateBankBalance(transaction.linkedBankId, -transaction.amount);
+        }
+    }
     const deleted = await deleteTransactionById(transactionId);
     if (deleted) {
         await sendTextMessage(user.whatsappId, "✅ The transaction has been successfully deleted and all associated balances have been updated.");
@@ -456,32 +455,79 @@ async function executeUpdateTransaction(user, data) {
     const { transactionId, changes } = data;
     const originalTx = await findTransactionById(transactionId);
     if (!originalTx) throw new Error("Could not find the original transaction to update.");
-    
-    // Rollback logic (unchanged, seems correct)
     logger.info(`Rolling back original transaction ${transactionId}`);
-    if (originalTx.type === 'SALE') { /* ... */ }
-    else if (originalTx.type === 'EXPENSE') { /* ... */ }
-    else if (originalTx.type === 'CUSTOMER_PAYMENT') { /* ... */ }
-
-    // Prepare update data and Recalculate (unchanged, seems correct)
+    if (originalTx.type === 'SALE') {
+        if (originalTx.items && originalTx.items.length > 0) {
+            for (const item of originalTx.items) {
+                if (item.productId && !item.isService) {
+                    await updateStock(item.productId, item.quantity, 'SALE_EDIT_ROLLBACK');
+                }
+            }
+        }
+        if (originalTx.paymentMethod === 'CREDIT') {
+            await updateBalanceOwed(originalTx.linkedCustomerId, -originalTx.amount);
+        }
+        if (originalTx.linkedBankId) {
+            await updateBankBalance(originalTx.linkedBankId, -originalTx.amount);
+        }
+    } else if (originalTx.type === 'EXPENSE') {
+        if (originalTx.linkedBankId) {
+            await updateBankBalance(originalTx.linkedBankId, originalTx.amount);
+        }
+    } else if (originalTx.type === 'CUSTOMER_PAYMENT') {
+        await updateBalanceOwed(originalTx.linkedCustomerId, originalTx.amount);
+        if (originalTx.linkedBankId) {
+            await updateBankBalance(originalTx.linkedBankId, -originalTx.amount);
+        }
+    }
     let updateData = { ...changes };
-    if (originalTx.type === 'SALE') { /* ... */ }
-    else { /* ... */ }
-
-    // Save and Replay (unchanged, seems correct)
+    if (originalTx.type === 'SALE' && originalTx.items && originalTx.items.length === 1) { // Only handle single-item edit for now
+        const originalItem = originalTx.items[0];
+        const newUnitsSold = changes.unitsSold ?? originalItem.quantity;
+        const newAmountPerUnit = changes.amountPerUnit ?? originalItem.pricePerUnit;
+        const customer = await findCustomerById(originalTx.linkedCustomerId); // Fetch customer name
+        const customerName = customer ? customer.customerName : "customer";
+        
+        updateData.amount = newUnitsSold * newAmountPerUnit;
+        updateData.description = `${newUnitsSold} x ${originalItem.productName} sold to ${customerName}`;
+        updateData.items = [{ ...originalItem, quantity: newUnitsSold, pricePerUnit: newAmountPerUnit }];
+    } else if (originalTx.type !== 'SALE') { // Handle amount change for non-sales
+        if (changes.amount !== undefined) updateData.amount = parsePrice(changes.amount);
+    }
+    
     const updatedTx = await updateTransactionById(transactionId, updateData);
     logger.info(`Re-applying impact for updated transaction ${transactionId}`);
-    if (updatedTx.type === 'SALE') { /* ... */ }
-    else if (updatedTx.type === 'EXPENSE') { /* ... */ }
-    else if (updatedTx.type === 'CUSTOMER_PAYMENT') { /* ... */ }
-
+    if (updatedTx.type === 'SALE') {
+         if (updatedTx.items && updatedTx.items.length > 0) {
+            for (const item of updatedTx.items) {
+                if (item.productId && !item.isService) {
+                    await updateStock(item.productId, -item.quantity, 'SALE_EDIT_REAPPLY');
+                }
+            }
+        }
+        if (updatedTx.paymentMethod === 'CREDIT') {
+            await updateBalanceOwed(updatedTx.linkedCustomerId, updatedTx.amount);
+        }
+        if (updatedTx.linkedBankId) {
+            await updateBankBalance(updatedTx.linkedBankId, updatedTx.amount);
+        }
+    } else if (updatedTx.type === 'EXPENSE') {
+        if (updatedTx.linkedBankId) {
+            await updateBankBalance(updatedTx.linkedBankId, -updatedTx.amount);
+        }
+    } else if (updatedTx.type === 'CUSTOMER_PAYMENT') {
+        await updateBalanceOwed(updatedTx.linkedCustomerId, -updatedTx.amount);
+         if (updatedTx.linkedBankId) {
+            await updateBankBalance(updatedTx.linkedBankId, updatedTx.amount);
+        }
+    }
     const newFormattedAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(updatedTx.amount);
     await sendTextMessage(user.whatsappId, `✅ The transaction has been successfully updated. The new total amount is ${newFormattedAmount}.`);
 }
 
 async function executeGetFinancialInsight(user, data) {
     const period = data.period || 'this_month';
-    await sendTextMessage(user.whatsappId, `Analyzing your business performance for ${period.replace('_', ' ')}... 🧠`);
+    await sendTextMessage(user.whatsappId, `Analyzing your business performance for ${period.replace(/_/g, ' ')}... 🧠`);
     const pnlData = await _calculatePnLData(user._id, period);
     const insight = await getFinancialInsight(pnlData, user.currency);
     await sendTextMessage(user.whatsappId, insight);

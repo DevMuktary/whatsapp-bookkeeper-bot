@@ -43,7 +43,10 @@ export function generateSalesReport(user, transactions, periodTitle) {
             transactions.forEach(tx => {
                 const y = doc.y + 5;
                 totalSales += tx.amount;
-                const formattedAmount = new Intl.NumberFormat('en-US').format(tx.amount);
+                // Use a formatter that matches your new style (no decimals)
+                const formattedAmount = new Intl.NumberFormat('en-US', {
+                    maximumFractionDigits: 0 
+                }).format(tx.amount);
                 
                 doc.text(new Date(tx.date).toLocaleDateString(), dateX, y);
                 doc.text(tx.description, descX, y, { width: 200, ellipsis: true });
@@ -57,7 +60,9 @@ export function generateSalesReport(user, transactions, periodTitle) {
             const totalY = doc.y;
             doc.font('Helvetica-Bold');
             doc.text('Total Sales:', descX, totalY);
-            const formattedTotal = new Intl.NumberFormat('en-US').format(totalSales);
+            const formattedTotal = new Intl.NumberFormat('en-US', {
+                maximumFractionDigits: 0
+            }).format(totalSales);
             doc.text(`${user.currency} ${formattedTotal}`, amountX, totalY, { align: 'right' });
 
             doc.end();
@@ -70,7 +75,8 @@ export function generateSalesReport(user, transactions, periodTitle) {
 }
 
 /**
- * Generates an expense report PDF.
+ * [MODIFIED] Generates an expense report PDF.
+ * This version is styled to match your "Tunji Enterprise" image.
  * @param {object} user - The user object, containing businessName and currency.
  * @param {Array<object>} transactions - An array of expense transaction documents.
  * @param {string} periodTitle - A readable title for the report's date range.
@@ -84,50 +90,87 @@ export function generateExpenseReport(user, transactions, periodTitle) {
             doc.on('data', buffers.push.bind(buffers));
             doc.on('end', () => resolve(Buffer.concat(buffers)));
 
-            // --- Document Header ---
-            doc.fontSize(20).font('Helvetica-Bold').text(user.businessName, { align: 'center' });
-            doc.fontSize(14).font('Helvetica').text('Expense Report', { align: 'center' });
-            doc.fontSize(10).text(periodTitle, { align: 'center' });
-            doc.moveDown(2);
+            // Helper to format numbers like "6,000" (no decimals)
+            const format = (amount) => new Intl.NumberFormat('en-US', {
+                maximumFractionDigits: 0,
+            }).format(amount);
 
-            // --- Table Header ---
+            // --- Document Header (Matched to your "Tunji Enterprise" image) ---
+            doc.fontSize(22).font('Helvetica-Bold').text(user.businessName, { align: 'center' });
+            doc.moveDown(0.5);
+            doc.fontSize(16).font('Helvetica-Bold').text('Expense Report', { align: 'center' });
+            doc.moveDown(0.5);
+            doc.fontSize(12).font('Helvetica').text(periodTitle, { align: 'center' });
+            doc.moveDown(2.5); // More space after header
+
+            // --- Table Header (Aligned coordinates) ---
             const tableTop = doc.y;
-            const itemX = 50;
-            const dateX = 100;
-            const categoryX = 200;
-            const descX = 300;
-            const amountX = 450;
+            const tableStartX = 50;
+            const tableEndX = 545; // Page width (595.28) - margin (50) approx
+
+            // Define X positions for columns
+            const dateX = 50;
+            const categoryX = 140;
+            const descX = 260;
+            const amountX = 445; // Start of the amount column
+            const amountWidth = 100; // Width of the amount column
 
             doc.fontSize(10).font('Helvetica-Bold');
-            doc.text('Date', dateX, tableTop);
-            doc.text('Category', categoryX, tableTop);
-            doc.text('Description', descX, tableTop);
-            doc.text('Amount', amountX, tableTop, { align: 'right' });
-            doc.moveTo(itemX, doc.y).lineTo(550, doc.y).stroke();
+            doc.text('Date', dateX, tableTop, { width: 80 });
+            doc.text('Category', categoryX, tableTop, { width: 110 });
+            doc.text('Description', descX, tableTop, { width: 180 });
+            doc.text('Amount', amountX, tableTop, { align: 'right', width: amountWidth });
+            
+            // Draw the line UNDER the headers
+            doc.moveTo(tableStartX, doc.y + 5)
+               .lineTo(tableEndX, doc.y + 5)
+               .lineWidth(1)
+               .strokeColor('black')
+               .stroke();
+            
             doc.font('Helvetica');
+            doc.moveDown(1); // Space before rows
 
             // --- Table Rows ---
             let totalExpenses = 0;
             transactions.forEach(tx => {
-                const y = doc.y + 5;
+                const y = doc.y; // Use current Y position
                 totalExpenses += tx.amount;
-                const formattedAmount = new Intl.NumberFormat('en-US').format(tx.amount);
+                const formattedAmount = format(tx.amount);
                 
-                doc.text(new Date(tx.date).toLocaleDateString(), dateX, y);
-                doc.text(tx.category, categoryX, y, { width: 90, ellipsis: true });
-                doc.text(tx.description, descX, y, { width: 140, ellipsis: true });
-                doc.text(`${user.currency} ${formattedAmount}`, amountX, y, { align: 'right' });
-                doc.moveDown(); // Ensure rows don't overlap
+                doc.fontSize(10).text(new Date(tx.date).toLocaleDateString(), dateX, y, { width: 80 });
+                doc.text(tx.category, categoryX, y, { width: 110, ellipsis: true });
+                doc.text(tx.description, descX, y, { width: 180, ellipsis: true });
+                // This alignment is key. It aligns to the right within a 100px "box"
+                doc.text(`${user.currency} ${formattedAmount}`, amountX, y, { 
+                    align: 'right', 
+                    width: amountWidth 
+                });
+                doc.moveDown(1); // Space between rows
             });
 
             // --- Footer and Total ---
-            doc.moveTo(itemX, doc.y + 15).lineTo(550, doc.y + 15).stroke();
-            doc.moveDown(2);
+            // Draw the line ABOVE the total
+            const lineY = doc.y + 10;
+            doc.moveTo(tableStartX, lineY)
+               .lineTo(tableEndX, lineY)
+               .stroke();
+            doc.moveDown(1.5); // Space after line
+            
             const totalY = doc.y;
             doc.font('Helvetica-Bold');
-            doc.text('Total Expenses:', descX, totalY);
-            const formattedTotal = new Intl.NumberFormat('en-US').format(totalExpenses);
-            doc.text(`${user.currency} ${formattedTotal}`, amountX, totalY, { align: 'right' });
+            
+            // Align "Total Expenses:" with the description column
+            doc.text('Total Expenses:', descX, totalY, {
+                width: 180 // Use same width as description column
+            }); 
+            
+            const formattedTotal = format(totalExpenses);
+            // Align total amount with the amount column
+            doc.text(`${user.currency} ${formattedTotal}`, amountX, totalY, { 
+                align: 'right', 
+                width: amountWidth 
+            });
 
             doc.end();
 

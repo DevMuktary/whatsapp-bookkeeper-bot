@@ -220,7 +220,7 @@ export function generateExpenseReport(user, transactions, periodTitle) {
 
 /**
  * Generates an inventory report PDF.
- * [MODIFIED] Updated headers to "Cost Price" and "Selling Price" per accounting terms.
+ * [MODIFIED] Adjusted column spacing to balance Cost Price and Selling Price.
  */
 export function generateInventoryReport(user, products) {
     return new Promise((resolve, reject) => {
@@ -232,19 +232,26 @@ export function generateInventoryReport(user, products) {
 
             let currentY = drawHeader(doc, user, 'Inventory Report', `As of ${new Date().toLocaleDateString()}`);
 
-            // Columns (Adjusted widths to fit longer headers)
-            const colName = { x: 50, width: 160 }; // Reduced slightly from 180 to fit prices
+            // Columns (Adjusted coordinates to shift Selling Price right and Cost Price slightly right)
+            const colName = { x: 50, width: 160 };
             const colQty = { x: 220, width: 40, align: 'center' };
-            const colCost = { x: 270, width: 80, align: 'right' }; // Increased width for "Cost Price"
-            const colSell = { x: 360, width: 90, align: 'right' }; // Increased width for "Selling Price"
-            const colVal = { x: 460, width: 90, align: 'right' };
+            
+            // NEW SPACING HERE
+            // Cost moved from 270 to 285 (Creates gap from Qty, moves towards center)
+            const colCost = { x: 285, width: 80, align: 'right' }; 
+            
+            // Sell moved from 360 to 395 (Moves significantly right, creating gap from Cost, closer to Value)
+            const colSell = { x: 395, width: 85, align: 'right' }; 
+            
+            // Value moved from 460 to 480 (Aligns to far right)
+            const colVal = { x: 480, width: 70, align: 'right' };
 
             // Header
             drawTableRow(doc, currentY, [
                 { text: 'PRODUCT', ...colName },
                 { text: 'QTY', ...colQty },
-                { text: 'COST PRICE', ...colCost },   // Updated
-                { text: 'SELLING PRICE', ...colSell }, // Updated
+                { text: 'COST PRICE', ...colCost },
+                { text: 'SELLING PRICE', ...colSell },
                 { text: 'VALUE', ...colVal },
             ], true);
             currentY += 25;

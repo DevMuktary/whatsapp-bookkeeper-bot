@@ -31,7 +31,7 @@ const drawHeader = (doc, user, title, period) => {
     doc.fillColor(COLORS.primary)
        .fontSize(20)
        .font(FONTS.bold)
-       .text(user.businessName, 50, 45, { align: 'left' })
+       .text(user.businessName, 50, 45, { align: 'left' });
        
     // Report Title Background
     const pageWidth = doc.page.width;
@@ -220,6 +220,7 @@ export function generateExpenseReport(user, transactions, periodTitle) {
 
 /**
  * Generates an inventory report PDF.
+ * [MODIFIED] Updated headers to "Cost Price" and "Selling Price" per accounting terms.
  */
 export function generateInventoryReport(user, products) {
     return new Promise((resolve, reject) => {
@@ -231,19 +232,19 @@ export function generateInventoryReport(user, products) {
 
             let currentY = drawHeader(doc, user, 'Inventory Report', `As of ${new Date().toLocaleDateString()}`);
 
-            // Columns
-            const colName = { x: 50, width: 180 };
-            const colQty = { x: 240, width: 50, align: 'center' };
-            const colCost = { x: 300, width: 70, align: 'right' };
-            const colSell = { x: 380, width: 70, align: 'right' };
+            // Columns (Adjusted widths to fit longer headers)
+            const colName = { x: 50, width: 160 }; // Reduced slightly from 180 to fit prices
+            const colQty = { x: 220, width: 40, align: 'center' };
+            const colCost = { x: 270, width: 80, align: 'right' }; // Increased width for "Cost Price"
+            const colSell = { x: 360, width: 90, align: 'right' }; // Increased width for "Selling Price"
             const colVal = { x: 460, width: 90, align: 'right' };
 
             // Header
             drawTableRow(doc, currentY, [
                 { text: 'PRODUCT', ...colName },
                 { text: 'QTY', ...colQty },
-                { text: 'COST', ...colCost },
-                { text: 'PRICE', ...colSell },
+                { text: 'COST PRICE', ...colCost },   // Updated
+                { text: 'SELLING PRICE', ...colSell }, // Updated
                 { text: 'VALUE', ...colVal },
             ], true);
             currentY += 25;

@@ -253,14 +253,20 @@ async function handleIdleState(user, text) {
         await updateUserState(user.whatsappId, USER_STATES.AWAITING_TRANSACTION_SELECTION);
         await sendInteractiveList(user.whatsappId, "Modify Transaction", "Please select the transaction you would like to modify.", "View Transactions", sections);
     } else if (intent === INTENTS.GENERATE_REPORT) {
+        // [UPDATED LOGIC]
+        // If the intent is GENERATE_REPORT, the 'context' now potentially contains 'dateRange' from the AI.
+        // We pass this 'context' (which includes reportType and dateRange) to executeTask.
         if (context.reportType) {
             await executeTask(intent, user, context);
         } else {
+            // If AI didn't catch a report type, show the menu
             await updateUserState(user.whatsappId, USER_STATES.AWAITING_REPORT_TYPE_SELECTION);
             await sendReportMenu(user.whatsappId);
         }
     } else if (intent === INTENTS.CHECK_STOCK || intent === INTENTS.GET_FINANCIAL_SUMMARY || intent === INTENTS.CHECK_BANK_BALANCE || intent === INTENTS.GET_FINANCIAL_INSIGHT || intent === INTENTS.GET_CUSTOMER_BALANCES) {
         logger.info(`Intent detected: ${intent} for user ${user.whatsappId}`);
+        // Note: GET_FINANCIAL_SUMMARY and GET_FINANCIAL_INSIGHT will also benefit 
+        // from the dateRange context if the user specified a time.
         await executeTask(intent, user, context);
     } else {
         await sendTextMessage(user.whatsappId, "I'm not sure I understood that. You can choose an option from the main menu or ask me something like 'log a sale'.");

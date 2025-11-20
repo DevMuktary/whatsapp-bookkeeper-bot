@@ -352,3 +352,4 @@ CONVERSATION RULES:
     const updatedHistory = [...conversationHistory, { role: 'assistant', content: JSON.stringify(response) }];
     return { ...response, memory: updatedHistory };
 }
+ 

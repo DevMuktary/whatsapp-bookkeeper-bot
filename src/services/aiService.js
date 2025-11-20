@@ -110,7 +110,11 @@ export async function extractCurrency(text) {
 }
 
 export async function getIntent(text) {
+    // We inject the current date so the AI can calculate "last month", "December 2024", etc.
+    const today = new Date().toISOString().split('T')[0]; 
+
     const systemPrompt = `You are an advanced intent classification system. Respond ONLY with a JSON object.
+TODAY'S DATE: ${today}
 
 The possible intents are:
 - "${INTENTS.LOG_SALE}"
@@ -137,7 +141,12 @@ Extraction Rules & Examples:
 3.  **List Input:** If the user's message is a multi-line list starting with numbers, the intent is ALWAYS "${INTENTS.ADD_PRODUCTS_FROM_LIST}".
 4.  **Reconciliation:** If the user says "I made a mistake", "delete transaction", "edit a sale", "correct a record", "edit transaction", the intent is "${INTENTS.RECONCILE_TRANSACTION}".
 5.  **Customer Balances:** If the user asks "who is owing me?", "customer balance", "who owes me", "show debtors", the intent is "${INTENTS.GET_CUSTOMER_BALANCES}".
-6.  **Reports:** For "${INTENTS.GENERATE_REPORT}", extract "reportType" and "period". Be flexible. 'reportType' can be "sales", "expenses", "inventory", or "pnl", "profit and loss", "profit & loss".
+6.  **Reports & Summaries:** - For "${INTENTS.GENERATE_REPORT}" or "${INTENTS.GET_FINANCIAL_SUMMARY}", extract "reportType" (sales, expenses, inventory, pnl). 
+    - **CRITICAL:** Determine the time period requested and calculate the exact "startDate" and "endDate" (YYYY-MM-DD).
+    - If the user says "Report for December 2024", context should be: {"reportType": "...", "dateRange": {"startDate": "2024-12-01", "endDate": "2024-12-31"}}
+    - If user says "Last month" (and today is 2025-02-15), context: {"dateRange": {"startDate": "2025-01-01", "endDate": "2025-01-31"}}
+    - If user says "Last 3 months", calculate the range.
+    - If no date is specified, leave "dateRange" as null.
 7.  **Sales:** Extract item name, quantity, price per unit (if specified), customer name, sale type (cash/credit/bank). Quantity defaults to 1 if not mentioned. If price per unit is missing, the context should reflect that.
 8.  If a clear bookkeeping intent is present, prioritize it. If no intent is clear, respond with {"intent": null, "context": {}}. You MUST respond ONLY with a JSON object.
 `;

@@ -69,10 +69,12 @@ async function _calculatePnLData(userId, periodOrRange) {
         }
         return acc;
     }, {});
+
+    // [FIX] Removed .slice(0,3) to show ALL expenses in the report
     const topExpenses = Object.entries(expenseMap)
         .sort(([, a], [, b]) => b - a)
-        .slice(0, 3)
         .map(([category, total]) => ({ _id: category, total }));
+
     const grossProfit = totalSales - totalCogs;
     const netProfit = grossProfit - totalExpenses; 
     return { totalSales, totalCogs, grossProfit, totalExpenses, netProfit, topExpenses };
@@ -257,7 +259,6 @@ async function executeAddProduct(user, data) {
 
 
 async function executeAddMultipleProducts(user, data) {
-    // Note: Bank deduction for bulk adds is not yet implemented.
     const products = data.products || [];
     if (products.length === 0) {
         await sendTextMessage(user.whatsappId, "I couldn't find any products in your message to add. Please try again!");
@@ -345,20 +346,38 @@ async function executeGenerateReport(user, data) {
     
     let pdfBuffer;
     let filename;
-    // Filename safe period string
     const filenamePeriod = dateRange ? 'Custom_Range' : (period || 'this_month');
 
     if (reportTypeLower === 'sales' || reportTypeLower === 'expenses') {
         const type = reportTypeLower === 'sales' ? 'SALE' : 'EXPENSE';
+        // Fetch transactions
         const transactions = await getTransactionsByDateRange(user._id, type, startDate, endDate);
+        
         if (transactions.length === 0) {
             await sendTextMessage(user.whatsappId, `You have no ${reportTypeLower} data for ${readablePeriodStr}.`);
             return;
         }
+
+        // [FIX] Populate 'customerName' for Sales Report if missing
+        if (type === 'SALE') {
+            for(const tx of transactions) {
+                if (tx.linkedCustomerId && !tx.customerName) {
+                    const c = await findCustomerById(tx.linkedCustomerId);
+                    if(c) tx.customerName = c.customerName;
+                }
+                // Fallback: try to get it from description if still missing
+                if (!tx.customerName && tx.description && tx.description.includes('sold to')) {
+                    const parts = tx.description.split('sold to');
+                    if (parts.length > 1) tx.customerName = parts[1].trim();
+                }
+            }
+        }
+
         pdfBuffer = reportTypeLower === 'sales'
             ? await generateSalesReport(user, transactions, readablePeriodTitle)
             : await generateExpenseReport(user, transactions, readablePeriodTitle);
         filename = `${reportTypeLower === 'sales' ? 'Sales' : 'Expense'}_Report_${filenamePeriod}.pdf`;
+
     } else if (reportTypeLower === 'inventory') {
         const products = await getAllProducts(user._id);
         if (products.length === 0) {
@@ -367,8 +386,8 @@ async function executeGenerateReport(user, data) {
         }
         pdfBuffer = await generateInventoryReport(user, products);
         filename = 'Inventory_Report.pdf';
+
     } else if (reportTypeLower === 'pnl') {
-        // Pass effectivePeriod (which might be the object) to the helper
         const pnlData = await _calculatePnLData(user._id, effectivePeriod);
         pdfBuffer = await generatePnLReport(user, pnlData, readablePeriodTitle);
         filename = `P&L_Report_${filenamePeriod}.pdf`;
@@ -562,9 +581,7 @@ async function executeGetFinancialInsight(user, data) {
 
     await sendTextMessage(user.whatsappId, `Analyzing your business performance for ${readablePeriodStr}... 🧠`);
     
-    // Pass the dateRange object if it exists, otherwise pass the period string
     const effectivePeriod = dateRange || period || 'this_month';
-    
     const pnlData = await _calculatePnLData(user._id, effectivePeriod);
     const insight = await getFinancialInsight(pnlData, user.currency);
     await sendTextMessage(user.whatsappId, insight);

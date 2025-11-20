@@ -12,8 +12,8 @@ export const USER_STATES = {
 
   // Task-specific states
   LOGGING_SALE: 'LOGGING_SALE',
-  AWAITING_SALE_TYPE_CONFIRMATION: 'AWAITING_SALE_TYPE_CONFIRMATION', // New: Product or Service?
-  LOGGING_MULTI_ITEM_SALE: 'LOGGING_MULTI_ITEM_SALE', // New: For adding more items
+  AWAITING_SALE_TYPE_CONFIRMATION: 'AWAITING_SALE_TYPE_CONFIRMATION', 
+  LOGGING_MULTI_ITEM_SALE: 'LOGGING_MULTI_ITEM_SALE', 
   LOGGING_EXPENSE: 'LOGGING_EXPENSE',
   ADDING_PRODUCT: 'ADDING_PRODUCT',
   LOGGING_CUSTOMER_PAYMENT: 'LOGGING_CUSTOMER_PAYMENT',
@@ -21,8 +21,8 @@ export const USER_STATES = {
 
   AWAITING_BANK_SELECTION_SALE: 'AWAITING_BANK_SELECTION_SALE',
   AWAITING_BANK_SELECTION_EXPENSE: 'AWAITING_BANK_SELECTION_EXPENSE',
-  AWAITING_BANK_SELECTION_PURCHASE: 'AWAITING_BANK_SELECTION_PURCHASE', // New: For inventory cost
-  AWAITING_BANK_SELECTION_CUST_PAYMENT: 'AWAITING_BANK_SELECTION_CUST_PAYMENT', // New: For customer payment deposit
+  AWAITING_BANK_SELECTION_PURCHASE: 'AWAITING_BANK_SELECTION_PURCHASE', 
+  AWAITING_BANK_SELECTION_CUST_PAYMENT: 'AWAITING_BANK_SELECTION_CUST_PAYMENT', 
 
   AWAITING_BULK_PRODUCT_CONFIRMATION: 'AWAITING_BULK_PRODUCT_CONFIRMATION',
   AWAITING_INVOICE_CONFIRMATION: 'AWAITING_INVOICE_CONFIRMATION',
@@ -55,3 +55,16 @@ export const INTENTS = {
     SHOW_MAIN_MENU: 'SHOW_MAIN_MENU',
     CHITCHAT: 'CHITCHAT',
 };
+
+// [NEW] Standardized Categories for the AI to use
+export const EXPENSE_CATEGORIES = [
+    "Transportation",       // Fuel, Bus, Uber, Travel, Maintenance
+    "Utilities & Internet", // Data, Airtime, NEPA, Gas
+    "Rent & Office",        // Shop rent, Repairs, Cleaning
+    "Salaries & Wages",     // Staff payment, Labour
+    "Marketing & Ads",      // Facebook ads, Flyers, Promos
+    "Meals & Entertainment",// Food, Client meetings
+    "Supplies & Packaging", // Nylons, Paper, Stationery
+    "Restocking (Inventory)", // Buying goods to sell
+    "Miscellaneous"         // Anything else
+];

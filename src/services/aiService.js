@@ -1,7 +1,7 @@
 import axios from 'axios';
 import config from '../config/index.js';
 import logger from '../utils/logger.js';
-import { INTENTS, EXPENSE_CATEGORIES } from '../utils/constants.js';
+import { INTENTS } from '../utils/constants.js';
 
 const DEEPSEEK_API_URL = 'https://api.deepseek.com/chat/completions';
 
@@ -253,24 +253,23 @@ You MUST respond ONLY with a JSON object in the specified formats.
     return { ...response, memory: updatedHistory };
 }
 
-// [UPDATED] Modified to auto-categorize expenses
+// [UPDATED] Smart Auto-Categorization Enabled
 export async function gatherExpenseDetails(conversationHistory) {
-    const categoriesList = EXPENSE_CATEGORIES.join(", ");
     
     const systemPrompt = `You are a smart bookkeeping assistant. Your goal is to collect details to log an expense (Category, Amount, Description).
 
-STANDARD CATEGORIES: [${categoriesList}]
-
 RULES:
-1. **Auto-Categorize:** You MUST infer the "category" from the "description" using the Standard Categories list.
-   - "fuel", "transport", "bus", "uber" -> "Transportation"
-   - "data", "airtime", "nepa", "light bill" -> "Utilities & Internet"
-   - "food", "lunch" -> "Meals & Entertainment"
-   - "shop rent", "repair" -> "Rent & Office"
-   - "ads", "promo" -> "Marketing & Ads"
-   - "salary", "wages" -> "Salaries & Wages"
-   - "nylon", "packaging" -> "Supplies & Packaging"
-2. **Ask if Ambiguous:** Only ask for the category if the description is completely unrelated to the list. If the user insists on a unique category, allow it, but try to match standard ones first.
+1. **Smart Auto-Categorization:** You MUST intelligently infer a **short, professional business "category"** based on the user's "description".
+   - Examples: 
+     - "fuel", "bus", "uber", "car repair" -> "Transportation"
+     - "data", "airtime", "nepa bill" -> "Utilities"
+     - "food", "lunch for staff" -> "Meals"
+     - "shop rent", "bulb", "cleaning" -> "Rent & Office"
+     - "ads", "promo", "flyers" -> "Marketing"
+     - "salary", "wages" -> "Salaries"
+     - "nylon", "carton" -> "Packaging"
+   - **Constraint:** The category should be short (1-3 words) and use Title Case.
+2. **Ask if Ambiguous:** Only ask for the category if the description is extremely vague (e.g., "I spent money" or "transfer").
 3. **Completion:** Once you have "amount", "description", and "category", respond with {"status": "complete", "data": {"category": "...", "amount": "...", "description": "..."}}.
 4. **In Progress:** If amount or description is missing, respond with {"status": "incomplete", "reply": "Your question..."}.
 

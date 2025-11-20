@@ -26,6 +26,17 @@ const formatCurrency = (amount, currency) => {
     return `${currency} ${num}`;
 };
 
+// [NEW] Enforce Nigerian Date Format (DD/MM/YYYY)
+const formatDate = (dateInput) => {
+    if (!dateInput) return '';
+    const date = new Date(dateInput);
+    return new Intl.DateTimeFormat('en-GB', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric'
+    }).format(date);
+};
+
 const drawHeader = (doc, user, title, period) => {
     // Business Name
     doc.fillColor(COLORS.primary)
@@ -77,15 +88,13 @@ const drawFooter = (doc) => {
     }
 };
 
-const drawTableRow = (doc, y, columns, isHeader = false, isStriped = false) => {
-    const height = 20;
-    
+const drawTableRow = (doc, y, columns, isHeader = false, isStriped = false, rowHeight = 20) => {
     // Draw Background for Header or Striped Row
     if (isHeader) {
-        doc.rect(50, y - 5, 500, height + 5).fill(COLORS.primary);
+        doc.rect(50, y - 5, 500, rowHeight + 5).fill(COLORS.primary);
         doc.fillColor('#FFFFFF').font(FONTS.bold).fontSize(10);
     } else {
-        if (isStriped) doc.rect(50, y - 5, 500, height + 5).fill(COLORS.grayLight);
+        if (isStriped) doc.rect(50, y - 5, 500, rowHeight + 5).fill(COLORS.grayLight);
         doc.fillColor(COLORS.text).font(FONTS.regular).fontSize(10);
     }
 
@@ -101,6 +110,7 @@ const drawTableRow = (doc, y, columns, isHeader = false, isStriped = false) => {
 
 /**
  * Generates a sales report PDF.
+ * [UPDATED] Handles multi-item sales by calculating dynamic row height.
  */
 export function generateSalesReport(user, transactions, periodTitle) {
     return new Promise((resolve, reject) => {
@@ -120,7 +130,7 @@ export function generateSalesReport(user, transactions, periodTitle) {
             // Header
             drawTableRow(doc, currentY, [
                 { text: 'DATE', ...colDate },
-                { text: 'DESCRIPTION', ...colDesc },
+                { text: 'DESCRIPTION / ITEMS', ...colDesc },
                 { text: 'AMOUNT', ...colAmt }
             ], true);
             currentY += 25;
@@ -128,19 +138,42 @@ export function generateSalesReport(user, transactions, periodTitle) {
             // Rows
             let totalSales = 0;
             transactions.forEach((tx, i) => {
-                // Check Page Break
-                if (currentY > 750) { doc.addPage(); currentY = 50; }
-
                 totalSales += tx.amount;
                 const formattedAmount = formatCurrency(tx.amount, user.currency);
                 
-                drawTableRow(doc, currentY, [
-                    { text: new Date(tx.date).toLocaleDateString(), ...colDate },
-                    { text: tx.description, ...colDesc },
-                    { text: formattedAmount, ...colAmt }
-                ], false, i % 2 === 0);
+                // Construct Description
+                // If items exist, list them nicely. If not, fall back to raw description.
+                let descriptionText = "";
+                if (tx.items && tx.items.length > 0) {
+                    descriptionText = tx.items.map(item => `• ${item.quantity}x ${item.productName}`).join('\n');
+                } else {
+                    descriptionText = tx.description || 'Sale';
+                }
+
+                // Calculate Dynamic Height based on description length
+                const descHeight = doc.heightOfString(descriptionText, { width: colDesc.width });
+                const rowHeight = Math.max(descHeight, 20); // Min height 20
+
+                // Check Page Break
+                if (currentY + rowHeight > 750) { 
+                    doc.addPage(); 
+                    currentY = 50; 
+                    // Redraw Header on new page
+                    drawTableRow(doc, currentY, [
+                        { text: 'DATE', ...colDate },
+                        { text: 'DESCRIPTION / ITEMS', ...colDesc },
+                        { text: 'AMOUNT', ...colAmt }
+                    ], true);
+                    currentY += 25;
+                }
                 
-                currentY += 20;
+                drawTableRow(doc, currentY, [
+                    { text: formatDate(tx.date), ...colDate },
+                    { text: descriptionText, ...colDesc },
+                    { text: formattedAmount, ...colAmt }
+                ], false, i % 2 === 0, rowHeight);
+                
+                currentY += (rowHeight + 10); // Add padding
             });
 
             // Total Section
@@ -193,7 +226,7 @@ export function generateExpenseReport(user, transactions, periodTitle) {
                 totalExpenses += tx.amount;
                 
                 drawTableRow(doc, currentY, [
-                    { text: new Date(tx.date).toLocaleDateString(), ...cols[0] },
+                    { text: formatDate(tx.date), ...cols[0] },
                     { text: tx.category, ...cols[1] },
                     { text: tx.description, ...cols[2] },
                     { text: formatCurrency(tx.amount, user.currency), ...cols[3] }
@@ -220,7 +253,6 @@ export function generateExpenseReport(user, transactions, periodTitle) {
 
 /**
  * Generates an inventory report PDF.
- * [MODIFIED] Adjusted column spacing to balance Cost Price and Selling Price.
  */
 export function generateInventoryReport(user, products) {
     return new Promise((resolve, reject) => {
@@ -230,20 +262,13 @@ export function generateInventoryReport(user, products) {
             doc.on('data', buffers.push.bind(buffers));
             doc.on('end', () => resolve(Buffer.concat(buffers)));
 
-            let currentY = drawHeader(doc, user, 'Inventory Report', `As of ${new Date().toLocaleDateString()}`);
+            let currentY = drawHeader(doc, user, 'Inventory Report', `As of ${formatDate(new Date())}`);
 
-            // Columns (Adjusted coordinates to shift Selling Price right and Cost Price slightly right)
+            // Columns
             const colName = { x: 50, width: 160 };
             const colQty = { x: 220, width: 40, align: 'center' };
-            
-            // NEW SPACING HERE
-            // Cost moved from 270 to 285 (Creates gap from Qty, moves towards center)
             const colCost = { x: 285, width: 80, align: 'right' }; 
-            
-            // Sell moved from 360 to 395 (Moves significantly right, creating gap from Cost, closer to Value)
             const colSell = { x: 395, width: 85, align: 'right' }; 
-            
-            // Value moved from 460 to 480 (Aligns to far right)
             const colVal = { x: 480, width: 70, align: 'right' };
 
             // Header
@@ -401,11 +426,10 @@ export function generateInvoice(user, transaction, customer) {
             doc.fillColor(COLORS.text);
             doc.fontSize(10).font(FONTS.bold).text('BILL TO:', 50, y);
             doc.font(FONTS.regular).text(customer.customerName, 50, y + 15);
-            // Add customer address/phone if available
             
-            // Date Info
+            // Date Info (Nigerian Format)
             doc.font(FONTS.bold).text('DATE:', 400, y, { align: 'right', width: 50 });
-            doc.font(FONTS.regular).text(new Date(transaction.date).toLocaleDateString(), 460, y, { align: 'right', width: 80 });
+            doc.font(FONTS.regular).text(formatDate(transaction.date), 460, y, { align: 'right', width: 80 });
             
             y += 60;
 

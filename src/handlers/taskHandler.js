@@ -1,4 +1,4 @@
-import { findOrCreateCustomer, updateBalanceOwed, getCustomersWithBalance } from '../db/customerService.js';
+import { findOrCreateCustomer, updateBalanceOwed, getCustomersWithBalance, findCustomerById } from '../db/customerService.js';
 import { findOrCreateProduct, updateStock, upsertProduct, findProductByName, getAllProducts } from '../db/productService.js';
 import { createSaleTransaction, createExpenseTransaction, createCustomerPaymentTransaction, getSummaryByDateRange, getTransactionsByDateRange, findTransactionById, deleteTransactionById, updateTransactionById } from '../db/transactionService.js';
 import { createBankAccount, updateBankBalance, findBankAccountByName, getAllBankAccounts } from '../db/bankService.js';
@@ -33,8 +33,10 @@ const parsePrice = (priceInput) => {
 };
 
 
-async function _calculatePnLData(userId, period) {
-    const { startDate, endDate } = getDateRange(period);
+async function _calculatePnLData(userId, periodOrRange) {
+    // periodOrRange can now be a string ('this_month') OR an object {startDate, endDate}
+    const { startDate, endDate } = getDateRange(periodOrRange);
+    
     const totalSales = await getSummaryByDateRange(userId, 'SALE', startDate, endDate);
     const totalExpenses = await getSummaryByDateRange(userId, 'EXPENSE', startDate, endDate);
     let totalCogs = 0;
@@ -286,22 +288,33 @@ async function executeCheckStock(user, data) {
 }
 
 async function executeGetFinancialSummary(user, data) {
-    const { metric, period } = data;
-    if (!metric || !period) {
-        await sendTextMessage(user.whatsappId, "Please be more specific. You can ask 'what are my sales today?' or 'show me my expenses this month'.");
+    const { metric, period, dateRange } = data; // Extract dateRange if provided
+    
+    if (!metric || (!period && !dateRange)) {
+        await sendTextMessage(user.whatsappId, "Please be more specific. You can ask 'what are my sales today?' or 'show me my expenses last month'.");
         return;
     }
-    const { startDate, endDate } = getDateRange(period);
+
+    // Prioritize dateRange (calculated by AI), fallback to period string, default to this_month
+    const effectivePeriod = dateRange || period || 'this_month';
+    const { startDate, endDate } = getDateRange(effectivePeriod);
+    
     const type = metric.toUpperCase() === 'SALES' ? 'SALE' : 'EXPENSE';
     const total = await getSummaryByDateRange(user._id, type, startDate, endDate);
     const formattedAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: user.currency }).format(total);
-    const readablePeriod = period.replace(/_/g, ' '); // Use replace globally
+    
+    let readablePeriod;
+    if (dateRange) {
+        readablePeriod = `${new Date(dateRange.startDate).toLocaleDateString()} to ${new Date(dateRange.endDate).toLocaleDateString()}`;
+    } else {
+        readablePeriod = (period || 'this_month').replace(/_/g, ' ');
+    }
+
     await sendTextMessage(user.whatsappId, `Your total ${metric} for ${readablePeriod} is ${formattedAmount}. 📊`);
 }
 
 async function executeGenerateReport(user, data) {
-    const { reportType } = data;
-    let period = data.period || 'this_month'; // Ensure period has a default
+    const { reportType, period, dateRange } = data; // Extract dateRange if provided
 
     if (!reportType) {
         await sendTextMessage(user.whatsappId, "Please specify which report you need, e.g., 'sales report for this month' or 'inventory report'.");
@@ -313,17 +326,26 @@ async function executeGenerateReport(user, data) {
         reportTypeLower = 'pnl';
     }
 
-    // --- FIX IS HERE ---
-    // Ensure period is a valid string before using replace
-    const readablePeriodStr = typeof period === 'string' ? period.replace(/_/g, ' ') : 'this month'; 
-    // --- END OF FIX ---
+    // Determine a readable string for the loading message
+    let readablePeriodStr;
+    if (dateRange) {
+        readablePeriodStr = `${new Date(dateRange.startDate).toLocaleDateString()} - ${new Date(dateRange.endDate).toLocaleDateString()}`;
+    } else {
+        readablePeriodStr = (period || 'this month').replace(/_/g, ' ');
+    }
 
     await sendTextMessage(user.whatsappId, `Generating your ${reportTypeLower} report for ${readablePeriodStr}... Please wait. 📄`);
 
+    // Determine actual start and end dates
+    const effectivePeriod = dateRange || period || 'this_month';
+    const { startDate, endDate } = getDateRange(effectivePeriod);
+    
+    const readablePeriodTitle = `For: ${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`;
+    
     let pdfBuffer;
     let filename;
-    const { startDate, endDate } = getDateRange(period); // Use the (potentially defaulted) period
-    const readablePeriodTitle = `For the Period: ${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`;
+    // Filename safe period string
+    const filenamePeriod = dateRange ? 'Custom_Range' : (period || 'this_month');
 
     if (reportTypeLower === 'sales' || reportTypeLower === 'expenses') {
         const type = reportTypeLower === 'sales' ? 'SALE' : 'EXPENSE';
@@ -335,7 +357,7 @@ async function executeGenerateReport(user, data) {
         pdfBuffer = reportTypeLower === 'sales'
             ? await generateSalesReport(user, transactions, readablePeriodTitle)
             : await generateExpenseReport(user, transactions, readablePeriodTitle);
-        filename = `${reportTypeLower === 'sales' ? 'Sales' : 'Expense'}_Report_${period}.pdf`;
+        filename = `${reportTypeLower === 'sales' ? 'Sales' : 'Expense'}_Report_${filenamePeriod}.pdf`;
     } else if (reportTypeLower === 'inventory') {
         const products = await getAllProducts(user._id);
         if (products.length === 0) {
@@ -345,13 +367,15 @@ async function executeGenerateReport(user, data) {
         pdfBuffer = await generateInventoryReport(user, products);
         filename = 'Inventory_Report.pdf';
     } else if (reportTypeLower === 'pnl') {
-        const pnlData = await _calculatePnLData(user._id, period);
+        // Pass effectivePeriod (which might be the object) to the helper
+        const pnlData = await _calculatePnLData(user._id, effectivePeriod);
         pdfBuffer = await generatePnLReport(user, pnlData, readablePeriodTitle);
-        filename = `P&L_Report_${period}.pdf`;
+        filename = `P&L_Report_${filenamePeriod}.pdf`;
     } else {
         await sendTextMessage(user.whatsappId, `Sorry, I can only generate sales, expense, inventory, and P&L reports for now.`);
         return;
     }
+    
     if (pdfBuffer) {
         const mediaId = await uploadMedia(pdfBuffer, 'application/pdf');
         if (mediaId) {
@@ -526,9 +550,21 @@ async function executeUpdateTransaction(user, data) {
 }
 
 async function executeGetFinancialInsight(user, data) {
-    const period = data.period || 'this_month';
-    await sendTextMessage(user.whatsappId, `Analyzing your business performance for ${period.replace(/_/g, ' ')}... 🧠`);
-    const pnlData = await _calculatePnLData(user._id, period);
+    const { period, dateRange } = data;
+    
+    let readablePeriodStr;
+    if (dateRange) {
+        readablePeriodStr = `${new Date(dateRange.startDate).toLocaleDateString()} - ${new Date(dateRange.endDate).toLocaleDateString()}`;
+    } else {
+        readablePeriodStr = (period || 'this month').replace(/_/g, ' ');
+    }
+
+    await sendTextMessage(user.whatsappId, `Analyzing your business performance for ${readablePeriodStr}... 🧠`);
+    
+    // Pass the dateRange object if it exists, otherwise pass the period string
+    const effectivePeriod = dateRange || period || 'this_month';
+    
+    const pnlData = await _calculatePnLData(user._id, effectivePeriod);
     const insight = await getFinancialInsight(pnlData, user.currency);
     await sendTextMessage(user.whatsappId, insight);
 }

@@ -1,7 +1,7 @@
 import axios from 'axios';
 import config from '../config/index.js';
 import logger from '../utils/logger.js';
-import { INTENTS } from '../utils/constants.js';
+import { INTENTS, EXPENSE_CATEGORIES } from '../utils/constants.js';
 
 const DEEPSEEK_API_URL = 'https://api.deepseek.com/chat/completions';
 
@@ -253,13 +253,29 @@ You MUST respond ONLY with a JSON object in the specified formats.
     return { ...response, memory: updatedHistory };
 }
 
+// [UPDATED] Modified to auto-categorize expenses
 export async function gatherExpenseDetails(conversationHistory) {
-    const systemPrompt = `You are a friendly and efficient bookkeeping assistant named Fynax. Your goal is to collect details to log an expense. You must fill a JSON object with these exact keys: "category", "amount", "description".
+    const categoriesList = EXPENSE_CATEGORIES.join(", ");
+    
+    const systemPrompt = `You are a smart bookkeeping assistant. Your goal is to collect details to log an expense (Category, Amount, Description).
 
-CONVERSATION RULES:
-1.  Analyze the conversation history. If any keys are missing, ask a clear, friendly question for the missing information.
-2.  Once ALL keys are filled, your FINAL response must be a JSON object containing ONLY {"status": "complete", "data": { ... the final expense object ... }}.
-3.  While collecting information, your response must be a JSON object in the format {"status": "incomplete", "reply": "Your question to the user."}. You MUST respond ONLY with a JSON object.`;
+STANDARD CATEGORIES: [${categoriesList}]
+
+RULES:
+1. **Auto-Categorize:** You MUST infer the "category" from the "description" using the Standard Categories list.
+   - "fuel", "transport", "bus", "uber" -> "Transportation"
+   - "data", "airtime", "nepa", "light bill" -> "Utilities & Internet"
+   - "food", "lunch" -> "Meals & Entertainment"
+   - "shop rent", "repair" -> "Rent & Office"
+   - "ads", "promo" -> "Marketing & Ads"
+   - "salary", "wages" -> "Salaries & Wages"
+   - "nylon", "packaging" -> "Supplies & Packaging"
+2. **Ask if Ambiguous:** Only ask for the category if the description is completely unrelated to the list. If the user insists on a unique category, allow it, but try to match standard ones first.
+3. **Completion:** Once you have "amount", "description", and "category", respond with {"status": "complete", "data": {"category": "...", "amount": "...", "description": "..."}}.
+4. **In Progress:** If amount or description is missing, respond with {"status": "incomplete", "reply": "Your question..."}.
+
+You MUST respond ONLY with a JSON object.
+`;
 
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     const responseJson = await callDeepSeek(messages, 0.5);
@@ -352,4 +368,3 @@ CONVERSATION RULES:
     const updatedHistory = [...conversationHistory, { role: 'assistant', content: JSON.stringify(response) }];
     return { ...response, memory: updatedHistory };
 }
- 

@@ -32,6 +32,13 @@ const parsePrice = (priceInput) => {
     return isNaN(value) ? NaN : value * multiplier;
 };
 
+// Helper for Nigerian Date Display (DD/MM/YYYY)
+const formatDateGB = (date) => {
+    return new Date(date).toLocaleDateString('en-GB', {
+        day: '2-digit', month: '2-digit', year: 'numeric'
+    });
+};
+
 
 async function _calculatePnLData(userId, periodOrRange) {
     // periodOrRange can now be a string ('this_month') OR an object {startDate, endDate}
@@ -305,7 +312,7 @@ async function executeGetFinancialSummary(user, data) {
     
     let readablePeriod;
     if (dateRange) {
-        readablePeriod = `${new Date(dateRange.startDate).toLocaleDateString()} to ${new Date(dateRange.endDate).toLocaleDateString()}`;
+        readablePeriod = `${formatDateGB(dateRange.startDate)} to ${formatDateGB(dateRange.endDate)}`;
     } else {
         readablePeriod = (period || 'this_month').replace(/_/g, ' ');
     }
@@ -326,21 +333,15 @@ async function executeGenerateReport(user, data) {
         reportTypeLower = 'pnl';
     }
 
-    // Determine a readable string for the loading message
-    let readablePeriodStr;
-    if (dateRange) {
-        readablePeriodStr = `${new Date(dateRange.startDate).toLocaleDateString()} - ${new Date(dateRange.endDate).toLocaleDateString()}`;
-    } else {
-        readablePeriodStr = (period || 'this month').replace(/_/g, ' ');
-    }
-
-    await sendTextMessage(user.whatsappId, `Generating your ${reportTypeLower} report for ${readablePeriodStr}... Please wait. 📄`);
-
     // Determine actual start and end dates
     const effectivePeriod = dateRange || period || 'this_month';
     const { startDate, endDate } = getDateRange(effectivePeriod);
+
+    const readablePeriodStr = `${formatDateGB(startDate)} - ${formatDateGB(endDate)}`;
+
+    await sendTextMessage(user.whatsappId, `Generating your ${reportTypeLower} report for ${readablePeriodStr}... Please wait. 📄`);
     
-    const readablePeriodTitle = `For: ${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`;
+    const readablePeriodTitle = `Period: ${readablePeriodStr}`;
     
     let pdfBuffer;
     let filename;
@@ -554,7 +555,7 @@ async function executeGetFinancialInsight(user, data) {
     
     let readablePeriodStr;
     if (dateRange) {
-        readablePeriodStr = `${new Date(dateRange.startDate).toLocaleDateString()} - ${new Date(dateRange.endDate).toLocaleDateString()}`;
+        readablePeriodStr = `${formatDateGB(dateRange.startDate)} - ${formatDateGB(dateRange.endDate)}`;
     } else {
         readablePeriodStr = (period || 'this month').replace(/_/g, ' ');
     }

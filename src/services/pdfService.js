@@ -110,7 +110,7 @@ const drawTableRow = (doc, y, columns, isHeader = false, isStriped = false, rowH
 
 /**
  * Generates a sales report PDF.
- * [UPDATED] Handles multi-item sales by calculating dynamic row height.
+ * [UPDATED] Added CUSTOMER column and optimized dynamic height.
  */
 export function generateSalesReport(user, transactions, periodTitle) {
     return new Promise((resolve, reject) => {
@@ -122,14 +122,16 @@ export function generateSalesReport(user, transactions, periodTitle) {
 
             let currentY = drawHeader(doc, user, 'Sales Report', periodTitle);
 
-            // Table Column Config
-            const colDate = { x: 60, width: 80, align: 'left' };
-            const colDesc = { x: 150, width: 250, align: 'left' };
-            const colAmt = { x: 410, width: 130, align: 'right' };
+            // Table Column Config (Adjusted for Customer Column)
+            const colDate = { x: 50, width: 65, align: 'left' };
+            const colCust = { x: 120, width: 90, align: 'left' }; // [NEW]
+            const colDesc = { x: 220, width: 190, align: 'left' };
+            const colAmt = { x: 420, width: 100, align: 'right' };
 
             // Header
             drawTableRow(doc, currentY, [
                 { text: 'DATE', ...colDate },
+                { text: 'CUSTOMER', ...colCust }, // [NEW]
                 { text: 'DESCRIPTION / ITEMS', ...colDesc },
                 { text: 'AMOUNT', ...colAmt }
             ], true);
@@ -140,27 +142,29 @@ export function generateSalesReport(user, transactions, periodTitle) {
             transactions.forEach((tx, i) => {
                 totalSales += tx.amount;
                 const formattedAmount = formatCurrency(tx.amount, user.currency);
+                const customerName = tx.customerName || 'Walk-in'; // Use populated name
                 
                 // Construct Description
-                // If items exist, list them nicely. If not, fall back to raw description.
                 let descriptionText = "";
                 if (tx.items && tx.items.length > 0) {
                     descriptionText = tx.items.map(item => `• ${item.quantity}x ${item.productName}`).join('\n');
                 } else {
-                    descriptionText = tx.description || 'Sale';
+                    // Clean up description if it contains the customer name to avoid redundancy
+                    descriptionText = tx.description.replace(/ sold to .*/i, '') || 'Sale';
                 }
 
-                // Calculate Dynamic Height based on description length
+                // Calculate Dynamic Height
                 const descHeight = doc.heightOfString(descriptionText, { width: colDesc.width });
-                const rowHeight = Math.max(descHeight, 20); // Min height 20
+                const rowHeight = Math.max(descHeight, 20); 
 
                 // Check Page Break
                 if (currentY + rowHeight > 750) { 
                     doc.addPage(); 
                     currentY = 50; 
-                    // Redraw Header on new page
+                    // Redraw Header
                     drawTableRow(doc, currentY, [
                         { text: 'DATE', ...colDate },
+                        { text: 'CUSTOMER', ...colCust },
                         { text: 'DESCRIPTION / ITEMS', ...colDesc },
                         { text: 'AMOUNT', ...colAmt }
                     ], true);
@@ -169,11 +173,12 @@ export function generateSalesReport(user, transactions, periodTitle) {
                 
                 drawTableRow(doc, currentY, [
                     { text: formatDate(tx.date), ...colDate },
+                    { text: customerName, ...colCust },
                     { text: descriptionText, ...colDesc },
                     { text: formattedAmount, ...colAmt }
                 ], false, i % 2 === 0, rowHeight);
                 
-                currentY += (rowHeight + 10); // Add padding
+                currentY += (rowHeight + 10); 
             });
 
             // Total Section
@@ -182,7 +187,7 @@ export function generateSalesReport(user, transactions, periodTitle) {
             currentY += 10;
             
             doc.font(FONTS.bold).fontSize(12).text('Total Sales:', 300, currentY, { align: 'right', width: 100 });
-            doc.fillColor(COLORS.accent).text(formatCurrency(totalSales, user.currency), 410, currentY, { align: 'right', width: 130 });
+            doc.fillColor(COLORS.accent).text(formatCurrency(totalSales, user.currency), 410, currentY, { align: 'right', width: 110 });
 
             drawFooter(doc);
             doc.end();
@@ -318,6 +323,7 @@ export function generateInventoryReport(user, products) {
 
 /**
  * Generates a Profit & Loss (P&L) report PDF.
+ * [UPDATED] Added page break logic inside expense loop to show all expenses.
  */
 export function generatePnLReport(user, pnlData, periodTitle) {
     return new Promise((resolve, reject) => {
@@ -332,6 +338,7 @@ export function generatePnLReport(user, pnlData, periodTitle) {
             const widthAmt = 140;
 
             const drawSection = (title, amount, isNegative = false) => {
+                if (y > 750) { doc.addPage(); y = 50; }
                 doc.font(FONTS.bold).fontSize(12).fillColor(COLORS.primary).text(title, 60, y);
                 doc.font(FONTS.regular).fillColor(isNegative ? 'red' : COLORS.text)
                    .text(formatCurrency(amount, user.currency), rightX, y, { align: 'right', width: widthAmt });
@@ -339,6 +346,7 @@ export function generatePnLReport(user, pnlData, periodTitle) {
             };
 
             const drawSubItem = (label, amount) => {
+                if (y > 750) { doc.addPage(); y = 50; }
                 doc.font(FONTS.regular).fontSize(10).fillColor(COLORS.text).text(label, 80, y);
                 doc.text(formatCurrency(amount, user.currency), rightX, y, { align: 'right', width: widthAmt });
                 y += 20;
@@ -358,20 +366,25 @@ export function generatePnLReport(user, pnlData, periodTitle) {
             drawLine();
 
             // Gross Profit
+            if (y > 750) { doc.addPage(); y = 50; }
             doc.rect(50, y - 5, 500, 30).fill('#e8f4fc'); // Light blue bg
             doc.fillColor(COLORS.primary).font(FONTS.bold).fontSize(14).text('Gross Profit', 60, y + 5);
             doc.text(formatCurrency(pnlData.grossProfit, user.currency), rightX, y + 5, { align: 'right', width: widthAmt });
             y += 40;
 
-            // Expenses
+            // Expenses Header
+            if (y > 750) { doc.addPage(); y = 50; }
             doc.font(FONTS.bold).fontSize(12).fillColor(COLORS.primary).text('Operating Expenses', 60, y);
             y += 20;
+            
+            // [FIX] Loop through ALL expenses and handle page breaks
             pnlData.topExpenses.forEach(exp => {
                 drawSubItem(exp._id, exp.total);
             });
             y += 10;
             
             // Total Expenses
+            if (y > 750) { doc.addPage(); y = 50; }
             doc.moveTo(350, y).lineTo(540, y).stroke();
             y += 10;
             doc.font(FONTS.bold).text('Total Expenses', 250, y, { align: 'right', width: 140 });
@@ -379,6 +392,7 @@ export function generatePnLReport(user, pnlData, periodTitle) {
             y += 30;
 
             // Net Profit
+            if (y > 750) { doc.addPage(); y = 50; }
             const isLoss = pnlData.netProfit < 0;
             const bg = isLoss ? '#fce8e8' : '#e8fce8'; // Light red or green
             doc.rect(50, y - 10, 500, 40).fill(bg);

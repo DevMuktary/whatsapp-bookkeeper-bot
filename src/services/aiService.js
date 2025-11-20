@@ -136,19 +136,20 @@ The possible intents are:
 Your JSON response format is: {"intent": "INTENT_NAME", "context": {}}.
 
 Extraction Rules & Examples:
-1.  **Chitchat:** If the message is a simple greeting, acknowledgement, or compliment like "hi", "ok", "good", "alright", "thank you", "thanks", "lol", and it contains NO bookkeeping request, the intent is "${INTENTS.CHITCHAT}".
-2.  **Main Menu:** If the user asks for the "menu", "main menu", "show options", "show menu", the intent is "${INTENTS.SHOW_MAIN_MENU}".
-3.  **List Input:** If the user's message is a multi-line list starting with numbers, the intent is ALWAYS "${INTENTS.ADD_PRODUCTS_FROM_LIST}".
-4.  **Reconciliation:** If the user says "I made a mistake", "delete transaction", "edit a sale", "correct a record", "edit transaction", the intent is "${INTENTS.RECONCILE_TRANSACTION}".
-5.  **Customer Balances:** If the user asks "who is owing me?", "customer balance", "who owes me", "show debtors", the intent is "${INTENTS.GET_CUSTOMER_BALANCES}".
-6.  **Reports & Summaries:** - For "${INTENTS.GENERATE_REPORT}" or "${INTENTS.GET_FINANCIAL_SUMMARY}", extract "reportType" (sales, expenses, inventory, pnl). 
-    - **CRITICAL:** Determine the time period requested and calculate the exact "startDate" and "endDate" (YYYY-MM-DD).
-    - If the user says "Report for December 2024", context should be: {"reportType": "...", "dateRange": {"startDate": "2024-12-01", "endDate": "2024-12-31"}}
-    - If user says "Last month" (and today is 2025-02-15), context: {"dateRange": {"startDate": "2025-01-01", "endDate": "2025-01-31"}}
-    - If user says "Last 3 months", calculate the range.
-    - If no date is specified, leave "dateRange" as null.
-7.  **Sales:** Extract item name, quantity, price per unit (if specified), customer name, sale type (cash/credit/bank). Quantity defaults to 1 if not mentioned. If price per unit is missing, the context should reflect that.
-8.  If a clear bookkeeping intent is present, prioritize it. If no intent is clear, respond with {"intent": null, "context": {}}. You MUST respond ONLY with a JSON object.
+1.  **Chitchat:** If the message is a simple greeting ("hi", "hello") or acknowledgement ("ok", "thanks") with NO bookkeeping request, the intent is "${INTENTS.CHITCHAT}".
+2.  **Reports (PDFs):** - If the user asks for "Profit and Loss", "P&L", "Income Statement", or asks for a "report" or "PDF".
+    - Intent: "${INTENTS.GENERATE_REPORT}".
+    - Context must include "reportType" ("sales", "expenses", "inventory", "pnl") and "dateRange".
+    - **Example:** "Profit and loss for last month" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "pnl", "dateRange": {"startDate": "2024-12-01", "endDate": "2024-12-31"}}}
+3.  **Summaries (Text Only):** - If the user asks "how much sales", "total expenses", "sales today".
+    - Intent: "${INTENTS.GET_FINANCIAL_SUMMARY}".
+    - Context must include "metric" ("sales" or "expenses") and "dateRange".
+4.  **Dates:** Always calculate the exact "startDate" and "endDate" (YYYY-MM-DD) based on TODAY'S DATE (${today}).
+5.  **List Input:** If the user's message is a multi-line list starting with numbers, the intent is ALWAYS "${INTENTS.ADD_PRODUCTS_FROM_LIST}".
+6.  **Reconciliation:** "edit sale", "delete transaction", "made a mistake" -> "${INTENTS.RECONCILE_TRANSACTION}".
+7.  **Customer Balances:** "who owes me", "debtors list" -> "${INTENTS.GET_CUSTOMER_BALANCES}".
+
+If a clear bookkeeping intent is present, prioritize it. If no intent is clear, respond with {"intent": null, "context": {}}. You MUST respond ONLY with a JSON object.
 `;
 
     const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: text }];

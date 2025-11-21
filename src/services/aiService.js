@@ -139,8 +139,9 @@ Extraction Rules & Examples:
 1.  **Chitchat:** If the message is a simple greeting ("hi", "hello") or acknowledgement ("ok", "thanks") with NO bookkeeping request, the intent is "${INTENTS.CHITCHAT}".
 2.  **Reports (PDFs):** - If the user asks for "Profit and Loss", "P&L", "Income Statement", or asks for a "report" or "PDF".
     - Intent: "${INTENTS.GENERATE_REPORT}".
-    - Context must include "reportType" ("sales", "expenses", "inventory", "pnl") and "dateRange".
-    - **Example:** "Profit and loss for last month" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "pnl", "dateRange": {"startDate": "2024-12-01", "endDate": "2024-12-31"}}}
+    - Context must include "reportType" ("sales", "expenses", "inventory", "pnl", "cogs") and "dateRange".
+    - **NEW:** "Cost of sales", "COGS", or "Cost of goods" -> "reportType": "cogs".
+    - **Example:** "Generate COGS for last month" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "cogs", "dateRange": {"startDate": "2024-12-01", "endDate": "2024-12-31"}}}
 3.  **Summaries (Text Only):** - If the user asks "how much sales", "total expenses", "sales today".
     - Intent: "${INTENTS.GET_FINANCIAL_SUMMARY}".
     - Context must include "metric" ("sales" or "expenses") and "dateRange".

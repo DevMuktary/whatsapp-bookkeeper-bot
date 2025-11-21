@@ -145,6 +145,7 @@ export async function sendReportMenu(to) {
                 { id: 'generate sales report', title: 'Sales Report', description: 'Get a PDF of all sales.' },
                 { id: 'generate expense report', title: 'Expense Report', description: 'Get a PDF of all expenses.' },
                 { id: 'generate p&l report', title: 'Profit & Loss Report', description: 'See your revenue, costs, and profit.' },
+                { id: 'generate cogs report', title: 'Cost of Sales Report', description: 'View cost of goods sold.' }, // [NEW ITEM ADDED HERE]
                 { id: 'generate inventory report', title: 'Inventory Report', description: 'Get a PDF of your current stock.' },
             ]
         }

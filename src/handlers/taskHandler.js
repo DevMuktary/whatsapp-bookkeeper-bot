@@ -4,7 +4,7 @@ import { createSaleTransaction, createExpenseTransaction, createCustomerPaymentT
 import { createBankAccount, updateBankBalance, findBankAccountByName, getAllBankAccounts } from '../db/bankService.js';
 import { updateUserState } from '../db/userService.js';
 import { sendTextMessage, sendInteractiveButtons, uploadMedia, sendDocument, sendMainMenu, sendReportMenu } from '../api/whatsappService.js';
-import { generateSalesReport, generateExpenseReport, generateInventoryReport, generatePnLReport, generateInvoice } from '../services/pdfService.js';
+import { generateSalesReport, generateExpenseReport, generateInventoryReport, generatePnLReport, generateInvoice, generateCOGSReport } from '../services/pdfService.js';
 import { getFinancialInsight } from '../services/aiService.js';
 import { INTENTS, USER_STATES } from '../utils/constants.js';
 import { getDateRange } from '../utils/dateUtils.js';
@@ -70,7 +70,7 @@ async function _calculatePnLData(userId, periodOrRange) {
         return acc;
     }, {});
 
-    // [FIX] Removed .slice(0,3) to show ALL expenses in the report
+    // Show ALL expenses
     const topExpenses = Object.entries(expenseMap)
         .sort(([, a], [, b]) => b - a)
         .map(([category, total]) => ({ _id: category, total }));
@@ -333,6 +333,10 @@ async function executeGenerateReport(user, data) {
     if (reportTypeLower.includes('profit') || reportTypeLower.includes('p&l')) {
         reportTypeLower = 'pnl';
     }
+    // Map 'cost of sales' requests to 'cogs' if not already done
+    if (reportTypeLower.includes('cost') || reportTypeLower.includes('cogs')) {
+        reportTypeLower = 'cogs';
+    }
 
     // Determine actual start and end dates
     const effectivePeriod = dateRange || period || 'this_month';
@@ -340,7 +344,7 @@ async function executeGenerateReport(user, data) {
 
     const readablePeriodStr = `${formatDateGB(startDate)} - ${formatDateGB(endDate)}`;
 
-    await sendTextMessage(user.whatsappId, `Generating your ${reportTypeLower} report for ${readablePeriodStr}... Please wait. 📄`);
+    await sendTextMessage(user.whatsappId, `Generating your ${reportTypeLower.toUpperCase()} report for ${readablePeriodStr}... Please wait. 📄`);
     
     const readablePeriodTitle = `Period: ${readablePeriodStr}`;
     
@@ -350,22 +354,19 @@ async function executeGenerateReport(user, data) {
 
     if (reportTypeLower === 'sales' || reportTypeLower === 'expenses') {
         const type = reportTypeLower === 'sales' ? 'SALE' : 'EXPENSE';
-        // Fetch transactions
         const transactions = await getTransactionsByDateRange(user._id, type, startDate, endDate);
-        
         if (transactions.length === 0) {
             await sendTextMessage(user.whatsappId, `You have no ${reportTypeLower} data for ${readablePeriodStr}.`);
             return;
         }
 
-        // [FIX] Populate 'customerName' for Sales Report if missing
+        // Populate customer name for sales report
         if (type === 'SALE') {
             for(const tx of transactions) {
                 if (tx.linkedCustomerId && !tx.customerName) {
                     const c = await findCustomerById(tx.linkedCustomerId);
                     if(c) tx.customerName = c.customerName;
                 }
-                // Fallback: try to get it from description if still missing
                 if (!tx.customerName && tx.description && tx.description.includes('sold to')) {
                     const parts = tx.description.split('sold to');
                     if (parts.length > 1) tx.customerName = parts[1].trim();
@@ -391,15 +392,53 @@ async function executeGenerateReport(user, data) {
         const pnlData = await _calculatePnLData(user._id, effectivePeriod);
         pdfBuffer = await generatePnLReport(user, pnlData, readablePeriodTitle);
         filename = `P&L_Report_${filenamePeriod}.pdf`;
+
+    } else if (reportTypeLower === 'cogs') {
+        // [NEW] Cost of Goods Sold Logic
+        const salesTransactions = await getTransactionsByDateRange(user._id, 'SALE', startDate, endDate);
+        if (salesTransactions.length === 0) {
+            await sendTextMessage(user.whatsappId, `No sales found in this period, so Cost of Sales is 0.`);
+            return;
+        }
+        
+        const cogsItems = [];
+        for (const sale of salesTransactions) {
+            if (sale.items && sale.items.length > 0) {
+                for (const item of sale.items) {
+                    // Only track tangible products, ignore services
+                    if (item.productId && !item.isService) { 
+                        const product = await findProductByName(user._id, item.productName); 
+                        const costPrice = (product && product.costPrice != null) ? product.costPrice : 0;
+                        
+                        cogsItems.push({
+                            date: sale.date,
+                            productName: item.productName,
+                            quantity: item.quantity,
+                            costPrice: costPrice,
+                            totalCost: costPrice * item.quantity
+                        });
+                    }
+                }
+            }
+        }
+
+        if (cogsItems.length === 0) {
+             await sendTextMessage(user.whatsappId, `Sales found, but they appear to be services or products without cost prices linked.`);
+             return;
+        }
+
+        pdfBuffer = await generateCOGSReport(user, cogsItems, readablePeriodTitle);
+        filename = `Cost_Of_Sales_Report_${filenamePeriod}.pdf`;
+
     } else {
-        await sendTextMessage(user.whatsappId, `Sorry, I can only generate sales, expense, inventory, and P&L reports for now.`);
+        await sendTextMessage(user.whatsappId, `Sorry, I can only generate sales, expense, inventory, P&L, and Cost of Sales reports for now.`);
         return;
     }
     
     if (pdfBuffer) {
         const mediaId = await uploadMedia(pdfBuffer, 'application/pdf');
         if (mediaId) {
-            await sendDocument(user.whatsappId, mediaId, filename, `Here is your ${reportTypeLower} report for ${readablePeriodStr}.`);
+            await sendDocument(user.whatsappId, mediaId, filename, `Here is your ${reportTypeLower.toUpperCase()} report for ${readablePeriodStr}.`);
         } else {
             await sendTextMessage(user.whatsappId, "I couldn't send the report. There was an issue with the file upload. Please try again.");
         }

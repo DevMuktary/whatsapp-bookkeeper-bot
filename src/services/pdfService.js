@@ -322,6 +322,70 @@ export function generateInventoryReport(user, products) {
 }
 
 /**
+ * [NEW] Generates a Cost of Goods Sold (COGS) Report
+ */
+export function generateCOGSReport(user, items, periodTitle) {
+    return new Promise((resolve, reject) => {
+        try {
+            const doc = new PDFDocument({ margin: 50, size: 'A4', bufferPages: true });
+            const buffers = [];
+            doc.on('data', buffers.push.bind(buffers));
+            doc.on('end', () => resolve(Buffer.concat(buffers)));
+
+            let currentY = drawHeader(doc, user, 'Cost of Sales Report', periodTitle);
+
+            // Columns
+            const colDate = { x: 50, width: 80 };
+            const colItem = { x: 140, width: 180 };
+            const colQty = { x: 330, width: 50, align: 'center' };
+            const colCost = { x: 390, width: 70, align: 'right' };
+            const colTotal = { x: 470, width: 80, align: 'right' };
+
+            // Header
+            drawTableRow(doc, currentY, [
+                { text: 'DATE', ...colDate },
+                { text: 'ITEM SOLD', ...colItem },
+                { text: 'QTY', ...colQty },
+                { text: 'UNIT COST', ...colCost },
+                { text: 'TOTAL COST', ...colTotal },
+            ], true);
+            currentY += 25;
+
+            let totalCOGS = 0;
+
+            items.forEach((item, i) => {
+                if (currentY > 750) { doc.addPage(); currentY = 50; }
+                
+                totalCOGS += item.totalCost;
+                
+                drawTableRow(doc, currentY, [
+                    { text: formatDate(item.date), ...colDate },
+                    { text: item.productName, ...colItem },
+                    { text: item.quantity.toString(), ...colQty },
+                    { text: formatCurrency(item.costPrice, user.currency), ...colCost },
+                    { text: formatCurrency(item.totalCost, user.currency), ...colTotal },
+                ], false, i % 2 === 0);
+                currentY += 20;
+            });
+
+            // Footer Summary
+            currentY += 15;
+            doc.moveTo(50, currentY).lineTo(550, currentY).strokeColor(COLORS.border).stroke();
+            currentY += 10;
+            doc.font(FONTS.bold).fontSize(12).text('Total Cost of Sales:', 250, currentY, { width: 200, align: 'right' });
+            doc.fillColor('red').text(formatCurrency(totalCOGS, user.currency), 470, currentY, { width: 80, align: 'right' });
+
+            drawFooter(doc);
+            doc.end();
+
+        } catch (error) {
+            logger.error('Error generating COGS PDF report:', error);
+            reject(error);
+        }
+    });
+}
+
+/**
  * Generates a Profit & Loss (P&L) report PDF.
  * [UPDATED] Added page break logic inside expense loop to show all expenses.
  */

@@ -1,7 +1,7 @@
 import axios from 'axios';
 import config from '../config/index.js';
 import logger from '../utils/logger.js';
-import { INTENTS } from '../utils/constants.js';
+import { INTENTS, EXPENSE_CATEGORIES } from '../utils/constants.js';
 
 const DEEPSEEK_API_URL = 'https://api.deepseek.com/chat/completions';
 
@@ -131,18 +131,21 @@ The possible intents are:
 - "${INTENTS.GET_FINANCIAL_INSIGHT}"
 - "${INTENTS.GET_CUSTOMER_BALANCES}"
 - "${INTENTS.SHOW_MAIN_MENU}"
-- "${INTENTS.CHITCHAT}"
+- "${INTENTS.GENERAL_CONVERSATION}"
 
 Your JSON response format is: {"intent": "INTENT_NAME", "context": {}}.
 
 Extraction Rules & Examples:
-1.  **Chitchat:** If the message is a simple greeting ("hi", "hello") or acknowledgement ("ok", "thanks") with NO bookkeeping request, the intent is "${INTENTS.CHITCHAT}".
-2.  **Reports (PDFs):** - If the user asks for "Profit and Loss", "P&L", "Income Statement", or asks for a "report" or "PDF".
+1.  **Conversational (Chitchat/Questions):** - If the user asks "How are you?", "What can you do?", "Who are you?", "Thank you", or simply says "Hello":
+    - Intent: "${INTENTS.GENERAL_CONVERSATION}".
+    - **CRITICAL:** You MUST provide a "generatedReply" string in the context.
+    - The reply MUST be friendly but professional. You are **Fynax**, a bookkeeping assistant.
+    - If asked what you can do, list your skills (log sales, expenses, reports, inventory).
+    - **Example:** "What can you do?" -> {"intent": "${INTENTS.GENERAL_CONVERSATION}", "context": {"generatedReply": "I can help you track sales, expenses, manage inventory, and generate PDF reports like P&L and Invoices. What would you like to start with?"}}
+2.  **Reports (PDFs):** - If the user asks for "Profit and Loss", "P&L", "Income Statement", "COGS", "Cost of Sales", or asks for a "report" or "PDF".
     - Intent: "${INTENTS.GENERATE_REPORT}".
     - Context: {"reportType": "...", "dateRange": ...}
-    - **IMPORTANT:** If the user ONLY says "generate report" or "get report" WITHOUT specifying the type (e.g., sales, expense, pnl), then "reportType" MUST BE null. DO NOT GUESS.
-    - **Example:** "Generate report" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": null}}
-    - **Example:** "Sales report" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "sales"}}
+    - If report type is NOT specified (e.g. "Generate report"), "reportType" must be null.
 3.  **Summaries (Text Only):** - If the user asks "how much sales", "total expenses", "sales today".
     - Intent: "${INTENTS.GET_FINANCIAL_SUMMARY}".
     - Context must include "metric" ("sales" or "expenses") and "dateRange".

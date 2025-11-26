@@ -2,7 +2,7 @@ import { findOrCreateUser, updateUserState } from '../db/userService.js';
 import { findTransactionById } from '../db/transactionService.js';
 import { findCustomerById } from '../db/customerService.js';
 import { generateInvoice } from '../services/pdfService.js';
-import { uploadMedia, sendDocument, sendTextMessage, sendInteractiveButtons, sendMainMenu, markMessageAsRead, setTypingIndicator } from '../api/whatsappService.js';
+import { uploadMedia, sendDocument, sendTextMessage, sendInteractiveButtons, sendMainMenu, setTypingIndicator } from '../api/whatsappService.js';
 import { USER_STATES, INTENTS } from '../utils/constants.js';
 import logger from '../utils/logger.js';
 import { executeTask } from './taskHandler.js';
@@ -15,8 +15,7 @@ export async function handleInteractiveMessage(message) {
     const interactive = message.interactive;
     
     // [UPDATED] Turn ticks Blue and show Typing Indicator using 'on'
-    await markMessageAsRead(messageId);
-    await setTypingIndicator(whatsappId, 'on');
+    await setTypingIndicator(whatsappId, 'on', messageId);
 
     const user = await findOrCreateUser(whatsappId);
 

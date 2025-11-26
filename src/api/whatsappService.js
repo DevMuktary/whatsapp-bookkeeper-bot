@@ -18,7 +18,7 @@ async function sendMessage(data) {
   }
 }
 
-// [NEW] Marks the message as read (Blue Ticks)
+// Marks the message as read (Blue Ticks)
 export async function markMessageAsRead(messageId) {
     try {
         await axios.post(`${WHATSAPP_GRAPH_URL}/${config.whatsapp.phoneNumberId}/messages`, {
@@ -32,20 +32,20 @@ export async function markMessageAsRead(messageId) {
             }
         });
     } catch (error) {
-        // We suppress errors here to avoid log noise if a read receipt fails
-        // logger.warn('Failed to mark message as read:', error.message);
+        // Suppress errors to avoid log noise
     }
 }
 
-// [NEW] Sets the "Typing..." indicator
-export async function setTypingIndicator(to) {
+// [UPDATED] Sets the Typing Indicator based on status ('on' or 'off')
+export async function setTypingIndicator(to, status) {
     try {
+        const action = status === 'on' ? 'typing_on' : 'typing_off';
         await sendMessage({
             messaging_product: 'whatsapp',
             to: to,
             type: 'action',
             action: {
-                name: 'typing_on'
+                name: action
             }
         });
     } catch (error) {

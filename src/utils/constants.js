@@ -53,10 +53,10 @@ export const INTENTS = {
     GET_FINANCIAL_INSIGHT: 'GET_FINANCIAL_INSIGHT',
     GET_CUSTOMER_BALANCES: 'GET_CUSTOMER_BALANCES',
     SHOW_MAIN_MENU: 'SHOW_MAIN_MENU',
-    CHITCHAT: 'CHITCHAT',
+    GENERAL_CONVERSATION: 'GENERAL_CONVERSATION', // [NEW] Handles intelligent chitchat
 };
 
-// [NEW] Standardized Categories for the AI to use
+// Standardized Categories for the AI to use
 export const EXPENSE_CATEGORIES = [
     "Transportation",       // Fuel, Bus, Uber, Travel, Maintenance
     "Utilities & Internet", // Data, Airtime, NEPA, Gas

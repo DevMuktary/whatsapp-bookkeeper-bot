@@ -2,7 +2,7 @@ import { findOrCreateUser, updateUserState } from '../db/userService.js';
 import { findTransactionById } from '../db/transactionService.js';
 import { findCustomerById } from '../db/customerService.js';
 import { generateInvoice } from '../services/pdfService.js';
-import { uploadMedia, sendDocument, sendTextMessage, sendInteractiveButtons, sendMainMenu } from '../api/whatsappService.js';
+import { uploadMedia, sendDocument, sendTextMessage, sendInteractiveButtons, sendMainMenu, markMessageAsRead, setTypingIndicator } from '../api/whatsappService.js';
 import { USER_STATES, INTENTS } from '../utils/constants.js';
 import logger from '../utils/logger.js';
 import { executeTask } from './taskHandler.js';
@@ -11,7 +11,13 @@ import { ObjectId } from 'mongodb';
 
 export async function handleInteractiveMessage(message) {
     const whatsappId = message.from;
+    const messageId = message.id;
     const interactive = message.interactive;
+    
+    // [NEW] Turn ticks Blue and show Typing Indicator
+    await markMessageAsRead(messageId);
+    await setTypingIndicator(whatsappId);
+
     const user = await findOrCreateUser(whatsappId);
 
     try {
@@ -33,6 +39,7 @@ async function handleButtonReply(user, buttonId, originalMessage) {
             // Treat button click as if user typed the text
             const mockTextMessage = {
                 from: originalMessage.from,
+                id: originalMessage.id, // Pass ID
                 text: { body: buttonId },
                 type: 'text'
             };
@@ -84,6 +91,7 @@ async function handleListReply(user, listId, originalMessage) {
             // Treat list selection as if user typed the text
             const mockTextMessage = {
                 from: originalMessage.from,
+                id: originalMessage.id, // Pass ID
                 text: { body: listId },
                 type: 'text'
             };

@@ -18,38 +18,30 @@ async function sendMessage(data) {
   }
 }
 
-// Marks the message as read (Blue Ticks)
-export async function markMessageAsRead(messageId) {
+// [UPDATED] "Clever" combination of Read Receipt + Typing Indicator logic
+export async function setTypingIndicator(to, action, messageId = null) {
+    if (!messageId) {
+        return;
+    }
     try {
-        await axios.post(`${WHATSAPP_GRAPH_URL}/${config.whatsapp.phoneNumberId}/messages`, {
-            messaging_product: 'whatsapp',
-            status: 'read',
-            message_id: messageId
-        }, {
+        const payload = { 
+            messaging_product: 'whatsapp', 
+            status: 'read', 
+            message_id: messageId 
+        };
+
+        if (action === 'on') {
+            payload.typing_indicator = { type: 'text' };
+        }
+
+        await axios.post(`${WHATSAPP_GRAPH_URL}/${config.whatsapp.phoneNumberId}/messages`, payload, {
             headers: {
                 'Authorization': `Bearer ${config.whatsapp.token}`,
                 'Content-Type': 'application/json'
             }
         });
     } catch (error) {
-        // Suppress errors to avoid log noise
-    }
-}
-
-// [UPDATED] Sets the Typing Indicator based on status ('on' or 'off')
-export async function setTypingIndicator(to, status) {
-    try {
-        const action = status === 'on' ? 'typing_on' : 'typing_off';
-        await sendMessage({
-            messaging_product: 'whatsapp',
-            to: to,
-            type: 'action',
-            action: {
-                name: action
-            }
-        });
-    } catch (error) {
-        // Suppress typing errors
+        logger.error('Error setting typing indicator:', error.response ? error.response.data : error.message);
     }
 }
 

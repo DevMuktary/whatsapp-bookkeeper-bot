@@ -63,14 +63,14 @@ const parseProductList = (text) => {
 
 export async function handleMessage(message) {
   const whatsappId = message.from;
-  const messageId = message.id; // Get Message ID for Read Receipt
+  const messageId = message.id; 
   const originalText = message.text.body;
   const lowerCaseText = originalText.trim().toLowerCase();
 
   try {
-    // [NEW] Turn ticks Blue and show Typing Indicator immediately
+    // [UPDATED] Turn ticks Blue and show Typing Indicator using 'on'
     await markMessageAsRead(messageId);
-    await setTypingIndicator(whatsappId);
+    await setTypingIndicator(whatsappId, 'on');
 
     const user = await findOrCreateUser(whatsappId);
 

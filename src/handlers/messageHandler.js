@@ -11,11 +11,7 @@ import { executeTask } from './taskHandler.js';
 
 const CANCEL_KEYWORDS = ['cancel', 'stop', 'exit', 'nevermind', 'abort'];
 
-/**
- * Parses a price string (e.g., "₦1,000", "2.5m", "50k", "10000") into a number.
- * @param {string|number} priceInput The string or number to parse.
- * @returns {number} The parsed numeric value, or NaN if invalid.
- */
+// Helper: Parsing Prices
 const parsePrice = (priceInput) => {
     if (typeof priceInput === 'number') return priceInput;
     if (typeof priceInput !== 'string') return NaN;
@@ -33,11 +29,7 @@ const parsePrice = (priceInput) => {
     return isNaN(value) ? NaN : value * multiplier;
 };
 
-/**
- * A reliable, deterministic parser for multi-line product lists.
- * @param {string} text The raw text message from the user.
- * @returns {Array<object>} An array of parsed product objects.
- */
+// Helper: Parsing Lists
 const parseProductList = (text) => {
     const products = [];
     const lines = text.split('\n');
@@ -63,8 +55,6 @@ const parseProductList = (text) => {
             } catch (e) {
                 logger.warn(`Failed to parse line structure: "${line}"`, e);
             }
-        } else {
-            logger.debug(`Line did not match regex: "${line}"`);
         }
     }
     return products;
@@ -79,59 +69,72 @@ export async function handleMessage(message) {
   try {
     const user = await findOrCreateUser(whatsappId);
 
+    // --- 1. STRICT ONBOARDING GATEKEEPER ---
+    // If user is in an onboarding state, force them to finish. 
+    // Do NOT check for 'cancel' or AI intents.
+    const onboardingStates = [
+        USER_STATES.NEW_USER,
+        USER_STATES.ONBOARDING_AWAIT_BUSINESS_AND_EMAIL,
+        USER_STATES.ONBOARDING_AWAIT_OTP,
+        USER_STATES.ONBOARDING_AWAIT_CURRENCY
+    ];
+
+    if (onboardingStates.includes(user.state)) {
+        switch (user.state) {
+            case USER_STATES.NEW_USER: await handleNewUser(user); break;
+            case USER_STATES.ONBOARDING_AWAIT_BUSINESS_AND_EMAIL: await handleOnboardingDetails(user, originalText); break;
+            case USER_STATES.ONBOARDING_AWAIT_OTP: await handleOtp(user, originalText); break;
+            case USER_STATES.ONBOARDING_AWAIT_CURRENCY: await handleCurrency(user, originalText); break;
+        }
+        return; // Stop here. No other logic runs until onboarding is done.
+    }
+
+    // --- 2. HANDLE CANCELLATION (Only for logged-in users) ---
     if (CANCEL_KEYWORDS.includes(lowerCaseText)) {
         if (user.state === USER_STATES.IDLE) {
             await sendTextMessage(whatsappId, "There's nothing to cancel. What would you like to do?");
+            await sendMainMenu(whatsappId);
             return;
         }
         logger.info(`User ${whatsappId} cancelled operation from state: ${user.state}`);
         await updateUserState(whatsappId, USER_STATES.IDLE, {});
         await sendTextMessage(whatsappId, "Okay, I've cancelled the current operation. 👍");
-        await sendMainMenu(whatsappId); // Send main menu after cancelling
+        await sendMainMenu(whatsappId); 
         return;
     }
 
+    // --- 3. HANDLE ACTIVE STATES ---
     switch (user.state) {
-      case USER_STATES.NEW_USER: await handleNewUser(user); break;
-      case USER_STATES.ONBOARDING_AWAIT_BUSINESS_AND_EMAIL: await handleOnboardingDetails(user, originalText); break;
-      case USER_STATES.ONBOARDING_AWAIT_OTP: await handleOtp(user, originalText); break;
-      case USER_STATES.ONBOARDING_AWAIT_CURRENCY: await handleCurrency(user, originalText); break;
       case USER_STATES.IDLE: await handleIdleState(user, originalText); break;
       case USER_STATES.LOGGING_SALE: await handleLoggingSale(user, originalText); break;
-      case USER_STATES.LOGGING_MULTI_ITEM_SALE: await handleMultiItemSale(user, originalText); break; // Handle adding more items
+      case USER_STATES.LOGGING_MULTI_ITEM_SALE: await handleMultiItemSale(user, originalText); break; 
       case USER_STATES.LOGGING_EXPENSE: await handleLoggingExpense(user, originalText); break;
       case USER_STATES.ADDING_PRODUCT: await handleAddingProduct(user, originalText); break;
       case USER_STATES.LOGGING_CUSTOMER_PAYMENT: await handleLoggingCustomerPayment(user, originalText); break;
       case USER_STATES.ADDING_BANK_ACCOUNT: await handleAddingBankAccount(user, originalText); break;
       case USER_STATES.AWAITING_EDIT_VALUE: await handleEditValue(user, originalText); break;
 
+      // Handle Interactive States (User typed instead of clicked)
       case USER_STATES.AWAITING_BANK_SELECTION_SALE:
       case USER_STATES.AWAITING_BANK_SELECTION_EXPENSE:
       case USER_STATES.AWAITING_BANK_SELECTION_PURCHASE:
       case USER_STATES.AWAITING_BANK_SELECTION_CUST_PAYMENT:
-        await sendTextMessage(whatsappId, "Please select one of the bank accounts from the buttons I sent, or type 'cancel' to start over.");
-        break;
       case USER_STATES.AWAITING_SALE_TYPE_CONFIRMATION:
-         await sendTextMessage(whatsappId, "Is this a Product sale or a Service sale? Please choose one of the buttons, or type 'cancel'.");
-         break;
       case USER_STATES.AWAITING_BULK_PRODUCT_CONFIRMATION:
       case USER_STATES.AWAITING_INVOICE_CONFIRMATION:
       case USER_STATES.AWAITING_DELETE_CONFIRMATION:
       case USER_STATES.AWAITING_RECONCILE_ACTION:
       case USER_STATES.AWAITING_EDIT_FIELD_SELECTION:
-        await sendTextMessage(whatsappId, "Please choose one of the options from the buttons I sent, or type 'cancel'.");
-        break;
       case USER_STATES.AWAITING_TRANSACTION_SELECTION:
-        await sendTextMessage(whatsappId, "Please select an item from the list I sent to proceed, or type 'cancel'.");
-        break;
       case USER_STATES.AWAITING_REPORT_TYPE_SELECTION:
-        await sendTextMessage(whatsappId, "Please select a report from the list I sent, or type 'cancel'.");
+        await sendTextMessage(whatsappId, "Please select an option from the buttons or list I sent above, or type 'cancel' to stop.");
         break;
 
       default:
         logger.warn(`Unhandled state: ${user.state} for user ${whatsappId}`);
         await sendTextMessage(whatsappId, "Apologies, I'm a bit stuck. Let's get you back on track.");
         await updateUserState(whatsappId, USER_STATES.IDLE);
+        await sendMainMenu(whatsappId);
         break;
     }
   } catch (error) {
@@ -141,17 +144,30 @@ export async function handleMessage(message) {
 }
 
 async function handleIdleState(user, text) {
+    // Get Intent from AI
     const { intent, context } = await getIntent(text);
 
+    // --- CONVERSATIONAL & SCOPE LOGIC ---
+    
     if (intent === INTENTS.CHITCHAT) {
-        logger.info(`Intent detected: CHITCHAT for user ${user.whatsappId}`);
-        await sendTextMessage(user.whatsappId, "Noted! 👍 What can I help you with?");
+        // Friendly reply, but steer back to business
+        await sendTextMessage(user.whatsappId, "I'm doing great and ready to help! 🚀 What would you like to do? You can log a sale, check stock, or generate a report.");
         await sendMainMenu(user.whatsappId);
-    } else if (intent === INTENTS.SHOW_MAIN_MENU) {
-        logger.info(`Intent detected: SHOW_MAIN_MENU for user ${user.whatsappId}`);
+        return;
+    } 
+    
+    if (intent === null) {
+        // Out of scope or misunderstood
+        await sendTextMessage(user.whatsappId, "I'm designed to help you with bookkeeping, inventory, and financial reports. I can't help with that specifically, but here is what I can do:");
+        await sendMainMenu(user.whatsappId);
+        return;
+    }
+
+    // --- BUSINESS LOGIC ---
+
+    if (intent === INTENTS.SHOW_MAIN_MENU) {
         await sendMainMenu(user.whatsappId);
     } else if (intent === INTENTS.ADD_PRODUCTS_FROM_LIST) {
-        logger.info(`Intent detected: ADD_PRODUCTS_FROM_LIST for user ${user.whatsappId}`);
         const products = parseProductList(text);
         if (products.length === 0) {
             await sendTextMessage(user.whatsappId, "I see you sent a list, but I couldn't understand its format. Please try a format like:\n\n`1. 10 Shirts - cost: 5000, sell: 8000`");
@@ -169,11 +185,9 @@ async function handleIdleState(user, text) {
             { id: 'cancel_bulk_add', title: '❌ No, Cancel' }
         ]);
     } else if (intent === INTENTS.LOG_SALE) {
-        logger.info(`Intent detected: LOG_SALE for user ${user.whatsappId} with context: ${JSON.stringify(context)}`);
         let existingProduct = null;
         if (context.productName) {
             existingProduct = await findProductByName(user._id, context.productName);
-            logger.info(`Product lookup result for ${context.productName}: ${existingProduct ? 'Found' : 'Not Found'}`);
         }
         const initialMemory = [{ role: 'user', content: text }];
         const initialSaleData = { items: [], customerName: context.customerName, saleType: context.saleType };
@@ -182,24 +196,19 @@ async function handleIdleState(user, text) {
         if (context.productName) {
             firstItem.productName = context.productName;
             firstItem.quantity = context.unitsSold || 1;
-            // Prioritize explicitly stated price, then existing product price, then calculate from total
             let priceFound = parsePrice(context.amountPerUnit);
             if(isNaN(priceFound) && existingProduct) {
                 priceFound = existingProduct.sellingPrice;
-                logger.info(`Using existing product price: ${priceFound}`);
             }
             if(isNaN(priceFound) && context.totalAmount && !isNaN(parsePrice(context.totalAmount))) {
                  priceFound = parsePrice(context.totalAmount) / firstItem.quantity;
-                 logger.info(`Calculated price from total: ${priceFound}`);
             }
-            firstItem.pricePerUnit = priceFound; // Might still be NaN if no price info at all
+            firstItem.pricePerUnit = priceFound; 
             firstItem.productId = existingProduct?._id;
             firstItem.isService = !existingProduct;
         }
 
-        // Check if we need to ask Product/Service
         if (firstItem.productName && !isNaN(firstItem.pricePerUnit) && !existingProduct) {
-             logger.info(`Asking Product/Service confirmation for ${firstItem.productName}`);
              initialSaleData.items.push(firstItem);
              await updateUserState(user.whatsappId, USER_STATES.AWAITING_SALE_TYPE_CONFIRMATION, { memory: initialMemory, saleData: initialSaleData, productName: context.productName });
              await sendInteractiveButtons(user.whatsappId, `I couldn't find "${context.productName}" in your inventory. Is this a Product you want to add now, or a Service you provided?`, [
@@ -207,12 +216,10 @@ async function handleIdleState(user, text) {
                  { id: 'sale_type:service', title: 'It\'s a Service' },
              ]);
         } else {
-             logger.info(`Starting normal sale flow. First item added?: ${firstItem.productName && !isNaN(firstItem.pricePerUnit) && firstItem.quantity}`);
              if (firstItem.productName && !isNaN(firstItem.pricePerUnit) && firstItem.quantity) {
                  initialSaleData.items.push(firstItem);
              }
              await updateUserState(user.whatsappId, USER_STATES.LOGGING_SALE, { memory: initialMemory, saleData: initialSaleData, existingProduct });
-             // Immediately call the handler for the first turn
              await handleLoggingSale({ ...user, state: USER_STATES.LOGGING_SALE, stateContext: { memory: initialMemory, saleData: initialSaleData, existingProduct } }, text);
         }
 
@@ -233,7 +240,6 @@ async function handleIdleState(user, text) {
         await updateUserState(user.whatsappId, USER_STATES.ADDING_BANK_ACCOUNT, { memory: [{ role: 'user', content: text }] });
         await handleAddingBankAccount({ ...user, state: USER_STATES.ADDING_BANK_ACCOUNT, stateContext: { memory: [{ role: 'user', content: text }] } }, text);
     } else if (intent === INTENTS.RECONCILE_TRANSACTION) {
-        logger.info(`Intent detected: RECONCILE_TRANSACTION for user ${user.whatsappId}`);
         const recentTransactions = await getRecentTransactions(user._id, 5);
         if (recentTransactions.length === 0) {
             await sendTextMessage(user.whatsappId, "You don't have any recent transactions to modify.");
@@ -260,10 +266,9 @@ async function handleIdleState(user, text) {
             await sendReportMenu(user.whatsappId);
         }
     } else if (intent === INTENTS.CHECK_STOCK || intent === INTENTS.GET_FINANCIAL_SUMMARY || intent === INTENTS.CHECK_BANK_BALANCE || intent === INTENTS.GET_FINANCIAL_INSIGHT || intent === INTENTS.GET_CUSTOMER_BALANCES) {
-        logger.info(`Intent detected: ${intent} for user ${user.whatsappId}`);
         await executeTask(intent, user, context);
     } else {
-        await sendTextMessage(user.whatsappId, "I'm not sure I understood that. You can choose an option from the main menu or ask me something like 'log a sale'.");
+        await sendTextMessage(user.whatsappId, "I'm not sure I understood that. Please try again or select an option from the menu.");
         await sendMainMenu(user.whatsappId);
     }
 }
@@ -315,9 +320,7 @@ async function handleLoggingSale(user, text) {
     }
 }
 
-// Handles adding more items during a multi-item sale (if AI needs help)
-// We might not need this if the main gatherSaleDetails AI handles the loop well.
-// async function handleMultiItemSale(user, text) { ... }
+// async function handleMultiItemSale(user, text) { ... } // Optional hook
 
 async function handleLoggingExpense(user, text) {
     const { memory: currentMemory = [] } = user.stateContext;
@@ -454,12 +457,12 @@ async function handleEditValue(user, text) {
     await executeTask(INTENTS.RECONCILE_TRANSACTION, user, { transactionId: transaction._id, action: 'edit', changes });
 }
 
-// [FIXED] Logic to prevent infinite loop for New Users
+// --- ONBOARDING HANDLERS ---
+
 async function handleNewUser(user) {
   await sendTextMessage(user.whatsappId, "👋 Welcome to Fynax Bookkeeper! I'm here to help you manage your business finances effortlessly.");
   await sendTextMessage(user.whatsappId, "To get started, what is your business name and your email address?");
-  
-  // CRITICAL FIX: Move state forward so next message is caught by 'handleOnboardingDetails'
+  // Move state forward to avoid loop
   await updateUserState(user.whatsappId, USER_STATES.ONBOARDING_AWAIT_BUSINESS_AND_EMAIL);
 }
 
@@ -468,10 +471,12 @@ async function handleOnboardingDetails(user, text) {
   let updates = {};
   if (businessName) updates.businessName = businessName;
   if (email) updates.email = email;
+  
   let updatedUser = user;
   if (Object.keys(updates).length > 0) {
     updatedUser = await updateUser(user.whatsappId, updates);
   }
+
   if (updatedUser.businessName && updatedUser.email) {
     const otp = await sendOtp(updatedUser.email, updatedUser.businessName);
     const tenMinutes = 10 * 60 * 1000;
@@ -510,7 +515,7 @@ async function handleCurrency(user, text) {
     await updateUser(user.whatsappId, { currency });
     await updateUserState(user.whatsappId, USER_STATES.IDLE);
     await sendTextMessage(user.whatsappId, `Excellent! Your account is fully set up with ${currency} as your currency. 🎉`);
-    await sendMainMenu(user.whatsappId); // Send main menu instead of quick start buttons
+    await sendMainMenu(user.whatsappId); 
   } else {
     await sendTextMessage(user.whatsappId, "I didn't recognize that currency. Please tell me your main currency, like 'Naira', 'Dollars', or 'GHS'.");
   }

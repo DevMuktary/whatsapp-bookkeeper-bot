@@ -4,7 +4,7 @@ import { getAllBankAccounts } from '../db/bankService.js';
 import { getRecentTransactions } from '../db/transactionService.js';
 import { extractOnboardingDetails, extractCurrency, getIntent, gatherSaleDetails, gatherExpenseDetails, gatherProductDetails, gatherPaymentDetails, gatherBankAccountDetails } from '../services/aiService.js';
 import { sendOtp } from '../services/emailService.js';
-import { sendTextMessage, sendInteractiveButtons, sendInteractiveList, sendMainMenu, sendReportMenu } from '../api/whatsappService.js';
+import { sendTextMessage, sendInteractiveButtons, sendInteractiveList, sendMainMenu, sendReportMenu, markMessageAsRead, setTypingIndicator } from '../api/whatsappService.js';
 import { USER_STATES, INTENTS } from '../utils/constants.js';
 import logger from '../utils/logger.js';
 import { executeTask } from './taskHandler.js';
@@ -63,15 +63,18 @@ const parseProductList = (text) => {
 
 export async function handleMessage(message) {
   const whatsappId = message.from;
+  const messageId = message.id; // Get Message ID for Read Receipt
   const originalText = message.text.body;
   const lowerCaseText = originalText.trim().toLowerCase();
 
   try {
+    // [NEW] Turn ticks Blue and show Typing Indicator immediately
+    await markMessageAsRead(messageId);
+    await setTypingIndicator(whatsappId);
+
     const user = await findOrCreateUser(whatsappId);
 
     // --- 1. STRICT ONBOARDING GATEKEEPER ---
-    // If user is in an onboarding state, force them to finish. 
-    // Do NOT check for 'cancel' or AI intents.
     const onboardingStates = [
         USER_STATES.NEW_USER,
         USER_STATES.ONBOARDING_AWAIT_BUSINESS_AND_EMAIL,
@@ -86,7 +89,7 @@ export async function handleMessage(message) {
             case USER_STATES.ONBOARDING_AWAIT_OTP: await handleOtp(user, originalText); break;
             case USER_STATES.ONBOARDING_AWAIT_CURRENCY: await handleCurrency(user, originalText); break;
         }
-        return; // Stop here. No other logic runs until onboarding is done.
+        return; 
     }
 
     // --- 2. HANDLE CANCELLATION (Only for logged-in users) ---

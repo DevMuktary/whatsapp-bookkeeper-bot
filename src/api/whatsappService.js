@@ -18,6 +18,41 @@ async function sendMessage(data) {
   }
 }
 
+// [NEW] Marks the message as read (Blue Ticks)
+export async function markMessageAsRead(messageId) {
+    try {
+        await axios.post(`${WHATSAPP_GRAPH_URL}/${config.whatsapp.phoneNumberId}/messages`, {
+            messaging_product: 'whatsapp',
+            status: 'read',
+            message_id: messageId
+        }, {
+            headers: {
+                'Authorization': `Bearer ${config.whatsapp.token}`,
+                'Content-Type': 'application/json'
+            }
+        });
+    } catch (error) {
+        // We suppress errors here to avoid log noise if a read receipt fails
+        // logger.warn('Failed to mark message as read:', error.message);
+    }
+}
+
+// [NEW] Sets the "Typing..." indicator
+export async function setTypingIndicator(to) {
+    try {
+        await sendMessage({
+            messaging_product: 'whatsapp',
+            to: to,
+            type: 'action',
+            action: {
+                name: 'typing_on'
+            }
+        });
+    } catch (error) {
+        // Suppress typing errors
+    }
+}
+
 export async function uploadMedia(buffer, mimeType) {
     try {
         const form = new FormData();
@@ -145,7 +180,7 @@ export async function sendReportMenu(to) {
                 { id: 'generate sales report', title: 'Sales Report', description: 'Get a PDF of all sales.' },
                 { id: 'generate expense report', title: 'Expense Report', description: 'Get a PDF of all expenses.' },
                 { id: 'generate p&l report', title: 'Profit & Loss Report', description: 'See your revenue, costs, and profit.' },
-                { id: 'generate cogs report', title: 'Cost of Sales Report', description: 'View cost of goods sold.' }, // [NEW ITEM ADDED HERE]
+                { id: 'generate cogs report', title: 'Cost of Sales Report', description: 'View cost of goods sold.' },
                 { id: 'generate inventory report', title: 'Inventory Report', description: 'Get a PDF of your current stock.' },
             ]
         }

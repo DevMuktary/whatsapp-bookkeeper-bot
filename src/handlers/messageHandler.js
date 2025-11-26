@@ -4,7 +4,7 @@ import { getAllBankAccounts } from '../db/bankService.js';
 import { getRecentTransactions } from '../db/transactionService.js';
 import { extractOnboardingDetails, extractCurrency, getIntent, gatherSaleDetails, gatherExpenseDetails, gatherProductDetails, gatherPaymentDetails, gatherBankAccountDetails } from '../services/aiService.js';
 import { sendOtp } from '../services/emailService.js';
-import { sendTextMessage, sendInteractiveButtons, sendInteractiveList, sendMainMenu, sendReportMenu, markMessageAsRead, setTypingIndicator } from '../api/whatsappService.js';
+import { sendTextMessage, sendInteractiveButtons, sendInteractiveList, sendMainMenu, sendReportMenu, setTypingIndicator } from '../api/whatsappService.js';
 import { USER_STATES, INTENTS } from '../utils/constants.js';
 import logger from '../utils/logger.js';
 import { executeTask } from './taskHandler.js';
@@ -63,14 +63,13 @@ const parseProductList = (text) => {
 
 export async function handleMessage(message) {
   const whatsappId = message.from;
-  const messageId = message.id; 
+  const messageId = message.id; // [UPDATED] Capture Message ID
   const originalText = message.text.body;
   const lowerCaseText = originalText.trim().toLowerCase();
 
   try {
-    // [UPDATED] Turn ticks Blue and show Typing Indicator using 'on'
-    await markMessageAsRead(messageId);
-    await setTypingIndicator(whatsappId, 'on');
+    // [UPDATED] Set Typing Indicator (and Mark Read) using the combined logic
+    await setTypingIndicator(whatsappId, 'on', messageId);
 
     const user = await findOrCreateUser(whatsappId);
 

@@ -14,9 +14,9 @@ export async function handleInteractiveMessage(message) {
     const messageId = message.id;
     const interactive = message.interactive;
     
-    // [NEW] Turn ticks Blue and show Typing Indicator
+    // [UPDATED] Turn ticks Blue and show Typing Indicator using 'on'
     await markMessageAsRead(messageId);
-    await setTypingIndicator(whatsappId);
+    await setTypingIndicator(whatsappId, 'on');
 
     const user = await findOrCreateUser(whatsappId);
 

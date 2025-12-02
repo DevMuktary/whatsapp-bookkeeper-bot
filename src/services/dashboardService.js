@@ -1,5 +1,5 @@
 import { ObjectId } from 'mongodb';
-import { getTransactionsByDateRange } from '../db/transactionService.js';
+import { getDB } from '../db/connection.js'; // Import direct DB connection
 import { getAllProducts, findProductByName } from '../db/productService.js';
 import { 
     generatePnLReport, 
@@ -8,26 +8,40 @@ import {
     generateInventoryReport, 
     generateCOGSReport 
 } from './pdfService.js';
-import { findUserById } from '../db/userService.js'; // [FIX] Use ID lookup
+import { findUserById } from '../db/userService.js';
+
+const getTransactionsCollection = () => getDB().collection('transactions');
+
+// Helper to get transactions matching either String or ObjectId format
+async function fetchTransactionsFlexible(userId, startDate, endDate) {
+    let validObjectId;
+    try { validObjectId = new ObjectId(userId); } catch (e) { validObjectId = null; }
+
+    const query = {
+        $or: [
+            { userId: userId.toString() }, // Check String format
+            ...(validObjectId ? [{ userId: validObjectId }] : []) // Check ObjectId format if valid
+        ],
+        date: { 
+            $gte: startDate, 
+            $lte: endDate 
+        }
+    };
+
+    return await getTransactionsCollection().find(query).toArray();
+}
 
 /**
- * Aggregates data for the Dashboard Charts
+ * Aggregates data for the Dashboard Charts (Last 12 Months)
  */
-export async function getDashboardStats(userIdString) {
-    // Convert String ID to ObjectId
-    let validUserId;
-    try {
-        validUserId = new ObjectId(userIdString);
-    } catch (e) {
-        throw new Error("Invalid User ID format");
-    }
-
+export async function getDashboardStats(userId) {
     const endDate = new Date();
     const startDate = new Date();
     startDate.setMonth(startDate.getMonth() - 11); 
     startDate.setDate(1); 
 
-    const transactions = await getTransactionsByDateRange(validUserId, null, startDate, endDate);
+    // [FIX] Use the flexible fetcher
+    const transactions = await fetchTransactionsFlexible(userId, startDate, endDate);
 
     // Initialize map
     const monthlyData = {};
@@ -40,7 +54,6 @@ export async function getDashboardStats(userIdString) {
 
     let totalRevenue = 0;
     let totalExpenses = 0;
-    let recentTransactions = [];
 
     transactions.forEach(tx => {
         const dateKey = new Date(tx.date).toLocaleString('default', { month: 'short', year: '2-digit' });
@@ -56,7 +69,7 @@ export async function getDashboardStats(userIdString) {
         }
     });
 
-    recentTransactions = transactions
+    const recentTransactions = transactions
         .sort((a, b) => new Date(b.date) - new Date(a.date))
         .slice(0, 5);
 
@@ -75,17 +88,11 @@ export async function getDashboardStats(userIdString) {
  * Generates a Long-Term Report
  */
 export async function generateWebReport(userTokenData, type, startDateStr, endDateStr) {
-    const validUserId = new ObjectId(userTokenData.userId);
+    // userTokenData contains { userId, phone }
     
-    // [FIX] Use findUserById instead of phone lookup. 
-    // This ensures we get the EXACT user record associated with the token.
+    // Fetch full user details
     const user = await findUserById(userTokenData.userId);
-    
-    if (!user) {
-        throw new Error("User record not found for report generation.");
-    }
-
-    // Fallback if currency is missing in DB
+    if (!user) throw new Error("User record not found.");
     if (!user.currency) user.currency = 'NGN'; 
 
     const startDate = new Date(startDateStr);
@@ -94,7 +101,8 @@ export async function generateWebReport(userTokenData, type, startDateStr, endDa
 
     let transactions = [];
     if (type !== 'inventory') {
-        transactions = await getTransactionsByDateRange(validUserId, null, startDate, endDate);
+        // [FIX] Use flexible fetcher here too
+        transactions = await fetchTransactionsFlexible(userTokenData.userId, startDate, endDate);
     }
     
     const periodTitle = `${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`;
@@ -109,18 +117,26 @@ export async function generateWebReport(userTokenData, type, startDateStr, endDa
         pdfBuffer = await generateExpenseReport(user, expenses, periodTitle);
 
     } else if (type === 'inventory') {
-        const products = await getAllProducts(validUserId);
+        let validObjectId;
+        try { validObjectId = new ObjectId(userTokenData.userId); } catch (e) { validObjectId = null; }
+        
+        // Inventory usually uses ObjectId, but let's be safe if your product service supports strings
+        const products = await getAllProducts(validObjectId || userTokenData.userId);
         pdfBuffer = await generateInventoryReport(user, products);
 
     } else if (type === 'cogs') {
         const sales = transactions.filter(t => t.type === 'SALE');
         const cogsItems = [];
         
+        let validObjectId;
+        try { validObjectId = new ObjectId(userTokenData.userId); } catch (e) { validObjectId = null; }
+        const lookupId = validObjectId || userTokenData.userId;
+
         for (const sale of sales) {
             if (sale.items) {
                 for (const item of sale.items) {
                     if (item.productId && !item.isService) { 
-                        const product = await findProductByName(validUserId, item.productName); 
+                        const product = await findProductByName(lookupId, item.productName); 
                         const costPrice = (product && product.costPrice != null) ? product.costPrice : 0;
                         
                         cogsItems.push({
@@ -141,12 +157,16 @@ export async function generateWebReport(userTokenData, type, startDateStr, endDa
         const expensesTotal = transactions.filter(t => t.type === 'EXPENSE').reduce((sum, t) => sum + t.amount, 0);
         
         let cogsTotal = 0;
+        let validObjectId;
+        try { validObjectId = new ObjectId(userTokenData.userId); } catch (e) { validObjectId = null; }
+        const lookupId = validObjectId || userTokenData.userId;
+
         const sales = transactions.filter(t => t.type === 'SALE');
         for (const sale of sales) {
             if (sale.items) {
                 for (const item of sale.items) {
                     if (item.productId && !item.isService) {
-                        const product = await findProductByName(validUserId, item.productName);
+                        const product = await findProductByName(lookupId, item.productName);
                         if (product) cogsTotal += (product.costPrice * item.quantity);
                     }
                 }

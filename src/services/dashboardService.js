@@ -1,3 +1,4 @@
+import { ObjectId } from 'mongodb'; // [CRITICAL FIX] Import ObjectId
 import { getTransactionsByDateRange } from '../db/transactionService.js';
 import { getAllProducts, findProductByName } from '../db/productService.js';
 import { 
@@ -12,13 +13,16 @@ import { findOrCreateUser } from '../db/userService.js';
 /**
  * Aggregates data for the Dashboard Charts (Last 12 Months)
  */
-export async function getDashboardStats(userId) {
+export async function getDashboardStats(userIdStr) {
+    // [FIX] Ensure userId is a Mongo ObjectId, not a string
+    const userId = new ObjectId(userIdStr);
+
     const endDate = new Date();
     const startDate = new Date();
     startDate.setMonth(startDate.getMonth() - 11); // Go back 12 months
     startDate.setDate(1); // Start from 1st of that month
 
-    // Fetch all transactions for the year
+    // Fetch all transactions for the year using the correct ObjectId
     const transactions = await getTransactionsByDateRange(userId, null, startDate, endDate);
 
     // Initialize map for 12 months
@@ -66,15 +70,20 @@ export async function getDashboardStats(userId) {
 /**
  * Generates a Long-Term Report (1 to 10 Years)
  */
-export async function generateWebReport(userId, type, startDateStr, endDateStr) {
-    const user = await findOrCreateUser(userId); // Need user details for PDF header
+export async function generateWebReport(userPhone, type, startDateStr, endDateStr) {
+    // 1. Fetch User Details using Phone (to get Name/Currency for PDF)
+    const user = await findOrCreateUser(userPhone); 
+    
+    // [CRITICAL FIX] Use the database _id from the user object, not the phone number
+    const userId = new ObjectId(user._id);
+
     const startDate = new Date(startDateStr);
     const endDate = new Date(endDateStr);
     
     // Set End Date to end of day
     endDate.setHours(23, 59, 59, 999);
 
-    // If it's NOT Inventory, fetch transactions first
+    // If it's NOT Inventory, fetch transactions first using the correct userId
     let transactions = [];
     if (type !== 'inventory') {
         transactions = await getTransactionsByDateRange(userId, null, startDate, endDate);
@@ -104,7 +113,6 @@ export async function generateWebReport(userId, type, startDateStr, endDateStr) 
         for (const sale of sales) {
             if (sale.items && sale.items.length > 0) {
                 for (const item of sale.items) {
-                    // Only track tangible products, ignore services
                     if (item.productId && !item.isService) { 
                         const product = await findProductByName(userId, item.productName); 
                         const costPrice = (product && product.costPrice != null) ? product.costPrice : 0;

@@ -8,13 +8,13 @@ import {
     generateInventoryReport, 
     generateCOGSReport 
 } from './pdfService.js';
-import { findOrCreateUser } from '../db/userService.js';
+import { findUserById } from '../db/userService.js'; // [FIX] Use ID lookup
 
 /**
- * Aggregates data for the Dashboard Charts (Last 12 Months)
+ * Aggregates data for the Dashboard Charts
  */
 export async function getDashboardStats(userIdString) {
-    // [FIX] Safely convert String ID to ObjectId
+    // Convert String ID to ObjectId
     let validUserId;
     try {
         validUserId = new ObjectId(userIdString);
@@ -75,18 +75,24 @@ export async function getDashboardStats(userIdString) {
  * Generates a Long-Term Report
  */
 export async function generateWebReport(userTokenData, type, startDateStr, endDateStr) {
-    // [FIX] userTokenData contains { userId, phone }
     const validUserId = new ObjectId(userTokenData.userId);
     
-    // Fetch full user details (Business Name, Currency) using the phone number
-    const user = await findOrCreateUser(userTokenData.phone);
+    // [FIX] Use findUserById instead of phone lookup. 
+    // This ensures we get the EXACT user record associated with the token.
+    const user = await findUserById(userTokenData.userId);
     
+    if (!user) {
+        throw new Error("User record not found for report generation.");
+    }
+
+    // Fallback if currency is missing in DB
+    if (!user.currency) user.currency = 'NGN'; 
+
     const startDate = new Date(startDateStr);
     const endDate = new Date(endDateStr);
     endDate.setHours(23, 59, 59, 999);
 
     let transactions = [];
-    // Only fetch transactions if not inventory
     if (type !== 'inventory') {
         transactions = await getTransactionsByDateRange(validUserId, null, startDate, endDate);
     }

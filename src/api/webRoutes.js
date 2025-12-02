@@ -37,7 +37,7 @@ router.post('/auth/verify', async (req, res) => {
 
 router.get('/dashboard', authenticateWebUser, async (req, res) => {
     try {
-        // req.user comes from the JWT middleware
+        // req.user.userId is the database _id string from JWT
         const data = await getDashboardStats(req.user.userId);
         res.json(data);
     } catch (error) {
@@ -56,6 +56,8 @@ router.post('/reports/generate', authenticateWebUser, async (req, res) => {
             return res.status(400).json({ error: "Missing report parameters" });
         }
 
+        // We pass the PHONE number here, so the service can look up the full user profile
+        // and then get the correct _id for transactions
         const pdfBuffer = await generateWebReport(req.user.phone, type, startDate, endDate);
         
         if (!pdfBuffer) {
@@ -74,4 +76,5 @@ router.post('/reports/generate', authenticateWebUser, async (req, res) => {
 });
 
 export default router;
+
 

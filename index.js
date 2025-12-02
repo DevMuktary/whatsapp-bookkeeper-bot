@@ -8,7 +8,7 @@ import whatsappWebhook from './src/webhooks/whatsapp.js';
 import webRoutes from './src/api/webRoutes.js';
 import { connectToDB } from './src/db/connection.js';
 
-// Setup for static file path (ES Modules fix)
+// Setup for static file path
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -27,8 +27,8 @@ app.use(express.json({
 }));
 
 // --- SERVE FRONTEND ---
-// This makes the 'public' folder accessible (e.g., http://localhost:3000/login.html)
-app.use(express.static(path.join(__dirname, 'public')));
+// Ensure this path is correct. If your index.js is in the root, 'public' should be in the root.
+app.use(express.static(path.resolve(__dirname, 'public')));
 
 // --- DATABASE CONNECTION ---
 try {
@@ -41,7 +41,7 @@ try {
 
 // --- ROUTES ---
 
-// 1. Web Dashboard API (Login, Charts, Reports)
+// 1. Web Dashboard API
 app.use('/api', webRoutes);
 
 // 2. WhatsApp Webhook
@@ -53,4 +53,5 @@ app.listen(PORT, () => {
   logger.info(`Server is running on port ${PORT}.`);
   logger.info(`Dashboard accessible at http://localhost:${PORT}/login.html`);
 });
+
 

@@ -154,7 +154,7 @@
 
                 const data = await res.json();
                 renderStats(data.summary);
-                renderChart(data.summary); // Pass summary for the round chart
+                renderChart(data.summary); 
                 renderTransactions(data.recentTransactions);
             } catch (err) {
                 console.error("Dashboard Load Error:", err);
@@ -196,7 +196,7 @@
             if (financeChart) financeChart.destroy();
 
             financeChart = new Chart(ctx, {
-                type: 'doughnut', // Round Chart!
+                type: 'doughnut', // Round Chart
                 data: {
                     labels: ['Income (Sales)', 'Expenses'],
                     datasets: [
@@ -210,7 +210,7 @@
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
-                    cutout: '70%', // Makes it a nice ring
+                    cutout: '70%', 
                     plugins: {
                         legend: { position: 'bottom' }
                     }
@@ -266,4 +266,5 @@
     </script>
 </body>
 </html>
+
 

@@ -4,9 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Fynax Dashboard</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script src="[https://cdn.tailwindcss.com](https://cdn.tailwindcss.com)"></script>
+    <script src="[https://cdn.jsdelivr.net/npm/chart.js](https://cdn.jsdelivr.net/npm/chart.js)"></script>
+    <link href="[https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css](https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css)" rel="stylesheet">
     <script>
         tailwind.config = { theme: { extend: { colors: { brand: { 500: '#3b82f6', 600: '#2563eb' } } } } }
     </script>
@@ -32,11 +32,11 @@
         <!-- Stats Overview -->
         <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
             <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
-                <div class="text-slate-500 text-sm font-medium mb-1">Total Sales (12M)</div>
+                <div class="text-slate-500 text-sm font-medium mb-1">Total Revenue</div>
                 <div class="text-2xl font-bold text-green-600" id="stat-sales">Loading...</div>
             </div>
             <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
-                <div class="text-slate-500 text-sm font-medium mb-1">Total Expenses (12M)</div>
+                <div class="text-slate-500 text-sm font-medium mb-1">Total Expenses</div>
                 <div class="text-2xl font-bold text-red-500" id="stat-expenses">Loading...</div>
             </div>
             <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
@@ -47,37 +47,41 @@
 
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
             
-            <!-- Main Chart Area -->
-            <div class="lg:col-span-2 bg-white p-6 rounded-xl shadow-sm border border-slate-100">
-                <h3 class="font-bold text-lg mb-6">Financial Performance (Last 12 Months)</h3>
-                <canvas id="financeChart" height="250"></canvas>
+            <!-- Round Chart Area -->
+            <div class="lg:col-span-2 bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex flex-col items-center">
+                <h3 class="font-bold text-lg mb-2 self-start w-full">Financial Overview</h3>
+                <div class="w-full max-w-sm h-64 relative">
+                    <canvas id="financeChart"></canvas>
+                </div>
             </div>
 
             <!-- Report Generator -->
             <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100 h-fit">
                 <div class="mb-6 border-b border-slate-100 pb-4">
                     <h3 class="font-bold text-lg">Generate Reports</h3>
-                    <p class="text-slate-500 text-sm">Download comprehensive PDFs for any period.</p>
+                    <p class="text-slate-500 text-sm">Download PDF reports for any period.</p>
                 </div>
 
                 <form id="report-form" onsubmit="generateReport(event)">
                     <div class="mb-4">
                         <label class="block text-sm font-medium text-slate-700 mb-2">Report Type</label>
-                        <select id="report-type" class="w-full border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-brand-500 outline-none">
+                        <select id="report-type" onchange="toggleDateInputs()" class="w-full border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-brand-500 outline-none">
                             <option value="sales">Sales Report</option>
                             <option value="expenses">Expense Report</option>
                             <option value="pnl">Profit & Loss Statement</option>
+                            <option value="cogs">Cost of Sales Report</option>
+                            <option value="inventory">Inventory Report</option>
                         </select>
                     </div>
 
-                    <div class="grid grid-cols-2 gap-4 mb-6">
+                    <div id="date-inputs" class="grid grid-cols-2 gap-4 mb-6">
                         <div>
                             <label class="block text-sm font-medium text-slate-700 mb-2">Start Date</label>
-                            <input type="date" id="start-date" required class="w-full border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-brand-500 outline-none">
+                            <input type="date" id="start-date" class="w-full border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-brand-500 outline-none">
                         </div>
                         <div>
                             <label class="block text-sm font-medium text-slate-700 mb-2">End Date</label>
-                            <input type="date" id="end-date" required class="w-full border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-brand-500 outline-none">
+                            <input type="date" id="end-date" class="w-full border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-brand-500 outline-none">
                         </div>
                     </div>
 
@@ -116,31 +120,41 @@
         const token = localStorage.getItem('fynax_token');
         const userStr = localStorage.getItem('fynax_user');
 
-        // 1. Auth Check
+        // Auth Check
         if (!token) window.location.href = '/login.html';
         if (userStr) {
             const user = JSON.parse(userStr);
             document.getElementById('user-name').innerText = user.businessName || 'Business Owner';
         }
 
-        // 2. Logout
         function logout() {
             localStorage.clear();
             window.location.href = '/login.html';
         }
 
-        // 3. Load Dashboard Data
+        function toggleDateInputs() {
+            const type = document.getElementById('report-type').value;
+            const dateInputs = document.getElementById('date-inputs');
+            if (type === 'inventory') {
+                dateInputs.style.opacity = '0.5';
+                dateInputs.style.pointerEvents = 'none';
+            } else {
+                dateInputs.style.opacity = '1';
+                dateInputs.style.pointerEvents = 'auto';
+            }
+        }
+
         async function loadData() {
             try {
                 const res = await fetch(`${API_URL}/dashboard`, {
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
                 
-                if (res.status === 401 || res.status === 403) logout(); // Token expired
+                if (res.status === 401 || res.status === 403) logout(); 
 
                 const data = await res.json();
                 renderStats(data.summary);
-                renderChart(data.chartData);
+                renderChart(data.summary); // Pass summary for the round chart
                 renderTransactions(data.recentTransactions);
             } catch (err) {
                 console.error("Dashboard Load Error:", err);
@@ -177,49 +191,43 @@
         }
 
         let financeChart;
-        function renderChart(data) {
+        function renderChart(summary) {
             const ctx = document.getElementById('financeChart').getContext('2d');
             if (financeChart) financeChart.destroy();
 
             financeChart = new Chart(ctx, {
-                type: 'bar',
+                type: 'doughnut', // Round Chart!
                 data: {
-                    labels: data.map(d => d.name),
+                    labels: ['Income (Sales)', 'Expenses'],
                     datasets: [
                         {
-                            label: 'Sales',
-                            data: data.map(d => d.sales),
-                            backgroundColor: '#22c55e',
-                            borderRadius: 4
-                        },
-                        {
-                            label: 'Expenses',
-                            data: data.map(d => d.expenses),
-                            backgroundColor: '#ef4444',
-                            borderRadius: 4
+                            data: [summary.totalRevenue, summary.totalExpenses],
+                            backgroundColor: ['#22c55e', '#ef4444'], // Green for Sales, Red for Expenses
+                            hoverOffset: 4
                         }
                     ]
                 },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
+                    cutout: '70%', // Makes it a nice ring
                     plugins: {
-                        legend: { position: 'top' }
-                    },
-                    scales: {
-                        y: { beginAtZero: true }
+                        legend: { position: 'bottom' }
                     }
                 }
             });
         }
 
-        // 4. Handle Report Generation
         async function generateReport(e) {
             e.preventDefault();
             const btn = document.getElementById('btn-report');
             const type = document.getElementById('report-type').value;
-            const startDate = document.getElementById('start-date').value;
-            const endDate = document.getElementById('end-date').value;
+            let startDate = document.getElementById('start-date').value;
+            let endDate = document.getElementById('end-date').value;
+
+            // Default dates if empty (e.g. for inventory which ignores them anyway)
+            if (!startDate) startDate = new Date().toISOString().split('T')[0];
+            if (!endDate) endDate = new Date().toISOString().split('T')[0];
 
             btn.disabled = true;
             btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Generating...';
@@ -236,7 +244,6 @@
 
                 if (!res.ok) throw new Error("Failed to generate report");
 
-                // Trigger Download
                 const blob = await res.blob();
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
@@ -255,8 +262,8 @@
             }
         }
 
-        // Initial Load
         loadData();
     </script>
 </body>
 </html>
+

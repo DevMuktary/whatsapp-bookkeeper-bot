@@ -1,6 +1,12 @@
 import { getTransactionsByDateRange } from '../db/transactionService.js';
-import { getDateRange } from '../utils/dateUtils.js';
-import { generatePnLReport, generateSalesReport } from './pdfService.js';
+import { getAllProducts, findProductByName } from '../db/productService.js';
+import { 
+    generatePnLReport, 
+    generateSalesReport, 
+    generateExpenseReport, 
+    generateInventoryReport, 
+    generateCOGSReport 
+} from './pdfService.js';
 import { findOrCreateUser } from '../db/userService.js';
 
 /**
@@ -68,25 +74,71 @@ export async function generateWebReport(userId, type, startDateStr, endDateStr) 
     // Set End Date to end of day
     endDate.setHours(23, 59, 59, 999);
 
-    const transactions = await getTransactionsByDateRange(userId, null, startDate, endDate);
+    // If it's NOT Inventory, fetch transactions first
+    let transactions = [];
+    if (type !== 'inventory') {
+        transactions = await getTransactionsByDateRange(userId, null, startDate, endDate);
+    }
+    
     const periodTitle = `${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`;
-
     let pdfBuffer;
 
     if (type === 'sales') {
         const sales = transactions.filter(t => t.type === 'SALE');
         pdfBuffer = await generateSalesReport(user, sales, periodTitle);
+
     } else if (type === 'expenses') {
         const expenses = transactions.filter(t => t.type === 'EXPENSE');
         pdfBuffer = await generateExpenseReport(user, expenses, periodTitle);
+
+    } else if (type === 'inventory') {
+        // Inventory is a snapshot, ignore dates
+        const products = await getAllProducts(userId);
+        pdfBuffer = await generateInventoryReport(user, products);
+
+    } else if (type === 'cogs') {
+        // Cost of Sales Logic
+        const sales = transactions.filter(t => t.type === 'SALE');
+        const cogsItems = [];
+        
+        for (const sale of sales) {
+            if (sale.items && sale.items.length > 0) {
+                for (const item of sale.items) {
+                    // Only track tangible products, ignore services
+                    if (item.productId && !item.isService) { 
+                        const product = await findProductByName(userId, item.productName); 
+                        const costPrice = (product && product.costPrice != null) ? product.costPrice : 0;
+                        
+                        cogsItems.push({
+                            date: sale.date,
+                            productName: item.productName,
+                            quantity: item.quantity,
+                            costPrice: costPrice,
+                            totalCost: costPrice * item.quantity
+                        });
+                    }
+                }
+            }
+        }
+        pdfBuffer = await generateCOGSReport(user, cogsItems, periodTitle);
+
     } else if (type === 'pnl') {
-        // Reuse PnL Logic manually here to avoid circular dependencies
         const salesTotal = transactions.filter(t => t.type === 'SALE').reduce((sum, t) => sum + t.amount, 0);
         const expensesTotal = transactions.filter(t => t.type === 'EXPENSE').reduce((sum, t) => sum + t.amount, 0);
         
-        // Simple Cost of Sales (COGS) approximation for PnL
-        // (In a real app, you'd calculate this strictly item by item like in taskHandler)
-        let cogsTotal = 0; 
+        // Calculate COGS for PnL accuracy
+        let cogsTotal = 0;
+        const sales = transactions.filter(t => t.type === 'SALE');
+        for (const sale of sales) {
+            if (sale.items) {
+                for (const item of sale.items) {
+                    if (item.productId && !item.isService) {
+                        const product = await findProductByName(userId, item.productName);
+                        if (product) cogsTotal += (product.costPrice * item.quantity);
+                    }
+                }
+            }
+        }
         
         // Build Expense Categories
         const expenseMap = {};
@@ -99,7 +151,7 @@ export async function generateWebReport(userId, type, startDateStr, endDateStr) 
 
         const pnlData = {
             totalSales: salesTotal,
-            totalCogs: cogsTotal, // You can refine this by fetching items if needed
+            totalCogs: cogsTotal,
             grossProfit: salesTotal - cogsTotal,
             totalExpenses: expensesTotal,
             netProfit: (salesTotal - cogsTotal) - expensesTotal,
@@ -111,4 +163,5 @@ export async function generateWebReport(userId, type, startDateStr, endDateStr) 
 
     return pdfBuffer;
 }
+
 

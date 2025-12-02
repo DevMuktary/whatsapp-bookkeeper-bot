@@ -1,4 +1,4 @@
-import { ObjectId } from 'mongodb'; // [CRITICAL FIX] Import ObjectId
+import { ObjectId } from 'mongodb'; // [FIX] Import ObjectId
 import { getTransactionsByDateRange } from '../db/transactionService.js';
 import { getAllProducts, findProductByName } from '../db/productService.js';
 import { 
@@ -13,23 +13,25 @@ import { findOrCreateUser } from '../db/userService.js';
 /**
  * Aggregates data for the Dashboard Charts (Last 12 Months)
  */
-export async function getDashboardStats(userIdStr) {
-    // [FIX] Ensure userId is a Mongo ObjectId, not a string
-    const userId = new ObjectId(userIdStr);
+export async function getDashboardStats(userId) {
+    // [FIX] Convert String ID to ObjectId for Database Query
+    const validUserId = new ObjectId(userId);
 
     const endDate = new Date();
     const startDate = new Date();
     startDate.setMonth(startDate.getMonth() - 11); // Go back 12 months
     startDate.setDate(1); // Start from 1st of that month
 
-    // Fetch all transactions for the year using the correct ObjectId
-    const transactions = await getTransactionsByDateRange(userId, null, startDate, endDate);
+    // Fetch all transactions for the year
+    const transactions = await getTransactionsByDateRange(validUserId, null, startDate, endDate);
 
-    // Initialize map for 12 months
+    // Initialize map for 12 months (Robust Date Logic)
     const monthlyData = {};
-    for (let d = new Date(startDate); d <= endDate; d.setMonth(d.getMonth() + 1)) {
-        const key = d.toLocaleString('default', { month: 'short', year: '2-digit' }); // e.g. "Jan 24"
+    let tempDate = new Date(startDate);
+    while (tempDate <= endDate) {
+        const key = tempDate.toLocaleString('default', { month: 'short', year: '2-digit' });
         monthlyData[key] = { name: key, sales: 0, expenses: 0 };
+        tempDate.setMonth(tempDate.getMonth() + 1);
     }
 
     // Aggregate Data
@@ -40,6 +42,7 @@ export async function getDashboardStats(userIdStr) {
     transactions.forEach(tx => {
         const dateKey = new Date(tx.date).toLocaleString('default', { month: 'short', year: '2-digit' });
         
+        // Only aggregate if it falls within our chart buckets
         if (monthlyData[dateKey]) {
             if (tx.type === 'SALE') {
                 monthlyData[dateKey].sales += tx.amount;
@@ -57,7 +60,7 @@ export async function getDashboardStats(userIdStr) {
         .slice(0, 5);
 
     return {
-        chartData: Object.values(monthlyData), // Array for Recharts/Chart.js
+        chartData: Object.values(monthlyData), 
         summary: {
             totalRevenue,
             totalExpenses,
@@ -70,23 +73,25 @@ export async function getDashboardStats(userIdStr) {
 /**
  * Generates a Long-Term Report (1 to 10 Years)
  */
-export async function generateWebReport(userPhone, type, startDateStr, endDateStr) {
-    // 1. Fetch User Details using Phone (to get Name/Currency for PDF)
-    const user = await findOrCreateUser(userPhone); 
+export async function generateWebReport(userId, type, startDateStr, endDateStr) {
+    // [FIX] Convert ID here too
+    const validUserId = new ObjectId(userId);
     
-    // [CRITICAL FIX] Use the database _id from the user object, not the phone number
-    const userId = new ObjectId(user._id);
-
+    // We pass the RAW phone/string to findOrCreateUser because that function expects a phone string, NOT an ObjectId
+    // But for transactions, we need the ObjectId.
+    // Let's re-fetch the user to get the clean object.
+    const user = await findOrCreateUser(userId.toString()); // Ensure string for user lookup if that's how your DB works
+    
     const startDate = new Date(startDateStr);
     const endDate = new Date(endDateStr);
     
     // Set End Date to end of day
     endDate.setHours(23, 59, 59, 999);
 
-    // If it's NOT Inventory, fetch transactions first using the correct userId
+    // If it's NOT Inventory, fetch transactions first using the VALID ObjectId
     let transactions = [];
     if (type !== 'inventory') {
-        transactions = await getTransactionsByDateRange(userId, null, startDate, endDate);
+        transactions = await getTransactionsByDateRange(validUserId, null, startDate, endDate);
     }
     
     const periodTitle = `${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`;
@@ -101,8 +106,8 @@ export async function generateWebReport(userPhone, type, startDateStr, endDateSt
         pdfBuffer = await generateExpenseReport(user, expenses, periodTitle);
 
     } else if (type === 'inventory') {
-        // Inventory is a snapshot, ignore dates
-        const products = await getAllProducts(userId);
+        // Inventory uses validUserId
+        const products = await getAllProducts(validUserId);
         pdfBuffer = await generateInventoryReport(user, products);
 
     } else if (type === 'cogs') {
@@ -114,7 +119,7 @@ export async function generateWebReport(userPhone, type, startDateStr, endDateSt
             if (sale.items && sale.items.length > 0) {
                 for (const item of sale.items) {
                     if (item.productId && !item.isService) { 
-                        const product = await findProductByName(userId, item.productName); 
+                        const product = await findProductByName(validUserId, item.productName); 
                         const costPrice = (product && product.costPrice != null) ? product.costPrice : 0;
                         
                         cogsItems.push({
@@ -134,21 +139,19 @@ export async function generateWebReport(userPhone, type, startDateStr, endDateSt
         const salesTotal = transactions.filter(t => t.type === 'SALE').reduce((sum, t) => sum + t.amount, 0);
         const expensesTotal = transactions.filter(t => t.type === 'EXPENSE').reduce((sum, t) => sum + t.amount, 0);
         
-        // Calculate COGS for PnL accuracy
         let cogsTotal = 0;
         const sales = transactions.filter(t => t.type === 'SALE');
         for (const sale of sales) {
             if (sale.items) {
                 for (const item of sale.items) {
                     if (item.productId && !item.isService) {
-                        const product = await findProductByName(userId, item.productName);
+                        const product = await findProductByName(validUserId, item.productName);
                         if (product) cogsTotal += (product.costPrice * item.quantity);
                     }
                 }
             }
         }
         
-        // Build Expense Categories
         const expenseMap = {};
         transactions.filter(t => t.type === 'EXPENSE').forEach(t => {
             expenseMap[t.category] = (expenseMap[t.category] || 0) + t.amount;
@@ -171,5 +174,3 @@ export async function generateWebReport(userPhone, type, startDateStr, endDateSt
 
     return pdfBuffer;
 }
-
-

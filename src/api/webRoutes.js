@@ -29,7 +29,7 @@ router.post('/auth/verify', async (req, res) => {
         res.json(result);
     } catch (error) {
         logger.error('Web login verify error:', error);
-        res.status(401).json({ error: error.message });
+        res.status(401).json({ error: "Invalid OTP or Code Expired" });
     }
 });
 
@@ -37,12 +37,12 @@ router.post('/auth/verify', async (req, res) => {
 
 router.get('/dashboard', authenticateWebUser, async (req, res) => {
     try {
-        // req.user.userId is the database _id string from JWT
+        // req.user contains { userId, phone, businessName } from the JWT
         const data = await getDashboardStats(req.user.userId);
         res.json(data);
     } catch (error) {
         logger.error('Dashboard data error:', error);
-        res.status(500).json({ error: "Failed to load dashboard" });
+        res.status(500).json({ error: "Failed to load dashboard data" });
     }
 });
 
@@ -56,9 +56,8 @@ router.post('/reports/generate', authenticateWebUser, async (req, res) => {
             return res.status(400).json({ error: "Missing report parameters" });
         }
 
-        // We pass the PHONE number here, so the service can look up the full user profile
-        // and then get the correct _id for transactions
-        const pdfBuffer = await generateWebReport(req.user.phone, type, startDate, endDate);
+        // [FIX] Pass the whole req.user object, not just phone
+        const pdfBuffer = await generateWebReport(req.user, type, startDate, endDate);
         
         if (!pdfBuffer) {
             return res.status(400).json({ error: "Could not generate report" });
@@ -71,7 +70,7 @@ router.post('/reports/generate', authenticateWebUser, async (req, res) => {
 
     } catch (error) {
         logger.error('Web report gen error:', error);
-        res.status(500).json({ error: "Failed to generate report" });
+        res.status(500).json({ error: "Failed to generate report. Please try again." });
     }
 });
 

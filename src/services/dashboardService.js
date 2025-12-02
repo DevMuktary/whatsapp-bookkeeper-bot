@@ -1,5 +1,5 @@
 import { ObjectId } from 'mongodb';
-import { getDB } from '../db/connection.js'; // Import direct DB connection
+import { getDB } from '../db/connection.js'; // Direct DB access to bypass strict helpers
 import { getAllProducts, findProductByName } from '../db/productService.js';
 import { 
     generatePnLReport, 
@@ -10,17 +10,19 @@ import {
 } from './pdfService.js';
 import { findUserById } from '../db/userService.js';
 
+// Internal helper to get the collection
 const getTransactionsCollection = () => getDB().collection('transactions');
 
-// Helper to get transactions matching either String or ObjectId format
+// [NEW] Flexible Fetcher: Checks for userId as String AND ObjectId
+// This ensures we find data regardless of how the bot saved it.
 async function fetchTransactionsFlexible(userId, startDate, endDate) {
     let validObjectId;
     try { validObjectId = new ObjectId(userId); } catch (e) { validObjectId = null; }
 
     const query = {
         $or: [
-            { userId: userId.toString() }, // Check String format
-            ...(validObjectId ? [{ userId: validObjectId }] : []) // Check ObjectId format if valid
+            { userId: userId.toString() }, // Case 1: Saved as String
+            ...(validObjectId ? [{ userId: validObjectId }] : []) // Case 2: Saved as ObjectId
         ],
         date: { 
             $gte: startDate, 
@@ -40,7 +42,7 @@ export async function getDashboardStats(userId) {
     startDate.setMonth(startDate.getMonth() - 11); 
     startDate.setDate(1); 
 
-    // [FIX] Use the flexible fetcher
+    // Use flexible fetcher
     const transactions = await fetchTransactionsFlexible(userId, startDate, endDate);
 
     // Initialize map
@@ -88,8 +90,6 @@ export async function getDashboardStats(userId) {
  * Generates a Long-Term Report
  */
 export async function generateWebReport(userTokenData, type, startDateStr, endDateStr) {
-    // userTokenData contains { userId, phone }
-    
     // Fetch full user details
     const user = await findUserById(userTokenData.userId);
     if (!user) throw new Error("User record not found.");
@@ -101,7 +101,7 @@ export async function generateWebReport(userTokenData, type, startDateStr, endDa
 
     let transactions = [];
     if (type !== 'inventory') {
-        // [FIX] Use flexible fetcher here too
+        // Use flexible fetcher here too
         transactions = await fetchTransactionsFlexible(userTokenData.userId, startDate, endDate);
     }
     
@@ -120,8 +120,9 @@ export async function generateWebReport(userTokenData, type, startDateStr, endDa
         let validObjectId;
         try { validObjectId = new ObjectId(userTokenData.userId); } catch (e) { validObjectId = null; }
         
-        // Inventory usually uses ObjectId, but let's be safe if your product service supports strings
-        const products = await getAllProducts(validObjectId || userTokenData.userId);
+        // Use either ID format for inventory lookup
+        const lookupId = validObjectId || userTokenData.userId;
+        const products = await getAllProducts(lookupId);
         pdfBuffer = await generateInventoryReport(user, products);
 
     } else if (type === 'cogs') {

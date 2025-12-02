@@ -4,12 +4,17 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Fynax Dashboard</title>
-    <script src="[https://cdn.tailwindcss.com](https://cdn.tailwindcss.com)"></script>
-    <script src="[https://cdn.jsdelivr.net/npm/chart.js](https://cdn.jsdelivr.net/npm/chart.js)"></script>
-    <link href="[https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css](https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css)" rel="stylesheet">
-    <script>
-        tailwind.config = { theme: { extend: { colors: { brand: { 500: '#3b82f6', 600: '#2563eb' } } } } }
-    </script>
+    <!-- Tailwind CSS (Standard CDN) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- FontAwesome -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        /* Basic fallback to prevent total skeleton if JS lags */
+        body { font-family: sans-serif; background-color: #f8fafc; }
+        .hidden { display: none; }
+    </style>
 </head>
 <body class="bg-slate-50 text-slate-800">
 
@@ -17,7 +22,7 @@
     <nav class="bg-white border-b border-slate-200 sticky top-0 z-30">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
             <div class="flex items-center gap-2">
-                <div class="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center text-white font-bold">F</div>
+                <div class="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold">F</div>
                 <span class="font-bold text-lg">Fynax Dashboard</span>
             </div>
             <div class="flex items-center gap-4">
@@ -65,7 +70,7 @@
                 <form id="report-form" onsubmit="generateReport(event)">
                     <div class="mb-4">
                         <label class="block text-sm font-medium text-slate-700 mb-2">Report Type</label>
-                        <select id="report-type" onchange="toggleDateInputs()" class="w-full border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-brand-500 outline-none">
+                        <select id="report-type" onchange="toggleDateInputs()" class="w-full border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-blue-500 outline-none bg-white">
                             <option value="sales">Sales Report</option>
                             <option value="expenses">Expense Report</option>
                             <option value="pnl">Profit & Loss Statement</option>
@@ -77,11 +82,11 @@
                     <div id="date-inputs" class="grid grid-cols-2 gap-4 mb-6">
                         <div>
                             <label class="block text-sm font-medium text-slate-700 mb-2">Start Date</label>
-                            <input type="date" id="start-date" class="w-full border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-brand-500 outline-none">
+                            <input type="date" id="start-date" class="w-full border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-blue-500 outline-none">
                         </div>
                         <div>
                             <label class="block text-sm font-medium text-slate-700 mb-2">End Date</label>
-                            <input type="date" id="end-date" class="w-full border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-brand-500 outline-none">
+                            <input type="date" id="end-date" class="w-full border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-blue-500 outline-none">
                         </div>
                     </div>
 
@@ -123,8 +128,10 @@
         // Auth Check
         if (!token) window.location.href = '/login.html';
         if (userStr) {
-            const user = JSON.parse(userStr);
-            document.getElementById('user-name').innerText = user.businessName || 'Business Owner';
+            try {
+                const user = JSON.parse(userStr);
+                document.getElementById('user-name').innerText = user.businessName || 'Business Owner';
+            } catch (e) {}
         }
 
         function logout() {
@@ -153,9 +160,9 @@
                 if (res.status === 401 || res.status === 403) logout(); 
 
                 const data = await res.json();
-                renderStats(data.summary);
-                renderChart(data.summary); 
-                renderTransactions(data.recentTransactions);
+                if (data.summary) renderStats(data.summary);
+                if (data.summary) renderChart(data.summary); 
+                if (data.recentTransactions) renderTransactions(data.recentTransactions);
             } catch (err) {
                 console.error("Dashboard Load Error:", err);
             }
@@ -163,14 +170,14 @@
 
         function renderStats(summary) {
             const fmt = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'NGN' }).format(n);
-            document.getElementById('stat-sales').innerText = fmt(summary.totalRevenue);
-            document.getElementById('stat-expenses').innerText = fmt(summary.totalExpenses);
-            document.getElementById('stat-profit').innerText = fmt(summary.netProfit);
+            document.getElementById('stat-sales').innerText = fmt(summary.totalRevenue || 0);
+            document.getElementById('stat-expenses').innerText = fmt(summary.totalExpenses || 0);
+            document.getElementById('stat-profit').innerText = fmt(summary.netProfit || 0);
         }
 
         function renderTransactions(txs) {
             const tbody = document.getElementById('transactions-list');
-            if(txs.length === 0) {
+            if(!txs || txs.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="4" class="px-6 py-4 text-center">No recent transactions found.</td></tr>';
                 return;
             }
@@ -196,13 +203,13 @@
             if (financeChart) financeChart.destroy();
 
             financeChart = new Chart(ctx, {
-                type: 'doughnut', // Round Chart
+                type: 'doughnut',
                 data: {
                     labels: ['Income (Sales)', 'Expenses'],
                     datasets: [
                         {
-                            data: [summary.totalRevenue, summary.totalExpenses],
-                            backgroundColor: ['#22c55e', '#ef4444'], // Green for Sales, Red for Expenses
+                            data: [summary.totalRevenue || 0, summary.totalExpenses || 0],
+                            backgroundColor: ['#22c55e', '#ef4444'], 
                             hoverOffset: 4
                         }
                     ]
@@ -225,7 +232,6 @@
             let startDate = document.getElementById('start-date').value;
             let endDate = document.getElementById('end-date').value;
 
-            // Default dates if empty (e.g. for inventory which ignores them anyway)
             if (!startDate) startDate = new Date().toISOString().split('T')[0];
             if (!endDate) endDate = new Date().toISOString().split('T')[0];
 

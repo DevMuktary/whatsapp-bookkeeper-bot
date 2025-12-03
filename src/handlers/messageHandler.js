@@ -8,20 +8,24 @@ import {
     transcribeAudio, analyzeImage 
 } from '../services/aiService.js';
 import { sendOtp } from '../services/emailService.js';
-import { sendTextMessage, sendInteractiveButtons, sendMainMenu, sendReportMenu, setTypingIndicator } from '../api/whatsappService.js';
+import { sendTextMessage, sendInteractiveButtons, sendMainMenu, sendReportMenu, setTypingIndicator, uploadMedia, sendDocument } from '../api/whatsappService.js';
 import { USER_STATES, INTENTS } from '../utils/constants.js';
+import { getDateRange } from '../utils/dateUtils.js';
+import { generateSalesReport, generateExpenseReport, generateInventoryReport, generatePnLReport } from '../services/pdfService.js';
+import { getTransactionsByDateRange } from '../db/transactionService.js';
+import { getAllProducts } from '../db/productService.js';
+import { getPnLData } from '../services/ReportManager.js';
 import logger from '../utils/logger.js';
 
 // Managers
 import * as TransactionManager from '../services/TransactionManager.js';
 import * as InventoryManager from '../services/InventoryManager.js';
 import { createBankAccount } from '../db/bankService.js';
-import { queueReportGeneration } from '../services/QueueService.js';
 import { executeTask } from './taskHandler.js';
 
 const CANCEL_KEYWORDS = ['cancel', 'stop', 'exit', 'abort', 'quit'];
 
-// Helper: Parsing Prices
+// Price Helper
 const parsePrice = (priceInput) => {
     if (typeof priceInput === 'number') return priceInput;
     if (typeof priceInput !== 'string') return NaN;
@@ -34,30 +38,23 @@ const parsePrice = (priceInput) => {
     return isNaN(value) ? NaN : value * multiplier;
 };
 
-// Helper: Parsing Product Lists
+// List Helper
 const parseProductList = (text) => {
     const products = [];
     const lines = text.split('\n');
     const lineRegex = /^\s*\d+\.?\s+(\d+)\s+(.+?)\s*[-:]\s*cost\s*[-:]?\s*([^,]+),?\s*sell\s*[-:]?\s*(.+)/i;
-
     for (const line of lines) {
         const match = line.trim().match(lineRegex);
         if (match) {
             try {
                 const [, quantityAdded, productName, costPriceStr, sellingPriceStr] = match;
-                const costPrice = parsePrice(costPriceStr.trim());
-                const sellingPrice = parsePrice(sellingPriceStr.trim());
-                if (!isNaN(costPrice) && !isNaN(sellingPrice)) {
-                     products.push({
-                        quantityAdded: parseInt(quantityAdded.trim(), 10),
-                        productName: productName.trim(),
-                        costPrice: costPrice,
-                        sellingPrice: sellingPrice
-                    });
-                }
-            } catch (e) {
-                logger.warn(`Failed to parse line structure: "${line}"`, e);
-            }
+                products.push({
+                    quantityAdded: parseInt(quantityAdded.trim(), 10),
+                    productName: productName.trim(),
+                    costPrice: parsePrice(costPriceStr.trim()),
+                    sellingPrice: parsePrice(sellingPriceStr.trim())
+                });
+            } catch (e) {}
         }
     }
     return products;
@@ -70,51 +67,29 @@ export async function handleMessage(message) {
   try {
     await setTypingIndicator(whatsappId, 'on', messageId);
     
-    // --- 1. MEDIA PROCESSING (Silent Mode) ---
+    // --- 1. SILENT MEDIA PROCESSING ---
     let userInputText = "";
+    if (message.type === 'text') userInputText = message.text.body;
+    else if (message.type === 'audio') userInputText = await transcribeAudio(message.audio.id) || "";
+    else if (message.type === 'image') userInputText = await analyzeImage(message.image.id, message.image.caption) || "";
+    else return; // Ignore other types
 
-    if (message.type === 'text') {
-        userInputText = message.text.body;
-    } else if (message.type === 'audio') {
-        // [FIXED] No "Listening..." message
-        const transcribed = await transcribeAudio(message.audio.id);
-        if (transcribed) {
-            userInputText = transcribed;
-            // [FIXED] No confirmation message
-        } else {
-            await sendTextMessage(whatsappId, "I couldn't hear that voice note clearly. Please try again or type it.");
-            return;
-        }
-    } else if (message.type === 'image') {
-        // [FIXED] No "Analyzing..." message
-        const caption = message.image.caption || "";
-        const analysis = await analyzeImage(message.image.id, caption);
-        if (analysis) {
-            userInputText = analysis;
-        } else {
-            await sendTextMessage(whatsappId, "I couldn't read that image. Please try sending a clearer photo.");
-            return;
-        }
-    } else {
-        return; // Ignore stickers, locations, etc.
+    if (!userInputText) {
+        // Only reply if audio/image failed completely
+        await sendTextMessage(whatsappId, "I couldn't understand that content. Please try again.");
+        return;
     }
 
     const user = await findOrCreateUser(whatsappId);
     const lowerCaseText = userInputText.trim().toLowerCase();
 
-    // --- 2. ONBOARDING & CANCELLATION ---
-    const onboardingStates = [
-        USER_STATES.NEW_USER,
-        USER_STATES.ONBOARDING_AWAIT_BUSINESS_AND_EMAIL,
-        USER_STATES.ONBOARDING_AWAIT_OTP,
-        USER_STATES.ONBOARDING_AWAIT_CURRENCY
-    ];
-
-    if (onboardingStates.includes(user.state)) {
+    // --- 2. ONBOARDING ---
+    if ([USER_STATES.NEW_USER, USER_STATES.ONBOARDING_AWAIT_BUSINESS_AND_EMAIL, USER_STATES.ONBOARDING_AWAIT_OTP, USER_STATES.ONBOARDING_AWAIT_CURRENCY].includes(user.state)) {
         await handleOnboardingFlow(user, userInputText);
         return; 
     }
 
+    // --- 3. CANCELLATION ---
     if (CANCEL_KEYWORDS.includes(lowerCaseText)) {
         if (user.state !== USER_STATES.IDLE) {
             await updateUserState(whatsappId, USER_STATES.IDLE, {});
@@ -124,7 +99,7 @@ export async function handleMessage(message) {
         }
     }
 
-    // --- 3. ACTIVE STATE HANDLER ---
+    // --- 4. STATE HANDLING & SMART INTERRUPT ---
     switch (user.state) {
       case USER_STATES.IDLE: 
           await handleIdleState(user, userInputText); 
@@ -148,40 +123,25 @@ export async function handleMessage(message) {
           await handleEditValue(user, userInputText);
           break;
 
-      // [FIXED] Smart handling for interactive states
-      // If user sends text instead of clicking a button, we treat it as a command.
-      case USER_STATES.AWAITING_REPORT_TYPE_SELECTION:
-      case USER_STATES.AWAITING_TRANSACTION_SELECTION:
-      case USER_STATES.AWAITING_BANK_SELECTION_SALE:
-      case USER_STATES.AWAITING_BANK_SELECTION_EXPENSE:
-      case USER_STATES.AWAITING_BANK_SELECTION_PURCHASE:
-      case USER_STATES.AWAITING_BANK_SELECTION_CUST_PAYMENT:
-      case USER_STATES.AWAITING_SALE_TYPE_CONFIRMATION:
-      case USER_STATES.AWAITING_BULK_PRODUCT_CONFIRMATION:
-      case USER_STATES.AWAITING_INVOICE_CONFIRMATION:
-      case USER_STATES.AWAITING_DELETE_CONFIRMATION:
-      case USER_STATES.AWAITING_RECONCILE_ACTION:
-      case USER_STATES.AWAITING_EDIT_FIELD_SELECTION:
-        if (userInputText) {
-            // User typed something instead of clicking. 
-            // We assume they want to start a new task.
-            await updateUserState(whatsappId, USER_STATES.IDLE);
-            await handleIdleState(user, userInputText);
-        } else {
-            await sendTextMessage(whatsappId, "Please select an option from the list or buttons.");
-        }
-        break;
-
+      // Smart Interrupt: If user sends a command while in a menu, reset and handle it
       default:
-        logger.warn(`Unhandled state: ${user.state} for user ${whatsappId}`);
-        await updateUserState(whatsappId, USER_STATES.IDLE);
-        await sendMainMenu(whatsappId);
+        if (user.state.startsWith('AWAITING_')) {
+            if (userInputText.length > 2) { 
+                // Assume it's a command, not a button click error
+                await updateUserState(whatsappId, USER_STATES.IDLE);
+                await handleIdleState(user, userInputText);
+            } else {
+                await sendTextMessage(whatsappId, "Please select an option from the menu.");
+            }
+        } else {
+            await updateUserState(whatsappId, USER_STATES.IDLE);
+            await sendMainMenu(whatsappId);
+        }
         break;
     }
   } catch (error) {
     logger.error(`Error in message handler for ${whatsappId}:`, error);
-    // [FIXED] Specific error message for easier debugging
-    await sendTextMessage(whatsappId, `Something went wrong: ${error.message || "Unknown error"}. Please try again.`);
+    await sendTextMessage(whatsappId, `Something went wrong: ${error.message}.`);
   }
 }
 
@@ -191,35 +151,13 @@ async function handleIdleState(user, text) {
     const { intent, context } = await getIntent(text);
 
     if (intent === INTENTS.GENERAL_CONVERSATION) {
-        const aiReply = context.generatedReply || "How can I help you with your bookkeeping today?";
-        await sendTextMessage(user.whatsappId, aiReply);
-        return;
-    }
-
-    if (intent === INTENTS.ADD_PRODUCTS_FROM_LIST) {
-        const products = parseProductList(text);
-        if (products.length === 0) {
-            await sendTextMessage(user.whatsappId, "I couldn't understand the list format. Try:\n`1. 10 Shirts - cost: 5000, sell: 8000`");
-            return;
-        }
-        let summary = "I've parsed your list:\n\n";
-        products.forEach((p, index) => {
-            const cost = p.costPrice.toLocaleString();
-            const sell = p.sellingPrice.toLocaleString();
-            summary += `${index + 1}. *${p.quantityAdded}x ${p.productName}*\n   Cost: ${cost}, Sell: ${sell}\n`;
-        });
-        await updateUserState(user.whatsappId, USER_STATES.AWAITING_BULK_PRODUCT_CONFIRMATION, { products });
-        await sendInteractiveButtons(user.whatsappId, summary, [
-            { id: 'confirm_bulk_add', title: '✅ Yes, Proceed' },
-            { id: 'cancel_bulk_add', title: '❌ No, Cancel' }
-        ]);
+        await sendTextMessage(user.whatsappId, context.generatedReply || "How can I help?");
         return;
     }
 
     if (intent === INTENTS.LOG_SALE) {
         const initialMemory = [{ role: 'user', content: text }];
         const existingProduct = context.productName ? await findProductByName(user._id, context.productName) : null;
-        
         await updateUserState(user.whatsappId, USER_STATES.LOGGING_SALE, { 
             memory: initialMemory, 
             saleData: { items: [], customerName: context.customerName, saleType: context.saleType }, 
@@ -246,29 +184,66 @@ async function handleIdleState(user, text) {
 
     } else if (intent === INTENTS.GENERATE_REPORT) {
         if (context.reportType) {
-            await sendTextMessage(user.whatsappId, "Generating your report... ⏳");
-            const dateRange = context.dateRange || { startDate: new Date(), endDate: new Date() };
-            // Using the direct queue function (Redis removed)
-            await queueReportGeneration(user._id, user.currency, context.reportType.toUpperCase(), dateRange, user.whatsappId);
+            // [FIXED] Direct call to generation function, no queue
+            await generateAndSendReport(user, context.reportType.toUpperCase(), context.dateRange);
         } else {
             await updateUserState(user.whatsappId, USER_STATES.AWAITING_REPORT_TYPE_SELECTION);
             await sendReportMenu(user.whatsappId);
         }
 
-    } else if (intent === INTENTS.CHECK_STOCK || intent === INTENTS.GET_FINANCIAL_SUMMARY || intent === INTENTS.CHECK_BANK_BALANCE || intent === INTENTS.GET_FINANCIAL_INSIGHT || intent === INTENTS.GET_CUSTOMER_BALANCES) {
-        await executeTask(intent, user, context);
-
     } else if (intent === INTENTS.SHOW_MAIN_MENU) {
         await sendMainMenu(user.whatsappId);
 
-    } else if (intent === INTENTS.RECONCILE_TRANSACTION) {
-        await executeTask(INTENTS.RECONCILE_TRANSACTION, user, {});
-
     } else {
-        await sendTextMessage(user.whatsappId, "I can help with sales, expenses, and reports. Try 'Log a sale' or 'Generate Report'.");
-        await sendMainMenu(user.whatsappId);
+        await executeTask(intent, user, context);
     }
 }
+
+// --- REPORT GENERATION (Direct & Reliable) ---
+async function generateAndSendReport(user, reportType, dateRange) {
+    await sendTextMessage(user.whatsappId, "Generating your report... 📄");
+    
+    const { startDate, endDate } = getDateRange(dateRange || 'this_month');
+    let pdfBuffer;
+    let filename;
+
+    try {
+        if (reportType === 'SALES') {
+            const txs = await getTransactionsByDateRange(user._id, 'SALE', startDate, endDate);
+            pdfBuffer = await generateSalesReport(user, txs, `${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`);
+            filename = 'Sales_Report.pdf';
+        } else if (reportType === 'EXPENSES') {
+            const txs = await getTransactionsByDateRange(user._id, 'EXPENSE', startDate, endDate);
+            pdfBuffer = await generateExpenseReport(user, txs, `${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`);
+            filename = 'Expense_Report.pdf';
+        } else if (reportType === 'INVENTORY') {
+            const prods = await getAllProducts(user._id);
+            pdfBuffer = await generateInventoryReport(user, prods);
+            filename = 'Inventory_Report.pdf';
+        } else if (reportType === 'PNL' || reportType === 'PROFIT') {
+            const pnlData = await getPnLData(user._id, startDate, endDate);
+            pdfBuffer = await generatePnLReport(user, pnlData, `${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`);
+            filename = 'PnL_Report.pdf';
+        }
+
+        if (pdfBuffer) {
+            const mediaId = await uploadMedia(pdfBuffer, 'application/pdf');
+            if (mediaId) {
+                await sendDocument(user.whatsappId, mediaId, filename, "Here is your report.");
+                await sendMainMenu(user.whatsappId);
+            } else {
+                await sendTextMessage(user.whatsappId, "Failed to upload report.");
+            }
+        } else {
+            await sendTextMessage(user.whatsappId, "No data found for this report.");
+        }
+    } catch (e) {
+        logger.error("Report Gen Error:", e);
+        await sendTextMessage(user.whatsappId, "Error generating report.");
+    }
+}
+
+// --- TRANSACTION HANDLERS ---
 
 async function handleLoggingSale(user, text) {
     const { memory, existingProduct, saleData } = user.stateContext;
@@ -290,13 +265,11 @@ async function handleLoggingSale(user, text) {
                  await sendInteractiveButtons(user.whatsappId, 'Received payment into which account?', buttons);
                  return;
             }
-            
             const txn = await TransactionManager.logSale(user, finalData);
             await sendTextMessage(user.whatsappId, `✅ Sale logged! Amount: ${user.currency} ${txn.amount.toLocaleString()}`);
             
             await updateUserState(user.whatsappId, USER_STATES.AWAITING_INVOICE_CONFIRMATION, { transaction: txn });
             await sendInteractiveButtons(user.whatsappId, 'Generate Invoice?', [{ id: 'invoice_yes', title: 'Yes' }, { id: 'invoice_no', title: 'No' }]);
-            
         } catch (e) {
             await sendTextMessage(user.whatsappId, `Error: ${e.message}`);
             await updateUserState(user.whatsappId, USER_STATES.IDLE);
@@ -423,8 +396,7 @@ async function handleEditValue(user, text) {
     await executeTask(INTENTS.RECONCILE_TRANSACTION, user, { transactionId: transaction._id, action: 'edit', changes });
 }
 
-// --- ONBOARDING ---
-
+// ... handleOnboardingFlow (Standard Logic) ...
 async function handleOnboardingFlow(user, text) {
     if (user.state === USER_STATES.NEW_USER) {
         await sendTextMessage(user.whatsappId, "Welcome to Fynax Bookkeeper! 📊\nLet's get you set up.\n\nWhat is your **Business Name** and **Email Address**?");
@@ -437,24 +409,24 @@ async function handleOnboardingFlow(user, text) {
             await updateUserState(user.whatsappId, USER_STATES.ONBOARDING_AWAIT_OTP);
             await sendTextMessage(user.whatsappId, `I've sent a code to ${email}. Please enter it here.`);
         } else {
-            await sendTextMessage(user.whatsappId, "I need both your Business Name and Email to proceed. Please try again.");
+            await sendTextMessage(user.whatsappId, "I need both your Business Name and Email. Please try again.");
         }
     } else if (user.state === USER_STATES.ONBOARDING_AWAIT_OTP) {
         if (user.otp === text.trim()) {
             await updateUserState(user.whatsappId, USER_STATES.ONBOARDING_AWAIT_CURRENCY);
             await sendTextMessage(user.whatsappId, "✅ Email verified! What currency do you use? (e.g., Naira, USD)");
         } else {
-            await sendTextMessage(user.whatsappId, "Invalid code. Please check your email and try again.");
+            await sendTextMessage(user.whatsappId, "Invalid code.");
         }
     } else if (user.state === USER_STATES.ONBOARDING_AWAIT_CURRENCY) {
         const { currency } = await extractCurrency(text);
         if (currency) {
             await updateUser(user.whatsappId, { currency });
             await updateUserState(user.whatsappId, USER_STATES.IDLE);
-            await sendTextMessage(user.whatsappId, `All set! Your currency is ${currency}.`);
+            await sendTextMessage(user.whatsappId, `All set! Currency: ${currency}.`);
             await sendMainMenu(user.whatsappId);
         } else {
-            await sendTextMessage(user.whatsappId, "I didn't recognize that currency. Please try standard codes like 'NGN' or 'USD'.");
+            await sendTextMessage(user.whatsappId, "Unknown currency.");
         }
     }
 }

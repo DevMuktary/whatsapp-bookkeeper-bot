@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: 'Helvetica', sans-serif; padding: 40px; color: #444; }
+        h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }
+        .meta { margin-bottom: 30px; font-size: 14px; color: #666; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th { background: #3498db; color: white; padding: 10px; text-align: left; }
+        td { padding: 10px; border-bottom: 1px solid #eee; }
+        .num { text-align: right; }
+        
+        /* PnL Specific Styles */
+        .pnl-section { margin-bottom: 20px; }
+        .pnl-row { display: flex; justify-content: space-between; padding: 10px; border-bottom: 1px solid #eee; }
+        .pnl-header { background: #f1f8ff; font-weight: bold; padding: 10px; }
+        .net-profit { background: #2ecc71; color: white; font-size: 18px; font-weight: bold; padding: 15px; margin-top: 20px; }
+        .loss { background: #e74c3c; }
+    </style>
+</head>
+<body>
+    <h1><%= type %></h1>
+    <div class="meta">
+        <strong>Period:</strong> <%= dateRange.startDate %> to <%= dateRange.endDate %><br>
+        <strong>Generated on:</strong> <%= new Date().toLocaleDateString() %>
+    </div>
+
+    <% if (typeof isList !== 'undefined' && isList) { %>
+        <table>
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Description</th>
+                    <% if (type === 'Sales Report') { %> <th>Customer</th> <% } %>
+                    <th class="num">Amount (<%= currency %>)</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% transactions.forEach(function(tx) { %>
+                <tr>
+                    <td><%= new Date(tx.date).toLocaleDateString() %></td>
+                    <td><%= tx.description || tx.category %></td>
+                    <% if (type === 'Sales Report') { %> <td><%= tx.customerName || '-' %></td> <% } %>
+                    <td class="num"><%= tx.amount.toLocaleString() %></td>
+                </tr>
+                <% }); %>
+            </tbody>
+        </table>
+
+    <% } else if (typeof pnl !== 'undefined') { %>
+        <div class="pnl-section">
+            <div class="pnl-header">Revenue</div>
+            <div class="pnl-row">
+                <span>Total Sales</span>
+                <span><%= currency %> <%= pnl.totalSales.toLocaleString() %></span>
+            </div>
+            <div class="pnl-row" style="color: #c0392b;">
+                <span>Cost of Goods Sold (COGS)</span>
+                <span>- <%= currency %> <%= pnl.totalCogs.toLocaleString() %></span>
+            </div>
+            <div class="pnl-row" style="font-weight: bold; background: #eee;">
+                <span>Gross Profit</span>
+                <span><%= currency %> <%= pnl.grossProfit.toLocaleString() %></span>
+            </div>
+        </div>
+
+        <div class="pnl-section">
+            <div class="pnl-header">Operating Expenses</div>
+            <% pnl.topExpenses.forEach(function(exp) { %>
+            <div class="pnl-row">
+                <span><%= exp.category %></span>
+                <span><%= currency %> <%= exp.amount.toLocaleString() %></span>
+            </div>
+            <% }); %>
+            <div class="pnl-row" style="font-weight: bold; border-top: 2px solid #ddd;">
+                <span>Total Expenses</span>
+                <span><%= currency %> <%= pnl.totalExpenses.toLocaleString() %></span>
+            </div>
+        </div>
+
+        <div class="net-profit <%= pnl.netProfit < 0 ? 'loss' : '' %>">
+            <div style="display: flex; justify-content: space-between;">
+                <span>Net Profit / (Loss)</span>
+                <span><%= currency %> <%= pnl.netProfit.toLocaleString() %></span>
+            </div>
+        </div>
+    <% } %>
+
+</body>
+</html>

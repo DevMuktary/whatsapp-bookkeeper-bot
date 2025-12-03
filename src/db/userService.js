@@ -1,4 +1,3 @@
-import { ObjectId } from 'mongodb';
 import { getDB } from './connection.js';
 import logger from '../utils/logger.js';
 import { USER_STATES } from '../utils/constants.js';
@@ -7,6 +6,9 @@ const usersCollection = () => getDB().collection('users');
 
 /**
  * Finds a user by their WhatsApp ID or creates a new one if they don't exist.
+ * New users are started in the NEW_USER state to trigger the welcome sequence.
+ * @param {string} whatsappId The user's WhatsApp ID (phone number).
+ * @returns {Promise<object>} The user document.
  */
 export async function findOrCreateUser(whatsappId) {
   try {
@@ -19,8 +21,8 @@ export async function findOrCreateUser(whatsappId) {
         businessName: null,
         email: null,
         isEmailVerified: false,
-        currency: 'NGN', // Default to NGN to avoid null issues in reports
-        state: USER_STATES.NEW_USER,
+        currency: null,
+        state: USER_STATES.NEW_USER, // <-- IMPORTANT CHANGE HERE
         stateContext: {},
         otp: null,
         otpExpires: null,
@@ -38,21 +40,10 @@ export async function findOrCreateUser(whatsappId) {
 }
 
 /**
- * Finds a user by their MongoDB _id.
- * Critical for the Web Dashboard to get accurate profile data.
- */
-export async function findUserById(userId) {
-    try {
-        const _id = new ObjectId(userId);
-        return await usersCollection().findOne({ _id });
-    } catch (error) {
-        logger.error(`Error finding user by ID ${userId}:`, error);
-        return null;
-    }
-}
-
-/**
  * Updates a user's document.
+ * @param {string} whatsappId The user's WhatsApp ID.
+ * @param {object} updateData The fields to update.
+ * @returns {Promise<object>} The updated user document.
  */
 export async function updateUser(whatsappId, updateData) {
     try {
@@ -68,7 +59,13 @@ export async function updateUser(whatsappId, updateData) {
     }
 }
 
+/**
+ * A specific helper to update a user's state and context.
+ * @param {string} whatsappId The user's WhatsApp ID.
+ * @param {string} state The new state from USER_STATES.
+ * @param {object} context Optional context to store for the state.
+ * @returns {Promise<object>} The updated user document.
+ */
 export async function updateUserState(whatsappId, state, context = {}) {
     return updateUser(whatsappId, { state, stateContext: context });
 }
-

@@ -4,8 +4,7 @@ import logger from './src/utils/logger.js';
 import whatsappWebhook from './src/webhooks/whatsapp.js';
 import { connectToDB } from './src/db/connection.js';
 
-// [NEW] Import the worker so it starts processing background jobs
-import './src/services/QueueService.js'; 
+// Removed QueueService import because we are no longer using background workers.
 
 // Initialize Express app
 const app = express();
@@ -30,13 +29,10 @@ try {
 }
 
 // --- ROUTES ---
-
-// WhatsApp Webhook
 app.use('/api/webhook', whatsappWebhook);
 
 // --- SERVER INITIALIZATION ---
 const PORT = config.port || 3000;
 app.listen(PORT, () => {
   logger.info(`Server is running on port ${PORT}.`);
-  logger.info(`Background workers are active.`);
 });

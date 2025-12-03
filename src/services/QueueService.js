@@ -1,22 +1,20 @@
 import { Queue, Worker } from 'bullmq';
-import IORedis from 'ioredis'; // Available via bullmq dependency
+import IORedis from 'ioredis'; 
 import config from '../config/index.js';
 import logger from '../utils/logger.js';
 import { generatePDFFromTemplate } from './pdfService.js';
 import { sendDocument, sendTextMessage, uploadMedia } from '../api/whatsappService.js';
 import { getPnLData, getReportTransactions } from './ReportManager.js';
 
-// [UPDATED] Smart Connection Logic
+// [UPDATED] Connection Logic
 let connection;
 
 if (config.redis.url) {
-    // If a full URL is provided (common in Railway/Cloud), use it
     logger.info('Connecting to Redis via URL...');
     connection = new IORedis(config.redis.url, {
-        maxRetriesPerRequest: null // Required by BullMQ
+        maxRetriesPerRequest: null 
     });
 } else {
-    // Fallback to Host/Port
     logger.info(`Connecting to Redis at ${config.redis.host}:${config.redis.port}...`);
     connection = {
         host: config.redis.host,

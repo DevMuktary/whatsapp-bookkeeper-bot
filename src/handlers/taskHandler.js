@@ -329,19 +329,13 @@ async function executeGenerateReport(user, data) {
         return;
     }
 
-    // [FIX] Normalize the report type input to handle button ID strings
     let reportTypeLower = reportType.toLowerCase();
-    
     if (reportTypeLower.includes('profit') || reportTypeLower.includes('p&l')) {
         reportTypeLower = 'pnl';
-    } else if (reportTypeLower.includes('cost') || reportTypeLower.includes('cogs')) {
+    }
+    // Map 'cost of sales' requests to 'cogs' if not already done
+    if (reportTypeLower.includes('cost') || reportTypeLower.includes('cogs')) {
         reportTypeLower = 'cogs';
-    } else if (reportTypeLower.includes('inventory')) {
-        reportTypeLower = 'inventory';
-    } else if (reportTypeLower.includes('expense')) {
-        reportTypeLower = 'expenses'; // Handle singular 'expense' and 'generate expense report'
-    } else if (reportTypeLower.includes('sale')) {
-        reportTypeLower = 'sales'; // Handle 'generate sales report'
     }
 
     // Determine actual start and end dates
@@ -400,7 +394,7 @@ async function executeGenerateReport(user, data) {
         filename = `P&L_Report_${filenamePeriod}.pdf`;
 
     } else if (reportTypeLower === 'cogs') {
-        // Cost of Goods Sold Logic
+        // [NEW] Cost of Goods Sold Logic
         const salesTransactions = await getTransactionsByDateRange(user._id, 'SALE', startDate, endDate);
         if (salesTransactions.length === 0) {
             await sendTextMessage(user.whatsappId, `No sales found in this period, so Cost of Sales is 0.`);

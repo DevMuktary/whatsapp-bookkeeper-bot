@@ -1,41 +1,42 @@
 import express from 'express';
-import cors from 'cors';
 import config from './src/config/index.js';
-import { connectToDB } from './src/db/connection.js';
-import whatsappRouter from './src/webhooks/whatsapp.js';
 import logger from './src/utils/logger.js';
+import whatsappWebhook from './src/webhooks/whatsapp.js';
+import { connectToDB } from './src/db/connection.js';
 
+// [NEW] Import the worker so it starts processing background jobs
+import './src/services/QueueService.js'; 
+
+// Initialize Express app
 const app = express();
 
-// Middleware to parse JSON bodies (Required for WhatsApp Webhooks)
-app.use(express.json());
-app.use(cors());
+// --- MIDDLEWARE ---
+app.use(express.urlencoded({ extended: true }));
 
-// Health check route (useful for checking if the server is alive)
-app.get('/', (req, res) => {
-  res.send('Fynax Bookkeeper Bot is running! 🚀');
-});
-
-// Mount the WhatsApp webhook router
-// NOTE: Make sure your Meta App Dashboard Callback URL matches this path.
-// e.g., https://your-domain.com/webhook
-app.use('/webhook', whatsappRouter);
-
-// Start the Server
-async function startServer() {
-  try {
-    // 1. Connect to Database
-    await connectToDB();
-
-    // 2. Start Listening
-    app.listen(config.port, () => {
-      logger.info(`Server is running on port ${config.port}`);
-    });
-
-  } catch (error) {
-    logger.error('Failed to start the server:', error);
-    process.exit(1);
+// Use express.json() with rawBody verify for WhatsApp signature validation
+app.use(express.json({
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
   }
+}));
+
+// --- DATABASE CONNECTION ---
+try {
+  await connectToDB();
+  logger.info('Successfully connected to the database.');
+} catch (error) {
+  logger.error('Failed to connect to the database on startup. Exiting.', error);
+  process.exit(1);
 }
 
-startServer();
+// --- ROUTES ---
+
+// WhatsApp Webhook
+app.use('/api/webhook', whatsappWebhook);
+
+// --- SERVER INITIALIZATION ---
+const PORT = config.port || 3000;
+app.listen(PORT, () => {
+  logger.info(`Server is running on port ${PORT}.`);
+  logger.info(`Background workers are active.`);
+});

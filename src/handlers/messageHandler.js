@@ -34,11 +34,10 @@ const parsePrice = (priceInput) => {
     return isNaN(value) ? NaN : value * multiplier;
 };
 
-// Helper: Parsing Product Lists (Restored)
+// Helper: Parsing Product Lists
 const parseProductList = (text) => {
     const products = [];
     const lines = text.split('\n');
-    // Regex matches: "1. 10 Shirts - cost: 5000, sell: 8000"
     const lineRegex = /^\s*\d+\.?\s+(\d+)\s+(.+?)\s*[-:]\s*cost\s*[-:]?\s*([^,]+),?\s*sell\s*[-:]?\s*(.+)/i;
 
     for (const line of lines) {
@@ -71,23 +70,23 @@ export async function handleMessage(message) {
   try {
     await setTypingIndicator(whatsappId, 'on', messageId);
     
-    // --- 1. MEDIA PROCESSING ---
+    // --- 1. MEDIA PROCESSING (Silent Mode) ---
     let userInputText = "";
 
     if (message.type === 'text') {
         userInputText = message.text.body;
     } else if (message.type === 'audio') {
-        await sendTextMessage(whatsappId, "🎧 Listening to your voice note...");
+        // [FIXED] No "Listening..." message
         const transcribed = await transcribeAudio(message.audio.id);
         if (transcribed) {
             userInputText = transcribed;
-            await sendTextMessage(whatsappId, `_Transcribed: "${transcribed}"_`);
+            // [FIXED] No confirmation message
         } else {
-            await sendTextMessage(whatsappId, "I couldn't quite hear that. Could you type it instead?");
+            await sendTextMessage(whatsappId, "I couldn't hear that voice note clearly. Please try again or type it.");
             return;
         }
     } else if (message.type === 'image') {
-        await sendTextMessage(whatsappId, "👀 Analyzing your image...");
+        // [FIXED] No "Analyzing..." message
         const caption = message.image.caption || "";
         const analysis = await analyzeImage(message.image.id, caption);
         if (analysis) {
@@ -97,7 +96,7 @@ export async function handleMessage(message) {
             return;
         }
     } else {
-        return; // Ignore other types
+        return; // Ignore stickers, locations, etc.
     }
 
     const user = await findOrCreateUser(whatsappId);
@@ -149,7 +148,10 @@ export async function handleMessage(message) {
           await handleEditValue(user, userInputText);
           break;
 
-      // Interactive States (Handled by buttons, but catching text fallback)
+      // [FIXED] Smart handling for interactive states
+      // If user sends text instead of clicking a button, we treat it as a command.
+      case USER_STATES.AWAITING_REPORT_TYPE_SELECTION:
+      case USER_STATES.AWAITING_TRANSACTION_SELECTION:
       case USER_STATES.AWAITING_BANK_SELECTION_SALE:
       case USER_STATES.AWAITING_BANK_SELECTION_EXPENSE:
       case USER_STATES.AWAITING_BANK_SELECTION_PURCHASE:
@@ -160,21 +162,26 @@ export async function handleMessage(message) {
       case USER_STATES.AWAITING_DELETE_CONFIRMATION:
       case USER_STATES.AWAITING_RECONCILE_ACTION:
       case USER_STATES.AWAITING_EDIT_FIELD_SELECTION:
-      case USER_STATES.AWAITING_TRANSACTION_SELECTION:
-      case USER_STATES.AWAITING_REPORT_TYPE_SELECTION:
-        await sendTextMessage(whatsappId, "Please select an option from the buttons/list above, or type 'cancel'.");
+        if (userInputText) {
+            // User typed something instead of clicking. 
+            // We assume they want to start a new task.
+            await updateUserState(whatsappId, USER_STATES.IDLE);
+            await handleIdleState(user, userInputText);
+        } else {
+            await sendTextMessage(whatsappId, "Please select an option from the list or buttons.");
+        }
         break;
 
       default:
         logger.warn(`Unhandled state: ${user.state} for user ${whatsappId}`);
-        await sendTextMessage(whatsappId, "I'm a bit lost. Let's go to the main menu.");
         await updateUserState(whatsappId, USER_STATES.IDLE);
         await sendMainMenu(whatsappId);
         break;
     }
   } catch (error) {
     logger.error(`Error in message handler for ${whatsappId}:`, error);
-    await sendTextMessage(whatsappId, "Something went wrong. Please try again. 🛠️");
+    // [FIXED] Specific error message for easier debugging
+    await sendTextMessage(whatsappId, `Something went wrong: ${error.message || "Unknown error"}. Please try again.`);
   }
 }
 
@@ -189,7 +196,6 @@ async function handleIdleState(user, text) {
         return;
     }
 
-    // [RESTORED] Bulk Add Products from List
     if (intent === INTENTS.ADD_PRODUCTS_FROM_LIST) {
         const products = parseProductList(text);
         if (products.length === 0) {
@@ -240,8 +246,9 @@ async function handleIdleState(user, text) {
 
     } else if (intent === INTENTS.GENERATE_REPORT) {
         if (context.reportType) {
-            await sendTextMessage(user.whatsappId, "Adding your report to the queue... ⏳");
+            await sendTextMessage(user.whatsappId, "Generating your report... ⏳");
             const dateRange = context.dateRange || { startDate: new Date(), endDate: new Date() };
+            // Using the direct queue function (Redis removed)
             await queueReportGeneration(user._id, user.currency, context.reportType.toUpperCase(), dateRange, user.whatsappId);
         } else {
             await updateUserState(user.whatsappId, USER_STATES.AWAITING_REPORT_TYPE_SELECTION);
@@ -258,7 +265,7 @@ async function handleIdleState(user, text) {
         await executeTask(INTENTS.RECONCILE_TRANSACTION, user, {});
 
     } else {
-        await sendTextMessage(user.whatsappId, "I can help with bookkeeping, sales, expenses, and reports. What would you like to do?");
+        await sendTextMessage(user.whatsappId, "I can help with sales, expenses, and reports. Try 'Log a sale' or 'Generate Report'.");
         await sendMainMenu(user.whatsappId);
     }
 }
@@ -404,7 +411,7 @@ async function handleAddingBankAccount(user, text) {
              return;
         }
         await createBankAccount(user._id, bankData.bankName, balance);
-        await sendTextMessage(user.whatsappId, `✅ Bank "${bankData.bankName}" added with balance ${user.currency} ${balance.toLocaleString()}`);
+        await sendTextMessage(user.whatsappId, `✅ Bank "${bankData.bankName}" added.`);
         await updateUserState(user.whatsappId, USER_STATES.IDLE);
         await sendMainMenu(user.whatsappId);
     }

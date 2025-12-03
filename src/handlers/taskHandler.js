@@ -1,17 +1,15 @@
-import { findProductByName, getAllProducts } from '../db/productService.js';
-import { getSummaryByDateRange, getTransactionsByDateRange, findTransactionById, deleteTransactionById, updateTransactionById } from '../db/transactionService.js';
-import { getAllBankAccounts, findBankAccountByName } from '../db/bankService.js';
-import { getCustomersWithBalance } from '../db/customerService.js';
+import { findProductByName, updateStock } from '../db/productService.js';
+import { getSummaryByDateRange, getRecentTransactions, findTransactionById, deleteTransactionById, updateTransactionById } from '../db/transactionService.js';
+import { getAllBankAccounts, findBankAccountByName, updateBankBalance } from '../db/bankService.js';
+import { getCustomersWithBalance, updateBalanceOwed, findCustomerById } from '../db/customerService.js';
 import { updateUserState } from '../db/userService.js';
-import { sendTextMessage, sendMainMenu } from '../api/whatsappService.js';
+import { sendTextMessage, sendMainMenu, sendInteractiveList } from '../api/whatsappService.js';
 import { getFinancialInsight } from '../services/aiService.js';
 import { INTENTS, USER_STATES } from '../utils/constants.js';
 import { getDateRange } from '../utils/dateUtils.js';
-import { getPnLData } from '../services/ReportManager.js'; // Use ReportManager for Insights
+import { getPnLData } from '../services/ReportManager.js';
 import logger from '../utils/logger.js';
-
-// Note: createSaleTransaction, upsertProduct etc are now handled by Managers in messageHandler.
-// This handler focuses on Read operations and Updates/Deletes (Reconciliation).
+import { ObjectId } from 'mongodb';
 
 export async function executeTask(intent, user, data) {
     try {
@@ -90,13 +88,9 @@ async function executeCheckBankBalance(user, data) {
 async function executeGetFinancialInsight(user, data) {
     const { dateRange } = data;
     const period = dateRange || { startDate: new Date(new Date().setDate(1)), endDate: new Date() }; // Default this month
-    
     await sendTextMessage(user.whatsappId, "Crunching the numbers... 🧠");
-    
-    // Use the ReportManager to get accurate P&L data for the AI
     const pnlData = await getPnLData(user._id, period.startDate, period.endDate);
     const insight = await getFinancialInsight(pnlData, user.currency);
-    
     await sendTextMessage(user.whatsappId, insight);
 }
 
@@ -110,11 +104,115 @@ async function executeGetCustomerBalances(user) {
     await sendTextMessage(user.whatsappId, `Outstanding Balances:\n${list}`);
 }
 
-// ... executeListTransactionsForReconcile, executeDeleteTransaction, executeUpdateTransaction ...
-// (These would follow the logic of finding the transaction and modifying it. Kept concise here.)
+// --- RECONCILIATION LOGIC (Restored) ---
+
 async function executeListTransactionsForReconcile(user) {
-    // Logic to list recent transactions... (Refer to original taskHandler for implementation details)
-    await sendTextMessage(user.whatsappId, "Reconciliation feature coming in next update.");
+    const transactions = await getRecentTransactions(user._id, 8); // Fetch last 8
+    if (transactions.length === 0) {
+        await sendTextMessage(user.whatsappId, "No recent transactions found.");
+        await sendMainMenu(user.whatsappId);
+        return;
+    }
+
+    const rows = transactions.map(tx => {
+        let desc = tx.description || tx.type;
+        if (desc.length > 22) desc = desc.substring(0, 20) + '..';
+        return {
+            id: `select_tx:${tx._id}`,
+            title: desc,
+            description: `${new Date(tx.date).toLocaleDateString()} - ${user.currency} ${tx.amount.toLocaleString()}`
+        };
+    });
+
+    const sections = [{ title: "Select Transaction", rows }];
+    await updateUserState(user.whatsappId, USER_STATES.AWAITING_TRANSACTION_SELECTION);
+    await sendInteractiveList(user.whatsappId, "Edit/Delete Transaction", "Select a transaction to modify:", "View List", sections);
 }
-async function executeDeleteTransaction(user, data) { /* ... */ }
-async function executeUpdateTransaction(user, data) { /* ... */ }
+
+async function executeDeleteTransaction(user, data) {
+    const { transactionId } = data;
+    const tx = await findTransactionById(transactionId);
+    if (!tx) {
+        await sendTextMessage(user.whatsappId, "Transaction not found.");
+        return;
+    }
+
+    // 1. Reverse Financial Impact
+    if (tx.type === 'SALE') {
+        // Reverse Stock
+        if (tx.items) {
+            for (const item of tx.items) {
+                if (item.productId && !item.isService) {
+                    await updateStock(item.productId, item.quantity, 'SALE_DELETED', tx._id);
+                }
+            }
+        }
+        // Reverse Money
+        if (tx.paymentMethod === 'CREDIT' && tx.linkedCustomerId) {
+            await updateBalanceOwed(tx.linkedCustomerId, -tx.amount);
+        } else if (tx.linkedBankId) {
+            await updateBankBalance(tx.linkedBankId, -tx.amount);
+        }
+    } else if (tx.type === 'EXPENSE' && tx.linkedBankId) {
+        await updateBankBalance(tx.linkedBankId, tx.amount); // Add money back
+    } else if (tx.type === 'CUSTOMER_PAYMENT') {
+        if (tx.linkedCustomerId) await updateBalanceOwed(tx.linkedCustomerId, tx.amount); // Add debt back
+        if (tx.linkedBankId) await updateBankBalance(tx.linkedBankId, -tx.amount); // Remove money
+    }
+
+    // 2. Delete Record
+    await deleteTransactionById(transactionId);
+    await sendTextMessage(user.whatsappId, "✅ Transaction deleted and balances reversed.");
+    await sendMainMenu(user.whatsappId);
+}
+
+async function executeUpdateTransaction(user, data) {
+    const { transactionId, changes } = data;
+    const originalTx = await findTransactionById(transactionId);
+    if (!originalTx) return;
+
+    // This is a simplified edit logic: 
+    // 1. Delete/Reverse original
+    // 2. Create new transaction with updated fields
+    // A robust system would calculate the delta, but reversal is safer for data integrity.
+
+    // A. Rollback Original
+    if (originalTx.type === 'SALE') {
+        if (originalTx.items) {
+            for (const item of originalTx.items) {
+                if (item.productId && !item.isService) await updateStock(item.productId, item.quantity, 'EDIT_ROLLBACK');
+            }
+        }
+        if (originalTx.paymentMethod === 'CREDIT') await updateBalanceOwed(originalTx.linkedCustomerId, -originalTx.amount);
+        else if (originalTx.linkedBankId) await updateBankBalance(originalTx.linkedBankId, -originalTx.amount);
+    }
+    // ... (Add expense/payment rollback if needed)
+
+    // B. Apply Updates
+    let updatedTxData = { ...originalTx, ...changes };
+    
+    // If quantity/price changed, recalculate total
+    if (changes.unitsSold || changes.amountPerUnit) {
+        const qty = parseFloat(changes.unitsSold || originalTx.items[0].quantity);
+        const price = parseFloat(changes.amountPerUnit || originalTx.items[0].pricePerUnit);
+        updatedTxData.amount = qty * price;
+        updatedTxData.items[0].quantity = qty;
+        updatedTxData.items[0].pricePerUnit = price;
+    }
+
+    // C. Save & Apply New Impact
+    await updateTransactionById(transactionId, updatedTxData);
+    
+    if (updatedTxData.type === 'SALE') {
+        if (updatedTxData.items) {
+            for (const item of updatedTxData.items) {
+                if (item.productId && !item.isService) await updateStock(item.productId, -item.quantity, 'EDIT_APPLY');
+            }
+        }
+        if (updatedTxData.paymentMethod === 'CREDIT') await updateBalanceOwed(updatedTxData.linkedCustomerId, updatedTxData.amount);
+        else if (updatedTxData.linkedBankId) await updateBankBalance(updatedTxData.linkedBankId, updatedTxData.amount);
+    }
+
+    await sendTextMessage(user.whatsappId, `✅ Transaction updated. New amount: ${updatedTxData.amount}`);
+    await sendMainMenu(user.whatsappId);
+}

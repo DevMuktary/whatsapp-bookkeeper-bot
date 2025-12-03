@@ -1,7 +1,6 @@
 import { findOrCreateUser, updateUser, updateUserState } from '../db/userService.js';
 import { findProductByName } from '../db/productService.js';
 import { getAllBankAccounts } from '../db/bankService.js';
-import { getRecentTransactions } from '../db/transactionService.js';
 import { 
     extractOnboardingDetails, extractCurrency, getIntent, 
     gatherSaleDetails, gatherExpenseDetails, gatherProductDetails, 
@@ -9,19 +8,20 @@ import {
     transcribeAudio, analyzeImage 
 } from '../services/aiService.js';
 import { sendOtp } from '../services/emailService.js';
-import { sendTextMessage, sendInteractiveButtons, sendInteractiveList, sendMainMenu, sendReportMenu, setTypingIndicator } from '../api/whatsappService.js';
+import { sendTextMessage, sendInteractiveButtons, sendMainMenu, sendReportMenu, setTypingIndicator } from '../api/whatsappService.js';
 import { USER_STATES, INTENTS } from '../utils/constants.js';
 import logger from '../utils/logger.js';
 
-// Import New Services
+// Managers
 import * as TransactionManager from '../services/TransactionManager.js';
 import * as InventoryManager from '../services/InventoryManager.js';
-import { createBankAccount } from '../db/bankService.js'; // Direct DB call for bank creation is fine
+import { createBankAccount } from '../db/bankService.js';
 import { queueReportGeneration } from '../services/QueueService.js';
-import { executeTask } from './taskHandler.js'; // Kept for legacy tasks (delete/edit)
+import { executeTask } from './taskHandler.js';
 
 const CANCEL_KEYWORDS = ['cancel', 'stop', 'exit', 'abort', 'quit'];
 
+// Helper: Parsing Prices
 const parsePrice = (priceInput) => {
     if (typeof priceInput === 'number') return priceInput;
     if (typeof priceInput !== 'string') return NaN;
@@ -34,6 +34,36 @@ const parsePrice = (priceInput) => {
     return isNaN(value) ? NaN : value * multiplier;
 };
 
+// Helper: Parsing Product Lists (Restored)
+const parseProductList = (text) => {
+    const products = [];
+    const lines = text.split('\n');
+    // Regex matches: "1. 10 Shirts - cost: 5000, sell: 8000"
+    const lineRegex = /^\s*\d+\.?\s+(\d+)\s+(.+?)\s*[-:]\s*cost\s*[-:]?\s*([^,]+),?\s*sell\s*[-:]?\s*(.+)/i;
+
+    for (const line of lines) {
+        const match = line.trim().match(lineRegex);
+        if (match) {
+            try {
+                const [, quantityAdded, productName, costPriceStr, sellingPriceStr] = match;
+                const costPrice = parsePrice(costPriceStr.trim());
+                const sellingPrice = parsePrice(sellingPriceStr.trim());
+                if (!isNaN(costPrice) && !isNaN(sellingPrice)) {
+                     products.push({
+                        quantityAdded: parseInt(quantityAdded.trim(), 10),
+                        productName: productName.trim(),
+                        costPrice: costPrice,
+                        sellingPrice: sellingPrice
+                    });
+                }
+            } catch (e) {
+                logger.warn(`Failed to parse line structure: "${line}"`, e);
+            }
+        }
+    }
+    return products;
+};
+
 export async function handleMessage(message) {
   const whatsappId = message.from;
   const messageId = message.id; 
@@ -41,7 +71,7 @@ export async function handleMessage(message) {
   try {
     await setTypingIndicator(whatsappId, 'on', messageId);
     
-    // --- 1. MEDIA PROCESSING (Voice & Vision) ---
+    // --- 1. MEDIA PROCESSING ---
     let userInputText = "";
 
     if (message.type === 'text') {
@@ -67,8 +97,7 @@ export async function handleMessage(message) {
             return;
         }
     } else {
-        // Handle other types like stickers or location if necessary, or ignore
-        return;
+        return; // Ignore other types
     }
 
     const user = await findOrCreateUser(whatsappId);
@@ -120,7 +149,7 @@ export async function handleMessage(message) {
           await handleEditValue(user, userInputText);
           break;
 
-      // Handle Interactive States (User typed instead of clicked)
+      // Interactive States (Handled by buttons, but catching text fallback)
       case USER_STATES.AWAITING_BANK_SELECTION_SALE:
       case USER_STATES.AWAITING_BANK_SELECTION_EXPENSE:
       case USER_STATES.AWAITING_BANK_SELECTION_PURCHASE:
@@ -133,7 +162,7 @@ export async function handleMessage(message) {
       case USER_STATES.AWAITING_EDIT_FIELD_SELECTION:
       case USER_STATES.AWAITING_TRANSACTION_SELECTION:
       case USER_STATES.AWAITING_REPORT_TYPE_SELECTION:
-        await sendTextMessage(whatsappId, "Please select an option from the buttons or list I sent above, or type 'cancel' to stop.");
+        await sendTextMessage(whatsappId, "Please select an option from the buttons/list above, or type 'cancel'.");
         break;
 
       default:
@@ -149,7 +178,7 @@ export async function handleMessage(message) {
   }
 }
 
-// --- STATE HANDLERS ---
+// --- STATE LOGIC ---
 
 async function handleIdleState(user, text) {
     const { intent, context } = await getIntent(text);
@@ -157,6 +186,27 @@ async function handleIdleState(user, text) {
     if (intent === INTENTS.GENERAL_CONVERSATION) {
         const aiReply = context.generatedReply || "How can I help you with your bookkeeping today?";
         await sendTextMessage(user.whatsappId, aiReply);
+        return;
+    }
+
+    // [RESTORED] Bulk Add Products from List
+    if (intent === INTENTS.ADD_PRODUCTS_FROM_LIST) {
+        const products = parseProductList(text);
+        if (products.length === 0) {
+            await sendTextMessage(user.whatsappId, "I couldn't understand the list format. Try:\n`1. 10 Shirts - cost: 5000, sell: 8000`");
+            return;
+        }
+        let summary = "I've parsed your list:\n\n";
+        products.forEach((p, index) => {
+            const cost = p.costPrice.toLocaleString();
+            const sell = p.sellingPrice.toLocaleString();
+            summary += `${index + 1}. *${p.quantityAdded}x ${p.productName}*\n   Cost: ${cost}, Sell: ${sell}\n`;
+        });
+        await updateUserState(user.whatsappId, USER_STATES.AWAITING_BULK_PRODUCT_CONFIRMATION, { products });
+        await sendInteractiveButtons(user.whatsappId, summary, [
+            { id: 'confirm_bulk_add', title: '✅ Yes, Proceed' },
+            { id: 'cancel_bulk_add', title: '❌ No, Cancel' }
+        ]);
         return;
     }
 
@@ -199,14 +249,13 @@ async function handleIdleState(user, text) {
         }
 
     } else if (intent === INTENTS.CHECK_STOCK || intent === INTENTS.GET_FINANCIAL_SUMMARY || intent === INTENTS.CHECK_BANK_BALANCE || intent === INTENTS.GET_FINANCIAL_INSIGHT || intent === INTENTS.GET_CUSTOMER_BALANCES) {
-        // These intents still rely on the legacy TaskHandler for read-only ops or simple queries
         await executeTask(intent, user, context);
 
     } else if (intent === INTENTS.SHOW_MAIN_MENU) {
         await sendMainMenu(user.whatsappId);
 
     } else if (intent === INTENTS.RECONCILE_TRANSACTION) {
-        await executeTask(INTENTS.RECONCILE_TRANSACTION, user, {}); // Initiates the list selection flow
+        await executeTask(INTENTS.RECONCILE_TRANSACTION, user, {});
 
     } else {
         await sendTextMessage(user.whatsappId, "I can help with bookkeeping, sales, expenses, and reports. What would you like to do?");
@@ -226,7 +275,6 @@ async function handleLoggingSale(user, text) {
     } else {
         try {
             const finalData = { ...saleData, ...aiResponse.data };
-            // Auto-detect bank requirements
             const banks = await getAllBankAccounts(user._id);
             if (banks.length > 0 && !finalData.linkedBankId && finalData.saleType !== 'credit') {
                  await updateUserState(user.whatsappId, USER_STATES.AWAITING_BANK_SELECTION_SALE, { transactionData: finalData });
@@ -239,7 +287,6 @@ async function handleLoggingSale(user, text) {
             const txn = await TransactionManager.logSale(user, finalData);
             await sendTextMessage(user.whatsappId, `✅ Sale logged! Amount: ${user.currency} ${txn.amount.toLocaleString()}`);
             
-            // Ask for Invoice
             await updateUserState(user.whatsappId, USER_STATES.AWAITING_INVOICE_CONFIRMATION, { transaction: txn });
             await sendInteractiveButtons(user.whatsappId, 'Generate Invoice?', [{ id: 'invoice_yes', title: 'Yes' }, { id: 'invoice_no', title: 'No' }]);
             
@@ -291,7 +338,6 @@ async function handleAddingProduct(user, text) {
     } else {
         try {
             const productData = aiResponse.data;
-            // Check if stock added > 0, if so, ask for bank for cost deduction
             if (parseInt(productData.quantityAdded) > 0) {
                  const banks = await getAllBankAccounts(user._id);
                  if (banks.length > 0) {
@@ -366,13 +412,11 @@ async function handleAddingBankAccount(user, text) {
 
 async function handleEditValue(user, text) {
     const { transaction, fieldToEdit } = user.stateContext;
-    // Pass this back to the legacy task handler or a new edit service
-    // For now, delegating to the existing task handler logic
-    const changes = { [fieldToEdit]: text }; // Simplification, validation needed
+    const changes = { [fieldToEdit]: text };
     await executeTask(INTENTS.RECONCILE_TRANSACTION, user, { transactionId: transaction._id, action: 'edit', changes });
 }
 
-// --- ONBOARDING FLOW ---
+// --- ONBOARDING ---
 
 async function handleOnboardingFlow(user, text) {
     if (user.state === USER_STATES.NEW_USER) {

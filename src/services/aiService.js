@@ -12,11 +12,13 @@ const openai = new OpenAI({ apiKey: config.openai.apiKey });
  */
 async function downloadWhatsAppMedia(mediaId) {
     try {
+        // 1. Get the URL
         const urlRes = await axios.get(`https://graph.facebook.com/v20.0/${mediaId}`, {
             headers: { 'Authorization': `Bearer ${config.whatsapp.token}` }
         });
         const mediaUrl = urlRes.data.url;
 
+        // 2. Download the binary data
         const mediaRes = await axios.get(mediaUrl, {
             responseType: 'arraybuffer',
             headers: { 'Authorization': `Bearer ${config.whatsapp.token}` }
@@ -75,46 +77,91 @@ export async function analyzeImage(mediaId, caption = "") {
 
 // --- DEEPSEEK INTELLIGENCE ---
 
+/**
+ * Parses a price string (e.g., "₦1,000", "2.5m", "50k") into a number.
+ */
 const parsePrice = (priceInput) => {
     if (typeof priceInput === 'number') return priceInput;
     if (typeof priceInput !== 'string') return NaN;
+
     const cleaned = priceInput.replace(/₦|,/g, '').toLowerCase().trim();
     let multiplier = 1;
     let numericPart = cleaned;
-    if (cleaned.endsWith('k')) { multiplier = 1000; numericPart = cleaned.slice(0, -1); } 
-    else if (cleaned.endsWith('m')) { multiplier = 1000000; numericPart = cleaned.slice(0, -1); }
+
+    if (cleaned.endsWith('k')) {
+        multiplier = 1000;
+        numericPart = cleaned.slice(0, -1);
+    } else if (cleaned.endsWith('m')) {
+        multiplier = 1000000;
+        numericPart = cleaned.slice(0, -1);
+    }
+
     const value = parseFloat(numericPart);
     return isNaN(value) ? NaN : value * multiplier;
 };
 
 async function callDeepSeek(messages, temperature = 0.1, enforceJson = true) {
   try {
-    const payload = { model: 'deepseek-chat', messages, temperature };
+    const payload = {
+      model: 'deepseek-chat',
+      messages: messages,
+      temperature: temperature,
+    };
+    
+    // Only add response_format if enforceJson is true AND the prompt requests JSON
     if (enforceJson && messages.some(m => m.role === 'system' && m.content.toLowerCase().includes('json'))) {
         payload.response_format = { type: "json_object" };
     }
+
     const response = await axios.post(DEEPSEEK_API_URL, payload, {
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${config.deepseek.apiKey}` }
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${config.deepseek.apiKey}`
+      }
     });
+
     const content = response.data.choices[0].message.content;
+
+    // JSON Parsing Logic
     if (enforceJson && typeof content === 'string' && content.trim().startsWith('{')) {
-         try { return JSON.parse(content); } catch (e) { return content; }
+         try {
+             return JSON.parse(content);
+         } catch (parseError) {
+             logger.warn("AI response looked like JSON but failed to parse:", content);
+             return content;
+         }
     }
+
     return content;
+
   } catch (error) {
-    logger.error('DeepSeek API Error:', error.message);
-    throw new Error('AI service unavailable.');
+    logger.error('Error calling DeepSeek API:', error.response ? JSON.stringify(error.response.data, null, 2) : error.message);
+    throw new Error('Failed to communicate with the AI service.');
   }
 }
 
 export async function extractOnboardingDetails(text) {
-  const messages = [{ role: 'system', content: "Extract {\"businessName\": \"...\", \"email\": \"...\"} from text. Return JSON." }, { role: 'user', content: text }];
-  return await callDeepSeek(messages);
+  const messages = [
+    {
+      role: 'system',
+      content: "You are an expert entity extractor. Your task is to extract a business name and an email address from the user's message. Respond ONLY with a JSON object in the format {\"businessName\": \"The Extracted Name\", \"email\": \"user@example.com\"}. If a piece of information is not found, its value should be null."
+    },
+    { role: 'user', content: `Here is the message: "${text}"` }
+  ];
+  const responseJson = await callDeepSeek(messages);
+  return typeof responseJson === 'string' ? JSON.parse(responseJson) : responseJson;
 }
 
 export async function extractCurrency(text) {
-    const messages = [{ role: 'system', content: "Identify currency ISO code (e.g. NGN, USD). Return JSON {\"currency\": \"CODE\"}." }, { role: 'user', content: text }];
-    return await callDeepSeek(messages);
+    const messages = [
+        {
+            role: 'system',
+            content: "You are an expert currency identification system. Your task is to identify the currency mentioned in the user's text and convert it to its standard 3-letter ISO 4217 code. Examples: 'Naira' or '₦' -> 'NGN', 'US dollars' or '$' -> 'USD', 'Ghana Cedis' -> 'GHS', 'pounds' -> 'GBP'. Respond ONLY with a JSON object in the format {\"currency\": \"ISO_CODE\"}. If no currency is found, the value should be null."
+        },
+        { role: 'user', content: `Here is the message: "${text}"` }
+    ];
+    const responseJson = await callDeepSeek(messages);
+    return typeof responseJson === 'string' ? JSON.parse(responseJson) : responseJson;
 }
 
 /**
@@ -136,6 +183,10 @@ export async function getIntent(text) {
     - ${INTENTS.ADD_BANK_ACCOUNT}: "Add bank UBA", "New account access bank"
     - ${INTENTS.LOG_CUSTOMER_PAYMENT}: "John paid 5000", "Receive payment from Sarah"
     - ${INTENTS.GENERAL_CONVERSATION}: "Hello", "Thanks", "Who are you?", "Hi"
+    - ${INTENTS.SHOW_MAIN_MENU}: "Menu", "Show options", "Cancel"
+    - ${INTENTS.RECONCILE_TRANSACTION}: "Edit transaction", "Delete sale", "I made a mistake"
+    - ${INTENTS.GET_CUSTOMER_BALANCES}: "Who owes me?", "Debtors list"
+    - ${INTENTS.ADD_PRODUCTS_FROM_LIST}: (Detected via multi-line list input automatically, but keep as option)
 
     RULES:
     1. If Intent is ${INTENTS.GENERATE_REPORT}:
@@ -146,50 +197,130 @@ export async function getIntent(text) {
     
     2. Dates: Calculate "startDate" and "endDate" (YYYY-MM-DD) based on user input (e.g., "last month", "today"). Default to "this_month".
 
+    3. General Conversation:
+       - If the user says "Hello" or asks a question, set intent to ${INTENTS.GENERAL_CONVERSATION}.
+       - You MUST provide a "generatedReply" string in the context.
+
     Return JSON format: {"intent": "...", "context": {...}}
     `;
 
     const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: text }];
     let result = await callDeepSeek(messages);
     
-    // Cleanup numbers
-    if (result.context?.amount) result.context.amount = parsePrice(result.context.amount);
-    if (result.context?.totalAmount) result.context.totalAmount = parsePrice(result.context.totalAmount);
+    // Post-processing to clean up extracted numbers
+    if (result.context) {
+        if (result.context.amount) result.context.amount = parsePrice(result.context.amount);
+        if (result.context.totalAmount) result.context.totalAmount = parsePrice(result.context.totalAmount);
+        if (result.context.amountPerUnit) result.context.amountPerUnit = parsePrice(result.context.amountPerUnit);
+        if (result.context.unitsSold) result.context.unitsSold = parseInt(result.context.unitsSold, 10) || 1;
+        if (result.context.openingBalance) result.context.openingBalance = parsePrice(result.context.openingBalance);
+    }
     
     return result;
 }
 
 export async function getFinancialInsight(pnlData, currency) {
-    const messages = [{ role: 'system', content: `Analyze this P&L data and give one friendly, short business tip. Data: ${JSON.stringify(pnlData)}` }];
+    const systemPrompt = `Analyze this P&L data and give one friendly, short business tip. Data: ${JSON.stringify(pnlData)}`;
+    const messages = [{ role: 'system', content: systemPrompt }];
     return await callDeepSeek(messages, 0.7, false);
 }
 
-export async function gatherSaleDetails(history, existingProduct, isService) { 
-    const systemPrompt = `Collect sale details (items, customerName, saleType). Items need productName, quantity, pricePerUnit. Return JSON.`;
-    const messages = [{ role: 'system', content: systemPrompt }, ...history];
-    return await callDeepSeek(messages, 0.5); 
+export async function gatherSaleDetails(conversationHistory, existingProduct = null, isService = false) {
+    const productInfo = isService 
+        ? "The user confirmed this is a service." 
+        : (existingProduct ? `Existing product: "${existingProduct.productName}", Price: ${existingProduct.sellingPrice}.` : 'New product/service.');
+
+    const systemPrompt = `You are a bookkeeping assistant logging a sale.
+    CONTEXT: ${productInfo}
+    GOAL: Collect 'items' (array of {productName, quantity, pricePerUnit}), 'customerName', and 'saleType' (Cash/Credit/Bank).
+    RULES:
+    1. Extract details. Default quantity is 1.
+    2. If product exists, use its price if user doesn't specify.
+    3. Once you have an item, add it to 'items'.
+    4. Ask "Anything else?" after adding items.
+    5. ONLY when user says "done"/"no", return {"status": "complete", "data": {...}}.
+    6. Otherwise return {"status": "incomplete", "reply": "Next question..."}.
+    Return JSON.`;
+
+    const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
+    let response = await callDeepSeek(messages, 0.5);
+    
+    // Ensure numeric values
+    if (response.status === 'complete' && response.data && response.data.items) {
+        response.data.items = response.data.items.map(item => ({
+            ...item,
+            pricePerUnit: parsePrice(item.pricePerUnit),
+            quantity: item.quantity ? parseInt(item.quantity, 10) : 1
+        }));
+    }
+    return { ...response, memory: [...conversationHistory, { role: 'assistant', content: JSON.stringify(response) }] };
 }
 
-export async function gatherExpenseDetails(history) {
-    const systemPrompt = `Collect expense details (category, amount, description). Auto-categorize. Return JSON.`;
-    const messages = [{ role: 'system', content: systemPrompt }, ...history];
-    return await callDeepSeek(messages, 0.5); 
+export async function gatherExpenseDetails(conversationHistory) {
+    const systemPrompt = `You are a smart bookkeeping assistant. Goal: Log expense (Category, Amount, Description).
+    RULES:
+    1. **Auto-Categorize** based on description (e.g. "fuel" -> "Transportation").
+    2. Return {"status": "complete", "data": {"category": "...", "amount": "...", "description": "..."}} when ready.
+    3. Otherwise {"status": "incomplete", "reply": "Question..."}.
+    Return JSON.`;
+
+    const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
+    let response = await callDeepSeek(messages, 0.5);
+
+    if (response.status === 'complete' && response.data) {
+        response.data.amount = parsePrice(response.data.amount);
+    }
+    return { ...response, memory: [...conversationHistory, { role: 'assistant', content: JSON.stringify(response) }] };
 }
 
-export async function gatherProductDetails(history, existingProduct) {
-    const systemPrompt = `Collect product details (productName, quantityAdded, costPrice, sellingPrice). Return JSON.`;
-    const messages = [{ role: 'system', content: systemPrompt }, ...history];
-    return await callDeepSeek(messages, 0.5); 
+export async function gatherProductDetails(conversationHistory, existingProduct = null) {
+    const existingDataInfo = existingProduct 
+        ? `Existing product: Cost ${existingProduct.costPrice}, Sell ${existingProduct.sellingPrice}.`
+        : 'New product.';
+
+    const systemPrompt = `Inventory Manager. Goal: Add/Update product (productName, quantityAdded, costPrice, sellingPrice).
+    CONTEXT: ${existingDataInfo}
+    RULES:
+    1. If user says "same price", use existing data.
+    2. Return {"status": "complete", "data": {...}} when ready.
+    3. Otherwise {"status": "incomplete", "reply": "..."}.
+    Return JSON.`;
+
+    const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
+    let response = await callDeepSeek(messages, 0.5);
+
+    if (response.status === 'complete' && response.data) {
+         response.data.costPrice = parsePrice(response.data.costPrice);
+         response.data.sellingPrice = parsePrice(response.data.sellingPrice);
+         response.data.quantityAdded = parseInt(response.data.quantityAdded, 10);
+    }
+    return { ...response, memory: [...conversationHistory, { role: 'assistant', content: JSON.stringify(response) }] };
 }
 
-export async function gatherPaymentDetails(history, cur) {
-    const systemPrompt = `Collect payment details (customerName, amount). Return JSON.`;
-    const messages = [{ role: 'system', content: systemPrompt }, ...history];
-    return await callDeepSeek(messages, 0.5); 
+export async function gatherPaymentDetails(conversationHistory, userCurrency) {
+    const systemPrompt = `Log Customer Payment. Need: "customerName", "amount".
+    Assume currency is ${userCurrency}.
+    Return JSON: {"status": "complete"/"incomplete", ...}`;
+
+    const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
+    let response = await callDeepSeek(messages, 0.5);
+
+    if (response.status === 'complete' && response.data) {
+        response.data.amount = parsePrice(response.data.amount);
+    }
+    return { ...response, memory: [...conversationHistory, { role: 'assistant', content: JSON.stringify(response) }] };
 }
 
-export async function gatherBankAccountDetails(history, cur) {
-    const systemPrompt = `Collect bank details (bankName, openingBalance). Return JSON.`;
-    const messages = [{ role: 'system', content: systemPrompt }, ...history];
-    return await callDeepSeek(messages, 0.5); 
+export async function gatherBankAccountDetails(conversationHistory, userCurrency) {
+    const systemPrompt = `Add Bank Account. Need: "bankName", "openingBalance".
+    Assume currency is ${userCurrency}.
+    Return JSON: {"status": "complete"/"incomplete", ...}`;
+
+    const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
+    let response = await callDeepSeek(messages, 0.5);
+
+    if (response.status === 'complete' && response.data) {
+        response.data.openingBalance = parsePrice(response.data.openingBalance);
+    }
+    return { ...response, memory: [...conversationHistory, { role: 'assistant', content: JSON.stringify(response) }] };
 }

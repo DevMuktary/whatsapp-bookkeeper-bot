@@ -6,27 +6,36 @@ import { generatePDFFromTemplate } from './pdfService.js';
 import { sendDocument, sendTextMessage, uploadMedia } from '../api/whatsappService.js';
 import { getPnLData, getReportTransactions } from './ReportManager.js';
 
-// [UPDATED] Connection Logic with IPv6 Support for Railway
+// [UPDATED] Connection Logic - Uses family: 0 for auto-detection (IPv4/IPv6)
 let connection;
 
-if (config.redis.url) {
-    logger.info('Connecting to Redis via URL...');
-    connection = new IORedis(config.redis.url, {
-        maxRetriesPerRequest: null,
-        family: 6 // <--- CRITICAL FIX: Forces IPv6 for Railway Private Networking
-    });
-} else {
-    logger.info(`Connecting to Redis at ${config.redis.host}:${config.redis.port}...`);
-    connection = {
-        host: config.redis.host,
-        port: config.redis.port,
-        password: config.redis.password,
-        family: 6 // <--- CRITICAL FIX here too
-    };
+try {
+    if (config.redis.url) {
+        logger.info('Connecting to Redis via URL...');
+        connection = new IORedis(config.redis.url, {
+            maxRetriesPerRequest: null,
+            family: 0 // <--- CHANGED: 0 means "Try both IPv4 and IPv6"
+        });
+    } else {
+        logger.info(`Connecting to Redis at ${config.redis.host}:${config.redis.port}...`);
+        connection = {
+            host: config.redis.host,
+            port: config.redis.port,
+            password: config.redis.password,
+            family: 0 // <--- CHANGED
+        };
+    }
+} catch (err) {
+    logger.error("Redis Connection Failed immediately:", err);
 }
 
 // 1. Define the Queue
 export const reportQueue = new Queue('report-generation', { connection });
+
+// Log connection errors
+reportQueue.on('error', (err) => {
+    logger.error('Queue connection error:', err.message);
+});
 
 /**
  * Add a job to the queue

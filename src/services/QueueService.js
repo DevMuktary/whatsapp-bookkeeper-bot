@@ -1,17 +1,29 @@
 import { Queue, Worker } from 'bullmq';
+import IORedis from 'ioredis'; // Available via bullmq dependency
 import config from '../config/index.js';
 import logger from '../utils/logger.js';
-import { generatePDFFromTemplate } from './pdfService.js'; // You will update pdfService to use this
-import { sendDocument, sendTextMessage } from '../api/whatsappService.js';
-import { uploadMedia } from '../api/whatsappService.js';
+import { generatePDFFromTemplate } from './pdfService.js';
+import { sendDocument, sendTextMessage, uploadMedia } from '../api/whatsappService.js';
 import { getPnLData, getReportTransactions } from './ReportManager.js';
 
-// Connection config for Redis
-const connection = {
-    host: config.redis?.host || 'localhost',
-    port: config.redis?.port || 6379,
-    password: config.redis?.password
-};
+// [UPDATED] Smart Connection Logic
+let connection;
+
+if (config.redis.url) {
+    // If a full URL is provided (common in Railway/Cloud), use it
+    logger.info('Connecting to Redis via URL...');
+    connection = new IORedis(config.redis.url, {
+        maxRetriesPerRequest: null // Required by BullMQ
+    });
+} else {
+    // Fallback to Host/Port
+    logger.info(`Connecting to Redis at ${config.redis.host}:${config.redis.port}...`);
+    connection = {
+        host: config.redis.host,
+        port: config.redis.port,
+        password: config.redis.password
+    };
+}
 
 // 1. Define the Queue
 export const reportQueue = new Queue('report-generation', { connection });
@@ -31,7 +43,6 @@ export async function queueReportGeneration(userId, userCurrency, reportType, da
 }
 
 // 2. Define the Worker (Processor)
-// This usually runs in index.js or a separate worker process, but defined here for modularity.
 export const reportWorker = new Worker('report-generation', async (job) => {
     const { userId, userCurrency, reportType, dateRange, whatsappId } = job.data;
     
@@ -49,7 +60,6 @@ export const reportWorker = new Worker('report-generation', async (job) => {
             dataContext.pnl = pnlData;
             filename = 'PnL_Report.pdf';
             
-            // Generate PDF using HTML Template
             pdfBuffer = await generatePDFFromTemplate('report', dataContext);
 
         } else if (reportType === 'SALES' || reportType === 'EXPENSES') {
@@ -58,14 +68,13 @@ export const reportWorker = new Worker('report-generation', async (job) => {
             
             dataContext.type = reportType === 'SALES' ? 'Sales Report' : 'Expense Report';
             dataContext.transactions = transactions;
-            dataContext.isList = true; // Flag for template
+            dataContext.isList = true; 
             filename = `${reportType}_Report.pdf`;
 
             pdfBuffer = await generatePDFFromTemplate('report', dataContext);
         }
 
         if (pdfBuffer) {
-            // Upload and Send via WhatsApp
             const mediaId = await uploadMedia(pdfBuffer, 'application/pdf');
             if (mediaId) {
                 await sendDocument(whatsappId, mediaId, filename, `Here is your ${dataContext.type}.`);

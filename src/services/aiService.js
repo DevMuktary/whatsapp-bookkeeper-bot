@@ -30,7 +30,7 @@ async function downloadWhatsAppMedia(mediaId) {
     }
 }
 
-// --- OPENAI WHISPER & VISION (Silent Background Processing) ---
+// --- NEW FEATURES: Voice & Vision (Silent Background Processing) ---
 
 export async function transcribeAudio(mediaId) {
     try {
@@ -75,7 +75,7 @@ export async function analyzeImage(mediaId, caption = "") {
     }
 }
 
-// --- DEEPSEEK INTELLIGENCE ---
+// --- ORIGINAL CORE LOGIC (Restored & Improved) ---
 
 /**
  * Parses a price string (e.g., "₦1,000", "2.5m", "50k") into a number.
@@ -177,6 +177,7 @@ export async function getIntent(text) {
     - ${INTENTS.LOG_SALE}: "Sold 5 rice", "Credit sale to John"
     - ${INTENTS.LOG_EXPENSE}: "Bought fuel 500", "Paid shop rent"
     - ${INTENTS.ADD_PRODUCT}: "Restock rice 50 bags", "New item indomie 2000"
+    - ${INTENTS.ADD_PRODUCTS_FROM_LIST}: (Detected via multi-line list input automatically, but keep as option)
     - ${INTENTS.CHECK_STOCK}: "How many rice left?", "Count stock"
     - ${INTENTS.GENERATE_REPORT}: "Send me a report", "Expense report", "Sales report", "P&L", "Profit and Loss", "Report for last month"
     - ${INTENTS.GET_FINANCIAL_SUMMARY}: "Total sales today", "How much did I spend?"
@@ -186,7 +187,6 @@ export async function getIntent(text) {
     - ${INTENTS.SHOW_MAIN_MENU}: "Menu", "Show options", "Cancel"
     - ${INTENTS.RECONCILE_TRANSACTION}: "Edit transaction", "Delete sale", "I made a mistake"
     - ${INTENTS.GET_CUSTOMER_BALANCES}: "Who owes me?", "Debtors list"
-    - ${INTENTS.ADD_PRODUCTS_FROM_LIST}: (Detected via multi-line list input automatically, but keep as option)
 
     RULES:
     1. If Intent is ${INTENTS.GENERATE_REPORT}:
@@ -225,7 +225,7 @@ export async function getFinancialInsight(pnlData, currency) {
     return await callDeepSeek(messages, 0.7, false);
 }
 
-export async function gatherSaleDetails(conversationHistory, existingProduct = null, isService = false) {
+export async function gatherSaleDetails(conversationHistory, existingProduct = null, isService = false) { 
     const productInfo = isService 
         ? "The user confirmed this is a service." 
         : (existingProduct ? `Existing product: "${existingProduct.productName}", Price: ${existingProduct.sellingPrice}.` : 'New product/service.');

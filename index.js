@@ -1,35 +1,41 @@
-// A central place for all configuration.
-const config = {
-  port: process.env.PORT || 3000,
-  mongoURI: process.env.MONGO_URI,
-  whatsapp: {
-    token: process.env.WHATSAPP_TOKEN,
-    phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID,
-    verifyToken: process.env.WHATSAPP_VERIFY_TOKEN
-  },
-  deepseek: {
-    apiKey: process.env.DEEPSEEK_API_KEY
-  },
-  openai: {
-    apiKey: process.env.OPENAI_API_KEY 
-  },
-  brevo: {
-    apiKey: process.env.BREVO_API_KEY
-  },
-  // [UPDATED] Flexible Redis config for Railway
-  redis: {
-    url: process.env.REDIS_URL || process.env.REDIS_PRIVATE_URL,
-    host: process.env.REDIS_HOST || process.env.REDISHOST || 'localhost',
-    port: process.env.REDIS_PORT || process.env.REDISPORT || 6379,
-    password: process.env.REDIS_PASSWORD || process.env.REDISPASSWORD || undefined
-  },
-  logLevel: process.env.LOG_LEVEL || 'info',
-};
+import express from 'express';
+import cors from 'cors';
+import config from './src/config/index.js';
+import { connectToDB } from './src/db/connection.js';
+import whatsappRouter from './src/webhooks/whatsapp.js';
+import logger from './src/utils/logger.js';
 
-// Basic validation
-if (!config.mongoURI || !config.whatsapp.token) {
-  console.error("FATAL ERROR: Missing critical environment variables.");
-  process.exit(1);
+const app = express();
+
+// Middleware to parse JSON bodies (Required for WhatsApp Webhooks)
+app.use(express.json());
+app.use(cors());
+
+// Health check route (useful for checking if the server is alive)
+app.get('/', (req, res) => {
+  res.send('Fynax Bookkeeper Bot is running! 🚀');
+});
+
+// Mount the WhatsApp webhook router
+// NOTE: Make sure your Meta App Dashboard Callback URL matches this path.
+// e.g., https://your-domain.com/webhook
+app.use('/webhook', whatsappRouter);
+
+// Start the Server
+async function startServer() {
+  try {
+    // 1. Connect to Database
+    await connectToDB();
+
+    // 2. Start Listening
+    app.listen(config.port, () => {
+      logger.info(`Server is running on port ${config.port}`);
+    });
+
+  } catch (error) {
+    logger.error('Failed to start the server:', error);
+    process.exit(1);
+  }
 }
 
-export default config;
+startServer();

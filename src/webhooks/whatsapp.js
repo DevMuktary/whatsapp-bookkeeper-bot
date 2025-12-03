@@ -21,23 +21,25 @@ router.get('/', (req, res) => {
   }
 });
 
-// Route for receiving messages and events from WhatsApp
+// Route for receiving messages and events
 router.post('/', (req, res) => {
   const body = req.body;
-  
   res.sendStatus(200);
 
   if (body.object === 'whatsapp_business_account') {
-    const message = body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
-    if (message) {
-      if (message.type === 'text') {
-        handleMessage(message);
-      } else if (message.type === 'interactive' && (message.interactive.type === 'button_reply' || message.interactive.type === 'list_reply')) {
-        handleInteractiveMessage(message);
-      }
+    const changes = body.entry?.[0]?.changes?.[0]?.value;
+    
+    if (changes?.messages?.[0]) {
+        const message = changes.messages[0];
+        
+        // [UPDATED] Handle Text, Images, and Audio (Voice Notes)
+        if (message.type === 'text' || message.type === 'image' || message.type === 'audio') {
+            handleMessage(message);
+        } 
+        else if (message.type === 'interactive') {
+            handleInteractiveMessage(message);
+        }
     }
-  } else {
-    logger.warn('Received a non-whatsapp_business_account payload');
   }
 });
 

@@ -6,20 +6,22 @@ import { generatePDFFromTemplate } from './pdfService.js';
 import { sendDocument, sendTextMessage, uploadMedia } from '../api/whatsappService.js';
 import { getPnLData, getReportTransactions } from './ReportManager.js';
 
-// [UPDATED] Connection Logic
+// [UPDATED] Connection Logic with IPv6 Support for Railway
 let connection;
 
 if (config.redis.url) {
     logger.info('Connecting to Redis via URL...');
     connection = new IORedis(config.redis.url, {
-        maxRetriesPerRequest: null 
+        maxRetriesPerRequest: null,
+        family: 6 // <--- CRITICAL FIX: Forces IPv6 for Railway Private Networking
     });
 } else {
     logger.info(`Connecting to Redis at ${config.redis.host}:${config.redis.port}...`);
     connection = {
         host: config.redis.host,
         port: config.redis.port,
-        password: config.redis.password
+        password: config.redis.password,
+        family: 6 // <--- CRITICAL FIX here too
     };
 }
 

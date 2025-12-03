@@ -10,18 +10,18 @@ const config = {
   deepseek: {
     apiKey: process.env.DEEPSEEK_API_KEY
   },
-  // [NEW] OpenAI for Vision and Voice (Whisper)
   openai: {
     apiKey: process.env.OPENAI_API_KEY 
   },
   brevo: {
     apiKey: process.env.BREVO_API_KEY
   },
-  // [NEW] Redis for Message Queues (BullMQ)
+  // [UPDATED] Added REDISHOST and REDIS_URL for Railway support
   redis: {
-    host: process.env.REDIS_HOST || 'localhost',
-    port: process.env.REDIS_PORT || 6379,
-    password: process.env.REDIS_PASSWORD || undefined
+    url: process.env.REDIS_URL || process.env.REDIS_PRIVATE_URL,
+    host: process.env.REDIS_HOST || process.env.REDISHOST || 'localhost',
+    port: process.env.REDIS_PORT || process.env.REDISPORT || 6379,
+    password: process.env.REDIS_PASSWORD || process.env.REDISPASSWORD || undefined
   },
   logLevel: process.env.LOG_LEVEL || 'info',
 };

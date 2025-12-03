@@ -12,13 +12,11 @@ const openai = new OpenAI({ apiKey: config.openai.apiKey });
  */
 async function downloadWhatsAppMedia(mediaId) {
     try {
-        // 1. Get URL
         const urlRes = await axios.get(`https://graph.facebook.com/v20.0/${mediaId}`, {
             headers: { 'Authorization': `Bearer ${config.whatsapp.token}` }
         });
         const mediaUrl = urlRes.data.url;
 
-        // 2. Download Binary
         const mediaRes = await axios.get(mediaUrl, {
             responseType: 'arraybuffer',
             headers: { 'Authorization': `Bearer ${config.whatsapp.token}` }
@@ -30,13 +28,12 @@ async function downloadWhatsAppMedia(mediaId) {
     }
 }
 
-/**
- * [NEW] Transcribes Voice Notes using OpenAI Whisper.
- */
+// --- OPENAI WHISPER & VISION (Silent Background Processing) ---
+
 export async function transcribeAudio(mediaId) {
     try {
         const audioBuffer = await downloadWhatsAppMedia(mediaId);
-        // Create a File object-like structure for OpenAI
+        // Create a File-like object for OpenAI
         const file = await OpenAI.toFile(audioBuffer, 'voice_note.ogg', { type: 'audio/ogg' });
         
         const transcription = await openai.audio.transcriptions.create({
@@ -50,9 +47,6 @@ export async function transcribeAudio(mediaId) {
     }
 }
 
-/**
- * [NEW] Analyzes Images (Receipts/Invoices) using OpenAI Vision.
- */
 export async function analyzeImage(mediaId, caption = "") {
     try {
         const imageBuffer = await downloadWhatsAppMedia(mediaId);
@@ -60,12 +54,12 @@ export async function analyzeImage(mediaId, caption = "") {
         const dataUrl = `data:image/jpeg;base64,${base64Image}`;
 
         const response = await openai.chat.completions.create({
-            model: "gpt-4o", // Or gpt-4-turbo
+            model: "gpt-4o",
             messages: [
                 {
                     role: "user",
                     content: [
-                        { type: "text", text: `Extract relevant bookkeeping details from this image. If it's a receipt, list items, total amount, and date. If it's just a photo of a product, describe it. User caption: "${caption}"` },
+                        { type: "text", text: `Extract relevant bookkeeping details from this image. If it's a receipt, list items, total amount, and date. If it's a product, describe it. User caption: "${caption}"` },
                         { type: "image_url", image_url: { url: dataUrl } },
                     ],
                 },
@@ -79,7 +73,7 @@ export async function analyzeImage(mediaId, caption = "") {
     }
 }
 
-// --- EXISTING DEEPSEEK LOGIC BELOW (Preserved) ---
+// --- DEEPSEEK INTELLIGENCE ---
 
 const parsePrice = (priceInput) => {
     if (typeof priceInput === 'number') return priceInput;
@@ -123,48 +117,78 @@ export async function extractCurrency(text) {
     return await callDeepSeek(messages);
 }
 
+/**
+ * [UPDATED] Smarter Intent Detection
+ * Ensures specific report requests (e.g., "expense report") are caught correctly.
+ */
 export async function getIntent(text) {
     const today = new Date().toISOString().split('T')[0];
-    const systemPrompt = `Identify intent from text. TODAY: ${today}.
-    Intents: ${Object.values(INTENTS).join(', ')}.
-    Return JSON: {"intent": "...", "context": {...}}.`;
+    const systemPrompt = `You are an intent classifier. Respond ONLY with JSON.
+    TODAY: ${today}
+
+    INTENTS:
+    - ${INTENTS.LOG_SALE}: "Sold 5 rice", "Credit sale to John"
+    - ${INTENTS.LOG_EXPENSE}: "Bought fuel 500", "Paid shop rent"
+    - ${INTENTS.ADD_PRODUCT}: "Restock rice 50 bags", "New item indomie 2000"
+    - ${INTENTS.CHECK_STOCK}: "How many rice left?", "Count stock"
+    - ${INTENTS.GENERATE_REPORT}: "Send me a report", "Expense report", "Sales report", "P&L", "Profit and Loss", "Report for last month"
+    - ${INTENTS.GET_FINANCIAL_SUMMARY}: "Total sales today", "How much did I spend?"
+    - ${INTENTS.ADD_BANK_ACCOUNT}: "Add bank UBA", "New account access bank"
+    - ${INTENTS.LOG_CUSTOMER_PAYMENT}: "John paid 5000", "Receive payment from Sarah"
+    - ${INTENTS.GENERAL_CONVERSATION}: "Hello", "Thanks", "Who are you?", "Hi"
+
+    RULES:
+    1. If Intent is ${INTENTS.GENERATE_REPORT}:
+       - Context MUST include "reportType": "SALES", "EXPENSES", "PNL", "INVENTORY", or "COGS".
+       - Example: "Expense report" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "EXPENSES"}}
+       - Example: "Profit and loss" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "PNL"}}
+       - If unspecified ("Generate report"), "reportType" is null.
+    
+    2. Dates: Calculate "startDate" and "endDate" (YYYY-MM-DD) based on user input (e.g., "last month", "today"). Default to "this_month".
+
+    Return JSON format: {"intent": "...", "context": {...}}
+    `;
+
     const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: text }];
     let result = await callDeepSeek(messages);
     
-    // Quick cleanup
+    // Cleanup numbers
     if (result.context?.amount) result.context.amount = parsePrice(result.context.amount);
     if (result.context?.totalAmount) result.context.totalAmount = parsePrice(result.context.totalAmount);
+    
     return result;
 }
 
 export async function getFinancialInsight(pnlData, currency) {
-    // Note: Passed to DeepSeek for creative insight
-    const messages = [{ role: 'system', content: `Analyze this P&L data and give one friendly insight: ${JSON.stringify(pnlData)}` }];
+    const messages = [{ role: 'system', content: `Analyze this P&L data and give one friendly, short business tip. Data: ${JSON.stringify(pnlData)}` }];
     return await callDeepSeek(messages, 0.7, false);
 }
 
-// ... (Existing gather* functions remain same, just ensure they are exported) ...
-export async function gatherSaleDetails(history, existingProduct, isService) { /* ... same as before ... */ 
+export async function gatherSaleDetails(history, existingProduct, isService) { 
     const systemPrompt = `Collect sale details (items, customerName, saleType). Items need productName, quantity, pricePerUnit. Return JSON.`;
     const messages = [{ role: 'system', content: systemPrompt }, ...history];
     return await callDeepSeek(messages, 0.5); 
 }
-export async function gatherExpenseDetails(history) { /* ... same as before ... */
+
+export async function gatherExpenseDetails(history) {
     const systemPrompt = `Collect expense details (category, amount, description). Auto-categorize. Return JSON.`;
     const messages = [{ role: 'system', content: systemPrompt }, ...history];
     return await callDeepSeek(messages, 0.5); 
 }
-export async function gatherProductDetails(history, existingProduct) { /* ... same as before ... */
+
+export async function gatherProductDetails(history, existingProduct) {
     const systemPrompt = `Collect product details (productName, quantityAdded, costPrice, sellingPrice). Return JSON.`;
     const messages = [{ role: 'system', content: systemPrompt }, ...history];
     return await callDeepSeek(messages, 0.5); 
 }
-export async function gatherPaymentDetails(history, cur) { /* ... same as before ... */ 
+
+export async function gatherPaymentDetails(history, cur) {
     const systemPrompt = `Collect payment details (customerName, amount). Return JSON.`;
     const messages = [{ role: 'system', content: systemPrompt }, ...history];
     return await callDeepSeek(messages, 0.5); 
 }
-export async function gatherBankAccountDetails(history, cur) { /* ... same as before ... */ 
+
+export async function gatherBankAccountDetails(history, cur) {
     const systemPrompt = `Collect bank details (bankName, openingBalance). Return JSON.`;
     const messages = [{ role: 'system', content: systemPrompt }, ...history];
     return await callDeepSeek(messages, 0.5); 

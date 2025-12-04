@@ -4,14 +4,16 @@ import logger from '../utils/logger.js';
 import { ObjectId } from 'mongodb';
 
 export async function addProduct(user, productData) {
-    const { productName, quantityAdded, costPrice, sellingPrice, linkedBankId } = productData;
+    // [UPDATED] Destructure reorderLevel
+    const { productName, quantityAdded, costPrice, sellingPrice, linkedBankId, reorderLevel } = productData;
     
     const quantity = parseInt(quantityAdded, 10);
     const cost = parseFloat(costPrice);
     const sell = parseFloat(sellingPrice);
+    const alertThreshold = reorderLevel ? parseInt(reorderLevel, 10) : 5; // Default 5
 
     // Update/Create the product
-    const product = await upsertProduct(user._id, productName, quantity, cost, sell);
+    const product = await upsertProduct(user._id, productName, quantity, cost, sell, alertThreshold);
 
     // Handle Bank Deduction for Stock Purchase
     if (quantity > 0 && linkedBankId) {
@@ -38,7 +40,8 @@ export async function addBulkProducts(user, productsList) {
                 p.productName, 
                 p.quantityAdded, 
                 p.costPrice, 
-                p.sellingPrice
+                p.sellingPrice,
+                5 // Default reorder level for bulk (can be improved later)
             );
             results.added.push(product);
         } catch (error) {
@@ -47,9 +50,5 @@ export async function addBulkProducts(user, productsList) {
         }
     }
     
-    // NOTE: We are NOT deducting from bank for bulk uploads yet as it requires 
-    // asking the user which bank to use for the *sum* of all items. 
-    // This can be added as a future feature.
-
     return results;
 }

@@ -5,7 +5,8 @@ const config = {
   whatsapp: {
     token: process.env.WHATSAPP_TOKEN,
     phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID,
-    verifyToken: process.env.WHATSAPP_VERIFY_TOKEN
+    verifyToken: process.env.WHATSAPP_VERIFY_TOKEN,
+    flowId: process.env.WHATSAPP_FLOW_ID // [NEW] Add this to your .env file
   },
   deepseek: {
     apiKey: process.env.DEEPSEEK_API_KEY
@@ -16,15 +17,13 @@ const config = {
   brevo: {
     apiKey: process.env.BREVO_API_KEY
   },
-  // [UPDATED] Robust Redis Config for Railway
+  // Robust Redis Config for Railway
   redis: {
     // Railway provides REDIS_URL (Public) or REDIS_PRIVATE_URL (Private). 
-    // Private is faster/cheaper if your bot is also on Railway.
     url: process.env.REDIS_PRIVATE_URL || process.env.REDIS_URL || 'redis://localhost:6379',
     options: {
-        // BullMQ requires this to be null
         maxRetriesPerRequest: null, 
-        // Auto-enable TLS for 'rediss://' URLs (Railway Public)
+        // Auto-enable TLS for 'rediss://' URLs
         tls: (process.env.REDIS_PRIVATE_URL || process.env.REDIS_URL || '').startsWith('rediss') 
              ? { rejectUnauthorized: false } 
              : undefined

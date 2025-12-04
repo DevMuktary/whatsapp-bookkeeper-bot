@@ -25,8 +25,6 @@ import { ObjectId } from 'mongodb';
 const CANCEL_KEYWORDS = ['cancel', 'stop', 'exit', 'abort', 'quit'];
 const MAX_MEMORY_DEPTH = 12;
 
-// --- HELPERS ---
-
 const limitMemory = (memory) => {
     if (memory.length > MAX_MEMORY_DEPTH) return memory.slice(-MAX_MEMORY_DEPTH);
     return memory;
@@ -54,13 +52,12 @@ const extractDateRange = (context, defaultPeriod = 'this_month') => {
     return getDateRange(dateInput);
 };
 
-// Switches context for Staff members to the Owner's account
 async function getEffectiveUser(user) {
     if (user.role === 'STAFF' && user.linkedAccountId) {
         return {
             ...user,
-            _id: user.linkedAccountId, // Swap ID to Owner's
-            originalUserId: user._id,  // Keep track of real user
+            _id: user.linkedAccountId,
+            originalUserId: user._id, 
             staffName: user.businessName || user.whatsappId,
             isStaff: true
         };
@@ -68,17 +65,15 @@ async function getEffectiveUser(user) {
     return user;
 }
 
-// Smart Bank Selector (Handles >3 Banks)
-async function askForBankSelection(user, transactionData, nextState, promptText) {
+// [EXPORTED] Smart Bank Selector
+export async function askForBankSelection(user, transactionData, nextState, promptText) {
     const banks = await getAllBankAccounts(user._id);
     
-    // Always add "None" option
     const options = banks.map(b => ({ id: `select_bank:${b._id}`, title: b.bankName }));
     options.push({ id: `select_bank:none`, title: 'No Bank / Cash' });
 
     await updateUserState(user.whatsappId, nextState, { transactionData });
 
-    // WhatsApp Button Limit is 3. If more, use a List.
     if (options.length <= 3) {
         await sendInteractiveButtons(user.whatsappId, promptText, options);
     } else {
@@ -99,13 +94,11 @@ export async function handleMessage(message) {
   try {
     await setTypingIndicator(whatsappId, 'on', messageId);
     
-    // 1. MEDIA & INPUT PROCESSING
     let userInputText = "";
     if (message.type === 'text') userInputText = message.text.body;
     else if (message.type === 'audio') userInputText = await transcribeAudio(message.audio.id) || "";
     else if (message.type === 'image') userInputText = await analyzeImage(message.image.id, message.image.caption) || "";
     
-    // HANDLE EXCEL IMPORT (BULK PRODUCTS)
     else if (message.type === 'document') {
         const mime = message.document.mime_type;
         const rawUser = await findOrCreateUser(whatsappId);
@@ -130,7 +123,7 @@ export async function handleMessage(message) {
     const user = await getEffectiveUser(rawUser);
     const lowerCaseText = userInputText.trim().toLowerCase();
 
-    // 2. SYSTEM COMMANDS (JOIN TEAM)
+    // SYSTEM COMMANDS
     if (lowerCaseText.startsWith('join ')) {
         const code = lowerCaseText.split(' ')[1]?.toUpperCase();
         if (code) {
@@ -148,7 +141,7 @@ export async function handleMessage(message) {
         return;
     }
 
-    // 3. ONBOARDING (FLOWS)
+    // ONBOARDING
     if (user.state === USER_STATES.NEW_USER && user.role !== 'STAFF') {
         if (CANCEL_KEYWORDS.includes(lowerCaseText)) {
              await sendTextMessage(whatsappId, "Okay, message me whenever you are ready to start!");
@@ -163,7 +156,6 @@ export async function handleMessage(message) {
         return;
     }
 
-    // 4. CANCELLATION
     if (CANCEL_KEYWORDS.includes(lowerCaseText)) {
         if (user.state !== USER_STATES.IDLE) {
             await updateUserState(whatsappId, USER_STATES.IDLE, {});
@@ -173,7 +165,6 @@ export async function handleMessage(message) {
         }
     }
 
-    // 5. STATE ROUTING
     switch (user.state) {
       case USER_STATES.IDLE: 
           await handleIdleState(user, userInputText); 
@@ -193,12 +184,10 @@ export async function handleMessage(message) {
       case USER_STATES.AWAITING_EDIT_VALUE:
           await handleEditValue(user, userInputText);
           break;
-      // [NOTE] Catching Bank Menu responses if user types instead of clicks
       case USER_STATES.AWAITING_BANK_MENU_SELECTION:
           if (lowerCaseText.includes('add')) {
               await sendAddBankFlow(user.whatsappId);
           } else if (lowerCaseText.includes('check') || lowerCaseText.includes('balance')) {
-              // Trigger the check balance logic manually
               const banks = await getAllBankAccounts(user._id);
               if (banks.length === 0) {
                   await sendTextMessage(user.whatsappId, "You haven't added any banks yet.");
@@ -216,7 +205,6 @@ export async function handleMessage(message) {
           break;
 
       default:
-        // Smart Interrupt: If user sends a command while in a menu
         if (user.state.startsWith('AWAITING_')) {
             if (userInputText.length > 2) { 
                 await updateUserState(whatsappId, USER_STATES.IDLE);
@@ -236,21 +224,16 @@ export async function handleMessage(message) {
   }
 }
 
-// --- SPECIAL HANDLERS (FLOWS, OTP, DOCS, BANKS) ---
-
 export async function handleFlowResponse(message) {
     const whatsappId = message.from;
     let responseJson = {};
-    
     try {
         responseJson = JSON.parse(message.interactive.nfm_reply.response_json);
-        logger.info(`Flow Response from ${whatsappId}:`, JSON.stringify(responseJson));
     } catch (parseError) {
         logger.error("Failed to parse flow response JSON", parseError);
         return;
     }
 
-    // [FIX] Auto-detect Screen if ID is missing or ambiguous
     let screen = responseJson.screen;
     if (!screen) {
         if (responseJson.business_name && responseJson.email) screen = 'SIGN_UP_SCREEN';
@@ -261,68 +244,36 @@ export async function handleFlowResponse(message) {
         const rawUser = await findOrCreateUser(whatsappId);
         const user = await getEffectiveUser(rawUser);
 
-        // 1. ONBOARDING
         if (screen === 'SIGN_UP_SCREEN') {
             const { business_name, email, currency } = responseJson;
             await sendTextMessage(whatsappId, "Creating your account... 🔄");
-            
-            await updateUser(whatsappId, {
-                businessName: business_name,
-                email: email,
-                currency: currency || 'NGN', 
-                isEmailVerified: false 
-            });
-
-            // Trigger OTP
+            await updateUser(whatsappId, { businessName: business_name, email, currency: currency || 'NGN', isEmailVerified: false });
             const otp = await sendOtp(email, business_name);
             await updateUser(whatsappId, { otp, otpExpires: new Date(Date.now() + 600000) });
             await updateUserState(whatsappId, USER_STATES.ONBOARDING_AWAIT_OTP);
-            
             await sendTextMessage(whatsappId, `✅ Account created for **${business_name}**!\n\nI sent a verification code to ${email}. Please enter it below.`);
-        
-        // 2. ADD BANK ACCOUNT
         } else if (screen === 'ADD_BANK_SCREEN') {
             const { bank_name, opening_balance } = responseJson;
             const balance = parsePrice(opening_balance);
-            
             if (isNaN(balance)) {
                 await sendTextMessage(whatsappId, "Invalid balance provided. Please try again.");
                 return;
             }
-
             if (user.isStaff) {
                 await sendTextMessage(whatsappId, "⛔ Staff cannot add bank accounts.");
                 return;
             }
-
             await createBankAccount(user._id, bank_name, balance);
             await sendTextMessage(whatsappId, `✅ Bank Account **${bank_name}** added with balance ${user.currency || 'NGN'} ${balance.toLocaleString()}.`);
             await updateUserState(whatsappId, USER_STATES.IDLE);
             await sendMainMenu(whatsappId);
         } else {
-            logger.warn(`Unknown Flow Screen: ${screen}`);
             await sendTextMessage(whatsappId, "I received your data, but I'm not sure which form it belongs to.");
         }
-
     } catch (error) {
         logger.error("Flow Error:", error);
         await sendTextMessage(whatsappId, "Error processing your request. Please try again.");
     }
-}
-
-// [NEW] Manage Banks Logic
-async function handleManageBanks(user) {
-    if (user.isStaff) {
-        await sendTextMessage(user.whatsappId, "⛔ Access Denied. Only the Business Owner can manage bank accounts.");
-        return;
-    }
-    
-    await updateUserState(user.whatsappId, USER_STATES.AWAITING_BANK_MENU_SELECTION);
-    
-    await sendInteractiveButtons(user.whatsappId, "Manage Bank Accounts 🏦\nWhat would you like to do?", [
-        { id: 'bank_action:add', title: 'Add New Bank ➕' },
-        { id: 'bank_action:check', title: 'Check Balance 💰' }
-    ]);
 }
 
 async function handleOtpVerification(user, text) {
@@ -357,12 +308,9 @@ async function handleDocumentImport(user, document) {
     }
 }
 
-// --- IDLE STATE LOGIC (INTENT ROUTING) ---
-
 async function handleIdleState(user, text) {
     const { intent, context } = await getIntent(text);
 
-    // Permission Check for Staff
     if (user.isStaff) {
         const RESTRICTED = [INTENTS.RECONCILE_TRANSACTION, INTENTS.ADD_BANK_ACCOUNT, 'EXPORT_DATA'];
         if (RESTRICTED.includes(intent) || (intent === 'EXPORT_DATA')) {
@@ -404,8 +352,6 @@ async function handleIdleState(user, text) {
         return;
     }
 
-    // [UPDATED] BANK MANAGEMENT ROUTING
-    // Catches "Add bank", "Check balance", "Manage banks"
     if (intent === INTENTS.ADD_BANK_ACCOUNT || intent === INTENTS.CHECK_BANK_BALANCE || text.toLowerCase().includes('manage bank')) {
         await handleManageBanks(user);
         return;
@@ -455,7 +401,7 @@ async function handleIdleState(user, text) {
 
     } else if (intent === INTENTS.GENERATE_REPORT) {
         if (context.reportType) {
-            await sendTextMessage(user.whatsappId, "I've added your report to the queue. You'll receive it shortly! ⏳");
+            await sendTextMessage(user.whatsappId, "I've added your report to the report generation queue. You'll receive it shortly! ⏳");
             const { startDate, endDate } = extractDateRange(context, 'this_month');
             await queueReportGeneration(
                 user._id, 
@@ -477,8 +423,6 @@ async function handleIdleState(user, text) {
         await executeTask(intent, user, context);
     }
 }
-
-// --- CONVERSATIONAL TASK HANDLERS ---
 
 async function handleLoggingSale(user, text) {
     let { memory, existingProduct, saleData } = user.stateContext;
@@ -508,6 +452,7 @@ async function handleLoggingSale(user, text) {
     }
 }
 
+// [UPDATED] Handles multiple expenses and bank selection
 async function handleLoggingExpense(user, text) {
     let { memory } = user.stateContext;
     if (memory.length === 0 || memory[memory.length - 1].content !== text) memory.push({ role: 'user', content: text });
@@ -518,15 +463,25 @@ async function handleLoggingExpense(user, text) {
         await sendTextMessage(user.whatsappId, aiResponse.reply);
     } else {
         try {
-            const finalData = aiResponse.data;
-            if (user.isStaff) finalData.loggedBy = user.staffName;
+            // Expenses come as an array or single object from AI
+            const expenses = aiResponse.data.expenses || [aiResponse.data];
+            
+            if (user.isStaff) {
+                expenses.forEach(e => e.loggedBy = user.staffName);
+            }
+
             const banks = await getAllBankAccounts(user._id);
             if (banks.length > 0) {
-                 await askForBankSelection(user, finalData, USER_STATES.AWAITING_BANK_SELECTION_EXPENSE, 'Paid from which account?');
+                 // Trigger bank selection for the batch
+                 await askForBankSelection(user, { expenses }, USER_STATES.AWAITING_BANK_SELECTION_EXPENSE, 'Paid from which account?');
                  return;
             }
-            await TransactionManager.logExpense(user, finalData);
-            await sendTextMessage(user.whatsappId, "✅ Expense logged.");
+            
+            // If no banks, log immediately
+            for (const exp of expenses) {
+                await TransactionManager.logExpense(user, exp);
+            }
+            await sendTextMessage(user.whatsappId, `✅ ${expenses.length} expense(s) logged.`);
             await updateUserState(user.whatsappId, USER_STATES.IDLE);
             await sendMainMenu(user.whatsappId);
         } catch (e) {
@@ -570,7 +525,6 @@ async function handleLoggingCustomerPayment(user, text) {
     const aiResponse = await gatherPaymentDetails(memory, user.currency);
     if (aiResponse.status === 'incomplete') {
         await updateUserState(user.whatsappId, USER_STATES.LOGGING_CUSTOMER_PAYMENT, { memory: limitMemory(aiResponse.memory) });
-        // [FIX] Added fallback text
         await sendTextMessage(user.whatsappId, aiResponse.reply || "Could you provide the payment details?");
     } else {
         try {

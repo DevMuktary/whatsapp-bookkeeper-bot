@@ -164,24 +164,22 @@ export async function extractOnboardingDetails(text) {
   const messages = [
     {
       role: 'system',
-      content: "You are an expert entity extractor. Your task is to extract a business name and an email address from the user's message. Respond ONLY with a JSON object in the format {\"businessName\": \"The Extracted Name\", \"email\": \"user@example.com\"}. If a piece of information is not found, its value should be null."
+      content: "You are an expert entity extractor. Respond ONLY with a JSON object: {\"businessName\": \"Name\", \"email\": \"user@example.com\"}. If not found, use null."
     },
-    { role: 'user', content: `Here is the message: "${text}"` }
+    { role: 'user', content: text }
   ];
-  const responseJson = await callDeepSeek(messages);
-  return typeof responseJson === 'string' ? JSON.parse(responseJson) : responseJson;
+  return await callDeepSeek(messages);
 }
 
 export async function extractCurrency(text) {
     const messages = [
         {
             role: 'system',
-            content: "You are an expert currency identification system. Your task is to identify the currency mentioned in the user's text and convert it to its standard 3-letter ISO 4217 code. Examples: 'Naira' or '₦' -> 'NGN', 'US dollars' or '$' -> 'USD', 'Ghana Cedis' -> 'GHS', 'pounds' -> 'GBP'. Respond ONLY with a JSON object in the format {\"currency\": \"ISO_CODE\"}. If no currency is found, the value should be null."
+            content: "Identify the currency and return ISO 4217 code. JSON: {\"currency\": \"ISO_CODE\"}. Example: 'Naira' -> 'NGN'."
         },
-        { role: 'user', content: `Here is the message: "${text}"` }
+        { role: 'user', content: text }
     ];
-    const responseJson = await callDeepSeek(messages);
-    return typeof responseJson === 'string' ? JSON.parse(responseJson) : responseJson;
+    return await callDeepSeek(messages);
 }
 
 export async function getIntent(text) {
@@ -191,39 +189,34 @@ export async function getIntent(text) {
 
     INTENTS:
     - ${INTENTS.LOG_SALE}: "Sold 5 rice", "Credit sale to John"
-    - ${INTENTS.LOG_EXPENSE}: "Bought fuel 500", "Paid shop rent"
-    - ${INTENTS.ADD_PRODUCT}: "Restock rice 50 bags", "New item indomie 2000"
+    - ${INTENTS.LOG_EXPENSE}: "Bought fuel", "Paid rent"
+    - ${INTENTS.ADD_PRODUCT}: "Restock rice", "New item"
     - ${INTENTS.ADD_PRODUCTS_FROM_LIST}: "Add these: 1. Rice, 2. Beans" (Multi-line or bulk list)
     - ${INTENTS.ADD_MULTIPLE_PRODUCTS}: "I want to add many items"
-    - ${INTENTS.CHECK_STOCK}: "How many rice left?", "Count stock"
-    - ${INTENTS.GENERATE_REPORT}: "Send me a report", "Expense report", "Sales report", "P&L", "Profit and Loss", "Report for last month"
-    - ${INTENTS.GET_FINANCIAL_SUMMARY}: "Total sales today", "How much did I spend?"
-    - ${INTENTS.ADD_BANK_ACCOUNT}: "Add bank UBA", "New account access bank"
-    - ${INTENTS.LOG_CUSTOMER_PAYMENT}: "John paid 5000", "Receive payment from Sarah"
-    - ${INTENTS.GENERAL_CONVERSATION}: "Hello", "Thanks", "Who are you?", "Hi"
-    - ${INTENTS.SHOW_MAIN_MENU}: "Menu", "Show options", "Cancel"
-    - ${INTENTS.RECONCILE_TRANSACTION}: "Edit transaction", "Delete sale", "I made a mistake"
-    - ${INTENTS.GET_CUSTOMER_BALANCES}: "Who owes me?", "Debtors list"
+    - ${INTENTS.CHECK_STOCK}: "How many rice left?"
+    - ${INTENTS.GENERATE_REPORT}: "Send me a report", "P&L", "Sales report"
+    - ${INTENTS.GET_FINANCIAL_SUMMARY}: "Total sales today"
+    - ${INTENTS.ADD_BANK_ACCOUNT}: "Add bank UBA"
+    - ${INTENTS.LOG_CUSTOMER_PAYMENT}: "John paid 5000"
+    - ${INTENTS.GENERAL_CONVERSATION}: "Hello", "Thanks", "Hi"
+    - ${INTENTS.SHOW_MAIN_MENU}: "Menu", "Cancel"
+    - ${INTENTS.RECONCILE_TRANSACTION}: "Edit transaction", "Delete sale"
+    - ${INTENTS.GET_CUSTOMER_BALANCES}: "Who owes me?"
+    - MANAGE_TEAM: "Add staff", "Invite employee", "Create login for my manager"
 
     RULES:
     1. If Intent is ${INTENTS.GENERATE_REPORT}:
        - Context MUST include "reportType": "SALES", "EXPENSES", "PNL", "INVENTORY", or "COGS".
-       - Example: "Expense report" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "EXPENSES"}}
-       - If unspecified ("Generate report"), "reportType" is null.
-    
-    2. Dates: Calculate "startDate" and "endDate" (YYYY-MM-DD) based on user input (e.g., "last month", "today"). Default to "this_month".
+       - Dates: Calculate "startDate" and "endDate" (YYYY-MM-DD). Default "this_month".
+    2. General Conversation: Provide "generatedReply".
+    3. MANAGE_TEAM: Only if user wants to add/invite someone.
 
-    3. General Conversation:
-       - If the user says "Hello" or asks a question, set intent to ${INTENTS.GENERAL_CONVERSATION}.
-       - You MUST provide a "generatedReply" string in the context.
-
-    Return JSON format: {"intent": "...", "context": {...}}
+    Return JSON: {"intent": "...", "context": {...}}
     `;
 
     const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: text }];
     let result = await callDeepSeek(messages);
     
-    // Post-processing to clean up extracted numbers
     if (result.context) {
         if (result.context.amount) result.context.amount = parsePrice(result.context.amount);
         if (result.context.totalAmount) result.context.totalAmount = parsePrice(result.context.totalAmount);
@@ -236,27 +229,26 @@ export async function getIntent(text) {
 }
 
 export async function getFinancialInsight(pnlData, currency) {
-    const systemPrompt = `Analyze this P&L data and give one friendly, short business tip. Data: ${JSON.stringify(pnlData)}`;
+    const systemPrompt = `Analyze this P&L data and give one friendly business tip. Data: ${JSON.stringify(pnlData)}`;
     const messages = [{ role: 'system', content: systemPrompt }];
     return await callDeepSeek(messages, 0.7, false);
 }
 
-// [UPDATED] Now extracts 'dueDate' for credit sales
 export async function gatherSaleDetails(conversationHistory, existingProduct = null, isService = false) { 
     const today = new Date().toISOString().split('T')[0];
     const productInfo = isService 
-        ? "The user confirmed this is a service." 
-        : (existingProduct ? `Existing product: "${existingProduct.productName}", Price: ${existingProduct.sellingPrice}.` : 'New product/service.');
+        ? "Service sale." 
+        : (existingProduct ? `Product: "${existingProduct.productName}", Price: ${existingProduct.sellingPrice}.` : 'New product.');
 
-    const systemPrompt = `You are a bookkeeping assistant logging a sale. TODAY: ${today}.
+    const systemPrompt = `Bookkeeping assistant logging a sale. TODAY: ${today}.
     CONTEXT: ${productInfo}
-    GOAL: Collect 'items' (array of {productName, quantity, pricePerUnit}), 'customerName', and 'saleType' (Cash/Credit/Bank).
+    GOAL: Collect 'items' (array of {productName, quantity, pricePerUnit}), 'customerName', 'saleType'.
     
     RULES:
     1. Extract details. Default quantity is 1.
     2. If product exists, use its price if user doesn't specify.
     3. Once you have an item, add it to 'items'.
-    4. If 'saleType' is CREDIT, listen closely for a due date (e.g., "pay next friday", "due 25th").
+    4. If 'saleType' is CREDIT, listen for a due date (e.g., "pay next friday", "due 25th").
     5. If mentioned, calculate 'dueDate' as YYYY-MM-DD.
     6. Ask "Anything else?" after adding items.
     7. ONLY when user says "done"/"no", return {"status": "complete", "data": {...}}.
@@ -296,7 +288,6 @@ export async function gatherExpenseDetails(conversationHistory) {
     return { ...response, memory: [...conversationHistory, { role: 'assistant', content: JSON.stringify(response) }] };
 }
 
-// [UPDATED] Prompt now asks for 'reorderLevel'
 export async function gatherProductDetails(conversationHistory, existingProduct = null) {
     const existingDataInfo = existingProduct 
         ? `Existing product: Cost ${existingProduct.costPrice}, Sell ${existingProduct.sellingPrice}.`

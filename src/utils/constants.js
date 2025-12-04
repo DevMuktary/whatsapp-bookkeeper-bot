@@ -18,8 +18,8 @@ export const USER_STATES = {
   ADDING_PRODUCT: 'ADDING_PRODUCT',
   LOGGING_CUSTOMER_PAYMENT: 'LOGGING_CUSTOMER_PAYMENT',
   
-  // [FIX] This state was needed for the handler
   ADDING_BANK_ACCOUNT: 'ADDING_BANK_ACCOUNT', 
+  AWAITING_BANK_MENU_SELECTION: 'AWAITING_BANK_MENU_SELECTION', // [NEW]
 
   AWAITING_BANK_SELECTION_SALE: 'AWAITING_BANK_SELECTION_SALE',
   AWAITING_BANK_SELECTION_EXPENSE: 'AWAITING_BANK_SELECTION_EXPENSE',
@@ -49,7 +49,6 @@ export const INTENTS = {
     GET_FINANCIAL_SUMMARY: 'GET_FINANCIAL_SUMMARY',
     GENERATE_REPORT: 'GENERATE_REPORT',
     
-    // [FIX] Ensure these match aiService.js EXACTLY
     LOG_CUSTOMER_PAYMENT: 'LOG_CUSTOMER_PAYMENT',
     ADD_BANK_ACCOUNT: 'ADD_BANK_ACCOUNT', 
     CHECK_BANK_BALANCE: 'CHECK_BANK_BALANCE',
@@ -60,20 +59,18 @@ export const INTENTS = {
     SHOW_MAIN_MENU: 'SHOW_MAIN_MENU',
     GENERAL_CONVERSATION: 'GENERAL_CONVERSATION',
     
-    // [NEW] Advanced Features
     MANAGE_TEAM: 'MANAGE_TEAM',
     EXPORT_DATA: 'EXPORT_DATA'
 };
 
-// Standardized Categories for the AI to use
 export const EXPENSE_CATEGORIES = [
-    "Transportation",       // Fuel, Bus, Uber, Travel, Maintenance
-    "Utilities & Internet", // Data, Airtime, NEPA, Gas
-    "Rent & Office",        // Shop rent, Repairs, Cleaning
-    "Salaries & Wages",     // Staff payment, Labour
-    "Marketing & Ads",      // Facebook ads, Flyers, Promos
-    "Meals & Entertainment",// Food, Client meetings
-    "Supplies & Packaging", // Nylons, Paper, Stationery
-    "Restocking (Inventory)", // Buying goods to sell
-    "Miscellaneous"         // Anything else
+    "Transportation",       
+    "Utilities & Internet", 
+    "Rent & Office",        
+    "Salaries & Wages",     
+    "Marketing & Ads",      
+    "Meals & Entertainment",
+    "Supplies & Packaging", 
+    "Restocking (Inventory)", 
+    "Miscellaneous"         
 ];

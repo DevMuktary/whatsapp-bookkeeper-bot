@@ -67,7 +67,7 @@ async function getEffectiveUser(user) {
     return user;
 }
 
-// [EXPORTED] Smart Bank Selector
+// Smart Bank Selector (Handles >3 Banks)
 export async function askForBankSelection(user, transactionData, nextState, promptText) {
     const banks = await getAllBankAccounts(user._id);
     
@@ -87,7 +87,7 @@ export async function askForBankSelection(user, transactionData, nextState, prom
     }
 }
 
-// [FIXED] FUNCTION DEFINITION FOR handleManageBanks
+// [FIXED] Manage Banks Logic Function Definition
 async function handleManageBanks(user) {
     if (user.isStaff) {
         await sendTextMessage(user.whatsappId, "⛔ Access Denied. Only the Business Owner can manage bank accounts.");
@@ -251,7 +251,6 @@ export async function handleFlowResponse(message) {
     let responseJson = {};
     try {
         responseJson = JSON.parse(message.interactive.nfm_reply.response_json);
-        logger.info(`Flow Response from ${whatsappId}:`, JSON.stringify(responseJson));
     } catch (parseError) {
         logger.error("Failed to parse flow response JSON", parseError);
         return;
@@ -448,6 +447,8 @@ async function handleIdleState(user, text) {
         await executeTask(intent, user, context);
     }
 }
+
+// --- CONVERSATIONAL TASK HANDLERS ---
 
 async function handleLoggingSale(user, text) {
     let { memory, existingProduct, saleData } = user.stateContext;

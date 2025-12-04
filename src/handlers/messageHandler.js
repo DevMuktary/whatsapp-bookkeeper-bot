@@ -193,13 +193,30 @@ export async function handleMessage(message) {
       case USER_STATES.AWAITING_EDIT_VALUE:
           await handleEditValue(user, userInputText);
           break;
-      // [NOTE] Bank States are handled via Interactive Handler, but we catch stragglers here
+      // [NOTE] Catching Bank Menu responses if user types instead of clicks
       case USER_STATES.AWAITING_BANK_MENU_SELECTION:
-          await sendTextMessage(whatsappId, "Please select an option using the buttons above.");
+          if (lowerCaseText.includes('add')) {
+              await sendAddBankFlow(user.whatsappId);
+          } else if (lowerCaseText.includes('check') || lowerCaseText.includes('balance')) {
+              // Trigger the check balance logic manually
+              const banks = await getAllBankAccounts(user._id);
+              if (banks.length === 0) {
+                  await sendTextMessage(user.whatsappId, "You haven't added any banks yet.");
+                  await updateUserState(user.whatsappId, USER_STATES.IDLE);
+              } else {
+                  const sections = [{
+                      title: "Select Bank",
+                      rows: banks.map(b => ({ id: `view_balance:${b._id}`, title: b.bankName }))
+                  }];
+                  await sendInteractiveList(user.whatsappId, "Check Balance", "Select a bank to view its balance.", "Show List", sections);
+              }
+          } else {
+              await sendTextMessage(whatsappId, "Please select an option using the buttons above.");
+          }
           break;
 
       default:
-        // Smart Interrupt
+        // Smart Interrupt: If user sends a command while in a menu
         if (user.state.startsWith('AWAITING_')) {
             if (userInputText.length > 2) { 
                 await updateUserState(whatsappId, USER_STATES.IDLE);
@@ -223,8 +240,22 @@ export async function handleMessage(message) {
 
 export async function handleFlowResponse(message) {
     const whatsappId = message.from;
-    const responseJson = JSON.parse(message.interactive.nfm_reply.response_json);
-    const screen = responseJson.screen; 
+    let responseJson = {};
+    
+    try {
+        responseJson = JSON.parse(message.interactive.nfm_reply.response_json);
+        logger.info(`Flow Response from ${whatsappId}:`, JSON.stringify(responseJson));
+    } catch (parseError) {
+        logger.error("Failed to parse flow response JSON", parseError);
+        return;
+    }
+
+    // [FIX] Auto-detect Screen if ID is missing or ambiguous
+    let screen = responseJson.screen;
+    if (!screen) {
+        if (responseJson.business_name && responseJson.email) screen = 'SIGN_UP_SCREEN';
+        else if (responseJson.bank_name) screen = 'ADD_BANK_SCREEN';
+    }
 
     try {
         const rawUser = await findOrCreateUser(whatsappId);
@@ -234,16 +265,20 @@ export async function handleFlowResponse(message) {
         if (screen === 'SIGN_UP_SCREEN') {
             const { business_name, email, currency } = responseJson;
             await sendTextMessage(whatsappId, "Creating your account... 🔄");
+            
             await updateUser(whatsappId, {
                 businessName: business_name,
                 email: email,
-                currency: currency,
+                currency: currency || 'NGN', 
                 isEmailVerified: false 
             });
+
+            // Trigger OTP
             const otp = await sendOtp(email, business_name);
             await updateUser(whatsappId, { otp, otpExpires: new Date(Date.now() + 600000) });
             await updateUserState(whatsappId, USER_STATES.ONBOARDING_AWAIT_OTP);
-            await sendTextMessage(whatsappId, `✅ Account created for **${business_name}**!\n\nI sent a verification code to ${email}. Please enter it below to finish.`);
+            
+            await sendTextMessage(whatsappId, `✅ Account created for **${business_name}**!\n\nI sent a verification code to ${email}. Please enter it below.`);
         
         // 2. ADD BANK ACCOUNT
         } else if (screen === 'ADD_BANK_SCREEN') {
@@ -261,9 +296,12 @@ export async function handleFlowResponse(message) {
             }
 
             await createBankAccount(user._id, bank_name, balance);
-            await sendTextMessage(whatsappId, `✅ Bank Account **${bank_name}** added with balance ${user.currency} ${balance.toLocaleString()}.`);
+            await sendTextMessage(whatsappId, `✅ Bank Account **${bank_name}** added with balance ${user.currency || 'NGN'} ${balance.toLocaleString()}.`);
             await updateUserState(whatsappId, USER_STATES.IDLE);
             await sendMainMenu(whatsappId);
+        } else {
+            logger.warn(`Unknown Flow Screen: ${screen}`);
+            await sendTextMessage(whatsappId, "I received your data, but I'm not sure which form it belongs to.");
         }
 
     } catch (error) {
@@ -303,22 +341,17 @@ async function handleDocumentImport(user, document) {
     await sendTextMessage(user.whatsappId, "Receiving your file... 📂");
     try {
         const { products, errors } = await parseExcelImport(document.id);
-        
         if (products.length === 0) {
             await sendTextMessage(user.whatsappId, "I couldn't find any valid products in that file. Check the columns: Name, Qty, Cost, Sell.");
             return;
         }
-
         await updateUserState(user.whatsappId, USER_STATES.AWAITING_BULK_PRODUCT_CONFIRMATION, { products });
-        
         const preview = products.slice(0, 5).map(p => `• ${p.quantityAdded}x ${p.productName}`).join('\n');
         const errorMsg = errors.length > 0 ? `\n⚠️ ${errors.length} rows skipped (missing info).` : "";
-        
         await sendInteractiveButtons(user.whatsappId, `I read ${products.length} products from the file!${errorMsg}\n\nTop 5:\n${preview}`, [
             { id: 'confirm_bulk_add', title: '✅ Import All' },
             { id: 'cancel', title: '❌ Cancel' }
         ]);
-
     } catch (e) {
         await sendTextMessage(user.whatsappId, `Error reading file: ${e.message}`);
     }
@@ -445,15 +478,13 @@ async function handleIdleState(user, text) {
     }
 }
 
-// --- CONVERSATIONAL TASK HANDLERS (With Bank Selectors) ---
+// --- CONVERSATIONAL TASK HANDLERS ---
 
 async function handleLoggingSale(user, text) {
     let { memory, existingProduct, saleData } = user.stateContext;
     if (memory.length === 0 || memory[memory.length - 1].content !== text) memory.push({ role: 'user', content: text });
     memory = limitMemory(memory);
-
     const aiResponse = await gatherSaleDetails(memory, existingProduct, saleData?.isService);
-
     if (aiResponse.status === 'incomplete') {
         await updateUserState(user.whatsappId, USER_STATES.LOGGING_SALE, { ...user.stateContext, memory: limitMemory(aiResponse.memory) });
         await sendTextMessage(user.whatsappId, aiResponse.reply);
@@ -461,7 +492,6 @@ async function handleLoggingSale(user, text) {
         try {
             const finalData = { ...saleData, ...aiResponse.data };
             if (user.isStaff) finalData.loggedBy = user.staffName;
-
             const banks = await getAllBankAccounts(user._id);
             if (banks.length > 0 && !finalData.linkedBankId && finalData.saleType !== 'credit') {
                  await askForBankSelection(user, finalData, USER_STATES.AWAITING_BANK_SELECTION_SALE, 'Received payment into which account?');
@@ -482,9 +512,7 @@ async function handleLoggingExpense(user, text) {
     let { memory } = user.stateContext;
     if (memory.length === 0 || memory[memory.length - 1].content !== text) memory.push({ role: 'user', content: text });
     memory = limitMemory(memory);
-
     const aiResponse = await gatherExpenseDetails(memory);
-
     if (aiResponse.status === 'incomplete') {
         await updateUserState(user.whatsappId, USER_STATES.LOGGING_EXPENSE, { memory: limitMemory(aiResponse.memory) });
         await sendTextMessage(user.whatsappId, aiResponse.reply);
@@ -492,7 +520,6 @@ async function handleLoggingExpense(user, text) {
         try {
             const finalData = aiResponse.data;
             if (user.isStaff) finalData.loggedBy = user.staffName;
-
             const banks = await getAllBankAccounts(user._id);
             if (banks.length > 0) {
                  await askForBankSelection(user, finalData, USER_STATES.AWAITING_BANK_SELECTION_EXPENSE, 'Paid from which account?');
@@ -512,9 +539,7 @@ async function handleAddingProduct(user, text) {
     let { memory, existingProduct } = user.stateContext;
     if (memory.length === 0 || memory[memory.length - 1].content !== text) memory.push({ role: 'user', content: text });
     memory = limitMemory(memory);
-
     const aiResponse = await gatherProductDetails(memory, existingProduct);
-
     if (aiResponse.status === 'incomplete') {
         await updateUserState(user.whatsappId, USER_STATES.ADDING_PRODUCT, { memory: limitMemory(aiResponse.memory), existingProduct });
         await sendTextMessage(user.whatsappId, aiResponse.reply);
@@ -542,17 +567,15 @@ async function handleLoggingCustomerPayment(user, text) {
     let { memory } = user.stateContext;
     if (memory.length === 0 || memory[memory.length - 1].content !== text) memory.push({ role: 'user', content: text });
     memory = limitMemory(memory);
-
     const aiResponse = await gatherPaymentDetails(memory, user.currency);
-
     if (aiResponse.status === 'incomplete') {
         await updateUserState(user.whatsappId, USER_STATES.LOGGING_CUSTOMER_PAYMENT, { memory: limitMemory(aiResponse.memory) });
+        // [FIX] Added fallback text
         await sendTextMessage(user.whatsappId, aiResponse.reply || "Could you provide the payment details?");
     } else {
         try {
             const paymentData = aiResponse.data;
             if (user.isStaff) paymentData.loggedBy = user.staffName;
-
             const banks = await getAllBankAccounts(user._id);
             if (banks.length > 0) {
                 await askForBankSelection(user, paymentData, USER_STATES.AWAITING_BANK_SELECTION_CUST_PAYMENT, 'Which account received the payment?');

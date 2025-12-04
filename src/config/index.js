@@ -16,12 +16,19 @@ const config = {
   brevo: {
     apiKey: process.env.BREVO_API_KEY
   },
-  // [UPDATED] Added REDISHOST and REDIS_URL for Railway support
+  // [UPDATED] Robust Redis Config for Railway
   redis: {
-    url: process.env.REDIS_URL || process.env.REDIS_PRIVATE_URL,
-    host: process.env.REDIS_HOST || process.env.REDISHOST || 'localhost',
-    port: process.env.REDIS_PORT || process.env.REDISPORT || 6379,
-    password: process.env.REDIS_PASSWORD || process.env.REDISPASSWORD || undefined
+    // Railway provides REDIS_URL (Public) or REDIS_PRIVATE_URL (Private). 
+    // Private is faster/cheaper if your bot is also on Railway.
+    url: process.env.REDIS_PRIVATE_URL || process.env.REDIS_URL || 'redis://localhost:6379',
+    options: {
+        // BullMQ requires this to be null
+        maxRetriesPerRequest: null, 
+        // Auto-enable TLS for 'rediss://' URLs (Railway Public)
+        tls: (process.env.REDIS_PRIVATE_URL || process.env.REDIS_URL || '').startsWith('rediss') 
+             ? { rejectUnauthorized: false } 
+             : undefined
+    }
   },
   logLevel: process.env.LOG_LEVEL || 'info',
 };

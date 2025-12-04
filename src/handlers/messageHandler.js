@@ -5,15 +5,16 @@ import {
     extractOnboardingDetails, extractCurrency, getIntent, 
     gatherSaleDetails, gatherExpenseDetails, gatherProductDetails, 
     gatherPaymentDetails, gatherBankAccountDetails,
-    transcribeAudio, analyzeImage 
+    transcribeAudio, analyzeImage, parseBulkProductList 
 } from '../services/aiService.js';
 import { sendOtp } from '../services/emailService.js';
 import { sendTextMessage, sendInteractiveButtons, sendMainMenu, sendReportMenu, setTypingIndicator, uploadMedia, sendDocument } from '../api/whatsappService.js';
 import { USER_STATES, INTENTS } from '../utils/constants.js';
 import { getDateRange } from '../utils/dateUtils.js';
 
-// Import Queue Service
+// [NEW] Imports for Queue and File Import
 import { queueReportGeneration } from '../services/QueueService.js';
+import { parseExcelImport } from '../services/FileImportService.js';
 
 // Managers
 import * as TransactionManager from '../services/TransactionManager.js';
@@ -53,12 +54,26 @@ export async function handleMessage(message) {
   try {
     await setTypingIndicator(whatsappId, 'on', messageId);
     
-    // --- 1. SILENT MEDIA PROCESSING ---
+    // --- 1. MEDIA & INPUT PROCESSING ---
     let userInputText = "";
     if (message.type === 'text') userInputText = message.text.body;
     else if (message.type === 'audio') userInputText = await transcribeAudio(message.audio.id) || "";
     else if (message.type === 'image') userInputText = await analyzeImage(message.image.id, message.image.caption) || "";
-    else return; 
+    
+    // [NEW] HANDLE DOCUMENT UPLOAD IMMEDIATELY
+    else if (message.type === 'document') {
+        const mime = message.document.mime_type;
+        const user = await findOrCreateUser(whatsappId); // Need user for state update
+        
+        if (mime.includes('spreadsheet') || mime.includes('excel') || mime.includes('csv')) {
+            await handleDocumentImport(user, message.document);
+            return;
+        } else {
+            await sendTextMessage(whatsappId, "I can only read Excel (.xlsx) or CSV files for inventory.");
+            return;
+        }
+    }
+    else return; // Ignore other types
 
     if (!userInputText) {
         await sendTextMessage(whatsappId, "I couldn't understand that content. Please try again.");
@@ -109,6 +124,7 @@ export async function handleMessage(message) {
           break;
 
       default:
+        // Smart Interrupt: If user sends a command while in a menu
         if (user.state.startsWith('AWAITING_')) {
             if (userInputText.length > 2) { 
                 await updateUserState(whatsappId, USER_STATES.IDLE);
@@ -165,11 +181,29 @@ async function handleIdleState(user, text) {
         await updateUserState(user.whatsappId, USER_STATES.ADDING_BANK_ACCOUNT, { memory: [{ role: 'user', content: text }] });
         await handleAddingBankAccount({ ...user, stateContext: { memory: [{ role: 'user', content: text }] } }, text);
 
+    } else if (intent === INTENTS.ADD_PRODUCTS_FROM_LIST || intent === INTENTS.ADD_MULTIPLE_PRODUCTS) {
+        // [UX] Suggest File Upload
+        await sendTextMessage(user.whatsappId, "To add many products at once, the fastest way is to **send me an Excel file**! 📁\n\nEnsure it has columns: *Name, Qty, Cost, Sell*.\n\nOr, you can just paste the list here (e.g. '10 Rice 2000').");
+        
+        // If they actually sent text (not just "I want to add bulk"), try to parse it anyway
+        if (text.length > 20) { 
+             const products = await parseBulkProductList(text);
+             if (products.length > 0) {
+                 await updateUserState(user.whatsappId, USER_STATES.AWAITING_BULK_PRODUCT_CONFIRMATION, { products });
+                 const preview = products.slice(0, 5).map(p => `• ${p.quantityAdded}x ${p.productName}`).join('\n');
+                 await sendInteractiveButtons(user.whatsappId, `I found ${products.length} items from your text.\n${preview}\n...`, [
+                    { id: 'confirm_bulk_add', title: 'Add Text Items' },
+                    { id: 'cancel', title: 'Cancel' }
+                 ]);
+             }
+        }
+
     } else if (intent === INTENTS.GENERATE_REPORT) {
         if (context.reportType) {
             await sendTextMessage(user.whatsappId, "I've added your report to the queue. You'll receive it shortly! ⏳");
             const { startDate, endDate } = getDateRange(context.dateRange || 'this_month');
             
+            // [SCALING] Use Queue
             await queueReportGeneration(
                 user._id, 
                 user.currency, 
@@ -191,11 +225,38 @@ async function handleIdleState(user, text) {
     }
 }
 
-// --- TRANSACTION HANDLERS ---
+// --- BULK IMPORT HANDLER ---
+
+async function handleDocumentImport(user, document) {
+    await sendTextMessage(user.whatsappId, "Receiving your file... 📂");
+    try {
+        const { products, errors } = await parseExcelImport(document.id);
+        
+        if (products.length === 0) {
+            await sendTextMessage(user.whatsappId, "I couldn't find any valid products in that file. Check the columns: Name, Qty, Cost, Sell.");
+            return;
+        }
+
+        // Save to state and ask for confirmation
+        await updateUserState(user.whatsappId, USER_STATES.AWAITING_BULK_PRODUCT_CONFIRMATION, { products });
+        
+        const preview = products.slice(0, 5).map(p => `• ${p.quantityAdded}x ${p.productName}`).join('\n');
+        const errorMsg = errors.length > 0 ? `\n⚠️ ${errors.length} rows skipped (missing info).` : "";
+        
+        await sendInteractiveButtons(user.whatsappId, `I read ${products.length} products from the file!${errorMsg}\n\nTop 5:\n${preview}`, [
+            { id: 'confirm_bulk_add', title: '✅ Import All' },
+            { id: 'cancel', title: '❌ Cancel' }
+        ]);
+
+    } catch (e) {
+        await sendTextMessage(user.whatsappId, `Error reading file: ${e.message}`);
+    }
+}
+
+// --- TRANSACTION HANDLERS (With Memory Limits) ---
 
 async function handleLoggingSale(user, text) {
     let { memory, existingProduct, saleData } = user.stateContext;
-    // Don't duplicate if it was just initialized
     if (memory.length === 0 || memory[memory.length - 1].content !== text) {
         memory.push({ role: 'user', content: text });
     }
@@ -206,7 +267,6 @@ async function handleLoggingSale(user, text) {
     const aiResponse = await gatherSaleDetails(memory, existingProduct, saleData?.isService);
 
     if (aiResponse.status === 'incomplete') {
-        // AI response is also added to memory inside aiService, but we must update the DB state
         await updateUserState(user.whatsappId, USER_STATES.LOGGING_SALE, { ...user.stateContext, memory: limitMemory(aiResponse.memory) });
         await sendTextMessage(user.whatsappId, aiResponse.reply);
     } else {

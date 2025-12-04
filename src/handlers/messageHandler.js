@@ -1,11 +1,10 @@
-import { findOrCreateUser, updateUser, updateUserState } from '../db/userService.js';
+import { findOrCreateUser, updateUser, updateUserState, createJoinCode, findOwnerByJoinCode, linkStaffToOwner } from '../db/userService.js';
 import { findProductByName } from '../db/productService.js';
 import { getAllBankAccounts } from '../db/bankService.js';
 import { 
     getIntent, gatherSaleDetails, gatherExpenseDetails, gatherProductDetails, 
     gatherPaymentDetails, gatherBankAccountDetails,
-    transcribeAudio, analyzeImage, parseBulkProductList,
-    // extractOnboardingDetails and extractCurrency are removed as Flows handle this
+    transcribeAudio, analyzeImage, parseBulkProductList 
 } from '../services/aiService.js';
 import { sendOtp } from '../services/emailService.js';
 import { 
@@ -14,12 +13,8 @@ import {
 } from '../api/whatsappService.js';
 import { USER_STATES, INTENTS } from '../utils/constants.js';
 import { getDateRange } from '../utils/dateUtils.js';
-
-// Imports for Queue and File Import
 import { queueReportGeneration } from '../services/QueueService.js';
 import { parseExcelImport } from '../services/FileImportService.js';
-
-// Managers
 import * as TransactionManager from '../services/TransactionManager.js';
 import * as InventoryManager from '../services/InventoryManager.js';
 import { createBankAccount } from '../db/bankService.js';
@@ -29,15 +24,11 @@ import logger from '../utils/logger.js';
 const CANCEL_KEYWORDS = ['cancel', 'stop', 'exit', 'abort', 'quit'];
 const MAX_MEMORY_DEPTH = 12;
 
-// Helper to keep memory size in check
 const limitMemory = (memory) => {
-    if (memory.length > MAX_MEMORY_DEPTH) {
-        return memory.slice(-MAX_MEMORY_DEPTH);
-    }
+    if (memory.length > MAX_MEMORY_DEPTH) return memory.slice(-MAX_MEMORY_DEPTH);
     return memory;
 };
 
-// Price Helper
 const parsePrice = (priceInput) => {
     if (typeof priceInput === 'number') return priceInput;
     if (typeof priceInput !== 'string') return NaN;
@@ -50,6 +41,32 @@ const parsePrice = (priceInput) => {
     return isNaN(value) ? NaN : value * multiplier;
 };
 
+// [NEW] Helper to switch context for Staff
+async function getEffectiveUser(user) {
+    if (user.role === 'STAFF' && user.linkedAccountId) {
+        // Fetch Owner to get currency and correct DB ID
+        // We assume the linkedAccountId is valid.
+        // We create a "Hybrid" user object:
+        // - _id: Owner's ID (so data saves to owner)
+        // - currency: Owner's currency
+        // - role: STAFF (kept for permission checks)
+        // - staffName: The actual user's name/phone
+        
+        // Note: In a real app, you'd fetch the owner doc here to get their currency settings
+        // For simplicity, we assume staff inherits context or we fetch owner:
+        // const owner = await findUserById(user.linkedAccountId); (Implement if needed)
+        
+        return {
+            ...user,
+            _id: user.linkedAccountId, // CRITICAL: Swap ID
+            originalUserId: user._id,  // Keep track of real user
+            staffName: user.businessName || user.whatsappId,
+            isStaff: true
+        };
+    }
+    return user;
+}
+
 export async function handleMessage(message) {
   const whatsappId = message.from;
   const messageId = message.id; 
@@ -57,19 +74,18 @@ export async function handleMessage(message) {
   try {
     await setTypingIndicator(whatsappId, 'on', messageId);
     
-    // --- 1. MEDIA & INPUT PROCESSING ---
     let userInputText = "";
     if (message.type === 'text') userInputText = message.text.body;
     else if (message.type === 'audio') userInputText = await transcribeAudio(message.audio.id) || "";
     else if (message.type === 'image') userInputText = await analyzeImage(message.image.id, message.image.caption) || "";
     
-    // HANDLE DOCUMENT UPLOAD
     else if (message.type === 'document') {
         const mime = message.document.mime_type;
         const user = await findOrCreateUser(whatsappId);
+        const effectiveUser = await getEffectiveUser(user); // Use effective user for imports
         
         if (mime.includes('spreadsheet') || mime.includes('excel') || mime.includes('csv')) {
-            await handleDocumentImport(user, message.document);
+            await handleDocumentImport(effectiveUser, message.document);
             return;
         } else {
             await sendTextMessage(whatsappId, "I can only read Excel (.xlsx) or CSV files for inventory.");
@@ -83,28 +99,59 @@ export async function handleMessage(message) {
         return;
     }
 
-    const user = await findOrCreateUser(whatsappId);
+    const rawUser = await findOrCreateUser(whatsappId);
+    // [NEW] Apply Context Switch
+    const user = await getEffectiveUser(rawUser);
+    
     const lowerCaseText = userInputText.trim().toLowerCase();
 
-    // --- 2. ONBOARDING (NEW FLOW LOGIC) ---
-    // If user is NEW, trigger the flow (unless they are cancelling)
-    if (user.state === USER_STATES.NEW_USER) {
+    // --- TEAM MANAGEMENT COMMANDS ---
+    // Owner adds staff
+    if (lowerCaseText.startsWith('add staff') || lowerCaseText.startsWith('invite staff')) {
+        if (user.role === 'STAFF') {
+            await sendTextMessage(whatsappId, "⛔ Only the Business Owner can invite staff.");
+            return;
+        }
+        const code = await createJoinCode(user._id);
+        await sendTextMessage(whatsappId, `👥 **Team Invite**\n\nShare this code with your staff:\n\n**${code}**\n\nAsk them to send the message: *"Join ${code}"* to this bot.`);
+        return;
+    }
+
+    // Staff joins
+    if (lowerCaseText.startsWith('join ')) {
+        const code = lowerCaseText.split(' ')[1]?.toUpperCase();
+        if (code) {
+            const owner = await findOwnerByJoinCode(code);
+            if (owner) {
+                await linkStaffToOwner(whatsappId, owner._id);
+                await sendTextMessage(whatsappId, `✅ Success! You have joined **${owner.businessName}**. You can now log sales and check stock for them.`);
+                // Notify Owner
+                await sendTextMessage(owner.whatsappId, `🔔 **New Staff:** ${user.businessName || whatsappId} just joined your team.`);
+            } else {
+                await sendTextMessage(whatsappId, "❌ Invalid or expired invite code.");
+            }
+        } else {
+            await sendTextMessage(whatsappId, "Please type 'Join [Code]', e.g., 'Join X7K9P2'.");
+        }
+        return;
+    }
+
+    // --- ONBOARDING ---
+    if (user.state === USER_STATES.NEW_USER && user.role !== 'STAFF') {
         if (CANCEL_KEYWORDS.includes(lowerCaseText)) {
              await sendTextMessage(whatsappId, "Okay, message me whenever you are ready to start!");
              return;
         }
-        // Send the Native Form
         await sendOnboardingFlow(whatsappId);
         return; 
     }
 
-    // OTP Verification is the only manual text step left
     if (user.state === USER_STATES.ONBOARDING_AWAIT_OTP) {
         await handleOtpVerification(user, userInputText);
         return;
     }
 
-    // --- 3. CANCELLATION ---
+    // --- CANCELLATION ---
     if (CANCEL_KEYWORDS.includes(lowerCaseText)) {
         if (user.state !== USER_STATES.IDLE) {
             await updateUserState(whatsappId, USER_STATES.IDLE, {});
@@ -114,7 +161,7 @@ export async function handleMessage(message) {
         }
     }
 
-    // --- 4. STATE HANDLING ---
+    // --- STATE HANDLING ---
     switch (user.state) {
       case USER_STATES.IDLE: 
           await handleIdleState(user, userInputText); 
@@ -139,7 +186,6 @@ export async function handleMessage(message) {
           break;
 
       default:
-        // Smart Interrupt
         if (user.state.startsWith('AWAITING_')) {
             if (userInputText.length > 2) { 
                 await updateUserState(whatsappId, USER_STATES.IDLE);
@@ -165,13 +211,11 @@ export async function handleFlowResponse(message) {
     const whatsappId = message.from;
     const responseJson = JSON.parse(message.interactive.nfm_reply.response_json);
     
-    // Extract data from our JSON Form
     const { business_name, email, currency } = responseJson;
 
     try {
         await sendTextMessage(whatsappId, "Creating your account... 🔄");
 
-        // 1. Save all details at once
         await updateUser(whatsappId, {
             businessName: business_name,
             email: email,
@@ -179,11 +223,9 @@ export async function handleFlowResponse(message) {
             isEmailVerified: false 
         });
 
-        // 2. Trigger Email Verification
         const otp = await sendOtp(email, business_name);
         await updateUser(whatsappId, { otp, otpExpires: new Date(Date.now() + 600000) });
         
-        // 3. Move to OTP State
         await updateUserState(whatsappId, USER_STATES.ONBOARDING_AWAIT_OTP);
         
         await sendTextMessage(whatsappId, `✅ Account created for **${business_name}**!\n\nI sent a verification code to ${email}. Please enter it below to finish.`);
@@ -197,7 +239,7 @@ export async function handleFlowResponse(message) {
 async function handleOtpVerification(user, text) {
     const inputOtp = text.trim();
     if (user.otp === inputOtp) {
-        await updateUser(user.whatsappId, { isEmailVerified: true }); // Clear OTP
+        await updateUser(user.whatsappId, { isEmailVerified: true }); 
         await updateUserState(user.whatsappId, USER_STATES.IDLE);
         await sendTextMessage(user.whatsappId, "✅ Email verified! Your account is ready.");
         await sendMainMenu(user.whatsappId);
@@ -205,8 +247,6 @@ async function handleOtpVerification(user, text) {
         await sendTextMessage(user.whatsappId, "❌ Invalid code. Please check your email and try again.");
     }
 }
-
-// --- BULK IMPORT HANDLER ---
 
 async function handleDocumentImport(user, document) {
     await sendTextMessage(user.whatsappId, "Receiving your file... 📂");
@@ -237,6 +277,20 @@ async function handleDocumentImport(user, document) {
 
 async function handleIdleState(user, text) {
     const { intent, context } = await getIntent(text);
+
+    // [NEW] Permission Check for Staff
+    if (user.isStaff) {
+        const RESTRICTED_INTENTS = [INTENTS.RECONCILE_TRANSACTION, INTENTS.ADD_BANK_ACCOUNT];
+        // Staff can generate sales reports, but maybe not P&L. Let's block P&L specifically.
+        if (RESTRICTED_INTENTS.includes(intent)) {
+            await sendTextMessage(user.whatsappId, "⛔ Access Denied. Only the Business Owner can do that.");
+            return;
+        }
+        if (intent === INTENTS.GENERATE_REPORT && (context.reportType === 'PNL' || context.reportType === 'PROFIT')) {
+            await sendTextMessage(user.whatsappId, "⛔ Access Denied. Staff cannot view Profit & Loss.");
+            return;
+        }
+    }
 
     if (intent === INTENTS.GENERAL_CONVERSATION) {
         await sendTextMessage(user.whatsappId, context.generatedReply || "How can I help?");
@@ -271,7 +325,7 @@ async function handleIdleState(user, text) {
         await handleAddingBankAccount({ ...user, stateContext: { memory: [{ role: 'user', content: text }] } }, text);
 
     } else if (intent === INTENTS.ADD_PRODUCTS_FROM_LIST || intent === INTENTS.ADD_MULTIPLE_PRODUCTS) {
-        await sendTextMessage(user.whatsappId, "To add many products at once, the fastest way is to **send me an Excel file**! 📁\n\nEnsure it has columns: *Name, Qty, Cost, Sell*.\n\nOr, you can just paste the list here (e.g. '10 Rice 2000').");
+        await sendTextMessage(user.whatsappId, "To add many products at once, the fastest way is to **send me an Excel file**! 📁\n\nEnsure it has columns: *Name, Qty, Cost, Sell*.\n\nOr, you can just paste the list here.");
         
         if (text.length > 20) { 
              const products = await parseBulkProductList(text);
@@ -311,8 +365,6 @@ async function handleIdleState(user, text) {
     }
 }
 
-// --- TRANSACTION HANDLERS ---
-
 async function handleLoggingSale(user, text) {
     let { memory, existingProduct, saleData } = user.stateContext;
     if (memory.length === 0 || memory[memory.length - 1].content !== text) {
@@ -329,6 +381,10 @@ async function handleLoggingSale(user, text) {
     } else {
         try {
             const finalData = { ...saleData, ...aiResponse.data };
+            
+            // [NEW] Pass Staff Name
+            if (user.isStaff) finalData.loggedBy = user.staffName;
+
             const banks = await getAllBankAccounts(user._id);
             if (banks.length > 0 && !finalData.linkedBankId && finalData.saleType !== 'credit') {
                  await updateUserState(user.whatsappId, USER_STATES.AWAITING_BANK_SELECTION_SALE, { transactionData: finalData });
@@ -364,6 +420,8 @@ async function handleLoggingExpense(user, text) {
     } else {
         try {
             const finalData = aiResponse.data;
+            if (user.isStaff) finalData.loggedBy = user.staffName; // [NEW]
+
             const banks = await getAllBankAccounts(user._id);
             if (banks.length > 0) {
                  await updateUserState(user.whatsappId, USER_STATES.AWAITING_BANK_SELECTION_EXPENSE, { transactionData: finalData });
@@ -431,6 +489,8 @@ async function handleLoggingCustomerPayment(user, text) {
     } else {
         try {
             const paymentData = aiResponse.data;
+            if (user.isStaff) paymentData.loggedBy = user.staffName; // [NEW]
+
             const banks = await getAllBankAccounts(user._id);
             if (banks.length > 0) {
                 await updateUserState(user.whatsappId, USER_STATES.AWAITING_BANK_SELECTION_CUST_PAYMENT, { transactionData: paymentData });

@@ -25,8 +25,6 @@ import logger from '../utils/logger.js';
 const CANCEL_KEYWORDS = ['cancel', 'stop', 'exit', 'abort', 'quit'];
 const MAX_MEMORY_DEPTH = 12;
 
-// --- HELPERS ---
-
 const limitMemory = (memory) => {
     if (memory.length > MAX_MEMORY_DEPTH) return memory.slice(-MAX_MEMORY_DEPTH);
     return memory;
@@ -44,36 +42,28 @@ const parsePrice = (priceInput) => {
     return isNaN(value) ? NaN : value * multiplier;
 };
 
-// [FIXED] Smart Date Parser Helper
-// Extracts date from AI context whether it's a string ("last_month") or specific dates
 const extractDateRange = (context, defaultPeriod = 'this_month') => {
     let dateInput = defaultPeriod;
-    
     if (context.dateRange) {
         dateInput = context.dateRange;
     } else if (context.startDate && context.endDate) {
-        // AI returned specific dates but not in a 'dateRange' object
         dateInput = { startDate: context.startDate, endDate: context.endDate };
     }
-    
     return getDateRange(dateInput);
 };
 
-// Switches context for Staff members to the Owner's account
 async function getEffectiveUser(user) {
     if (user.role === 'STAFF' && user.linkedAccountId) {
         return {
             ...user,
-            _id: user.linkedAccountId, // Swap ID to Owner's
-            originalUserId: user._id,  // Keep track of real user
+            _id: user.linkedAccountId,
+            originalUserId: user._id, 
             staffName: user.businessName || user.whatsappId,
             isStaff: true
         };
     }
     return user;
 }
-
-// --- MAIN HANDLER ---
 
 export async function handleMessage(message) {
   const whatsappId = message.from;
@@ -82,13 +72,11 @@ export async function handleMessage(message) {
   try {
     await setTypingIndicator(whatsappId, 'on', messageId);
     
-    // 1. MEDIA & INPUT PROCESSING
     let userInputText = "";
     if (message.type === 'text') userInputText = message.text.body;
     else if (message.type === 'audio') userInputText = await transcribeAudio(message.audio.id) || "";
     else if (message.type === 'image') userInputText = await analyzeImage(message.image.id, message.image.caption) || "";
     
-    // HANDLE EXCEL IMPORT (BULK PRODUCTS)
     else if (message.type === 'document') {
         const mime = message.document.mime_type;
         const rawUser = await findOrCreateUser(whatsappId);
@@ -114,7 +102,7 @@ export async function handleMessage(message) {
     
     const lowerCaseText = userInputText.trim().toLowerCase();
 
-    // 2. SYSTEM COMMANDS (JOIN TEAM)
+    // SYSTEM COMMANDS
     if (lowerCaseText.startsWith('join ')) {
         const code = lowerCaseText.split(' ')[1]?.toUpperCase();
         if (code) {
@@ -132,7 +120,7 @@ export async function handleMessage(message) {
         return;
     }
 
-    // 3. ONBOARDING (FLOWS)
+    // ONBOARDING
     if (user.state === USER_STATES.NEW_USER && user.role !== 'STAFF') {
         if (CANCEL_KEYWORDS.includes(lowerCaseText)) {
              await sendTextMessage(whatsappId, "Okay, message me whenever you are ready to start!");
@@ -147,7 +135,7 @@ export async function handleMessage(message) {
         return;
     }
 
-    // 4. CANCELLATION
+    // CANCELLATION
     if (CANCEL_KEYWORDS.includes(lowerCaseText)) {
         if (user.state !== USER_STATES.IDLE) {
             await updateUserState(whatsappId, USER_STATES.IDLE, {});
@@ -157,7 +145,7 @@ export async function handleMessage(message) {
         }
     }
 
-    // 5. STATE ROUTING
+    // STATE ROUTING
     switch (user.state) {
       case USER_STATES.IDLE: 
           await handleIdleState(user, userInputText); 
@@ -201,8 +189,7 @@ export async function handleMessage(message) {
   }
 }
 
-// --- SPECIAL HANDLERS (FLOWS, OTP, DOCS) ---
-
+// ... (handleFlowResponse, handleOtpVerification, handleDocumentImport - Keep from previous version) ...
 export async function handleFlowResponse(message) {
     const whatsappId = message.from;
     const responseJson = JSON.parse(message.interactive.nfm_reply.response_json);
@@ -242,33 +229,25 @@ async function handleDocumentImport(user, document) {
     await sendTextMessage(user.whatsappId, "Receiving your file... 📂");
     try {
         const { products, errors } = await parseExcelImport(document.id);
-        
         if (products.length === 0) {
             await sendTextMessage(user.whatsappId, "I couldn't find any valid products in that file. Check the columns: Name, Qty, Cost, Sell.");
             return;
         }
-
         await updateUserState(user.whatsappId, USER_STATES.AWAITING_BULK_PRODUCT_CONFIRMATION, { products });
-        
         const preview = products.slice(0, 5).map(p => `• ${p.quantityAdded}x ${p.productName}`).join('\n');
         const errorMsg = errors.length > 0 ? `\n⚠️ ${errors.length} rows skipped (missing info).` : "";
-        
         await sendInteractiveButtons(user.whatsappId, `I read ${products.length} products from the file!${errorMsg}\n\nTop 5:\n${preview}`, [
             { id: 'confirm_bulk_add', title: '✅ Import All' },
             { id: 'cancel', title: '❌ Cancel' }
         ]);
-
     } catch (e) {
         await sendTextMessage(user.whatsappId, `Error reading file: ${e.message}`);
     }
 }
 
-// --- IDLE STATE LOGIC (INTENT ROUTING) ---
-
 async function handleIdleState(user, text) {
     const { intent, context } = await getIntent(text);
 
-    // Permission Check for Staff
     if (user.isStaff) {
         const RESTRICTED = [INTENTS.RECONCILE_TRANSACTION, INTENTS.ADD_BANK_ACCOUNT, 'EXPORT_DATA'];
         if (RESTRICTED.includes(intent) || (intent === 'EXPORT_DATA')) {
@@ -291,15 +270,12 @@ async function handleIdleState(user, text) {
         return;
     }
 
-    // [UPDATED] EXPORT DATA - Uses extractDateRange fix
     if (intent === 'EXPORT_DATA') {
         await sendTextMessage(user.whatsappId, "Gathering your records... 📊\nThis may take a few seconds.");
         const { startDate, endDate } = extractDateRange(context, 'this_year');
-        
         try {
             const excelBuffer = await generateDataExport(user._id, startDate, endDate);
             const mediaId = await uploadMedia(excelBuffer, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-            
             if (mediaId) {
                 const filename = `Fynax_Data_${new Date().toISOString().split('T')[0]}.xlsx`;
                 await sendDocument(user.whatsappId, mediaId, filename, "Here is your data export. 📁");
@@ -347,7 +323,6 @@ async function handleIdleState(user, text) {
 
     } else if (intent === INTENTS.ADD_PRODUCTS_FROM_LIST || intent === INTENTS.ADD_MULTIPLE_PRODUCTS) {
         await sendTextMessage(user.whatsappId, "To add many products at once, the fastest way is to **send me an Excel file**! 📁\n\nEnsure it has columns: *Name, Qty, Cost, Sell*.\n\nOr, you can just paste the list here.");
-        
         if (text.length > 20) { 
              const products = await parseBulkProductList(text);
              if (products.length > 0) {
@@ -363,10 +338,7 @@ async function handleIdleState(user, text) {
     } else if (intent === INTENTS.GENERATE_REPORT) {
         if (context.reportType) {
             await sendTextMessage(user.whatsappId, "I've added your report to the queue. You'll receive it shortly! ⏳");
-            
-            // [UPDATED] Uses extractDateRange fix
             const { startDate, endDate } = extractDateRange(context, 'this_month');
-            
             await queueReportGeneration(
                 user._id, 
                 user.currency, 
@@ -396,9 +368,7 @@ async function handleLoggingSale(user, text) {
         memory.push({ role: 'user', content: text });
     }
     memory = limitMemory(memory);
-
     const aiResponse = await gatherSaleDetails(memory, existingProduct, saleData?.isService);
-
     if (aiResponse.status === 'incomplete') {
         await updateUserState(user.whatsappId, USER_STATES.LOGGING_SALE, { ...user.stateContext, memory: limitMemory(aiResponse.memory) });
         await sendTextMessage(user.whatsappId, aiResponse.reply);
@@ -406,7 +376,6 @@ async function handleLoggingSale(user, text) {
         try {
             const finalData = { ...saleData, ...aiResponse.data };
             if (user.isStaff) finalData.loggedBy = user.staffName;
-
             const banks = await getAllBankAccounts(user._id);
             if (banks.length > 0 && !finalData.linkedBankId && finalData.saleType !== 'credit') {
                  await updateUserState(user.whatsappId, USER_STATES.AWAITING_BANK_SELECTION_SALE, { transactionData: finalData });
@@ -417,7 +386,6 @@ async function handleLoggingSale(user, text) {
             }
             const txn = await TransactionManager.logSale(user, finalData);
             await sendTextMessage(user.whatsappId, `✅ Sale logged! Amount: ${user.currency} ${txn.amount.toLocaleString()}`);
-            
             await updateUserState(user.whatsappId, USER_STATES.AWAITING_INVOICE_CONFIRMATION, { transaction: txn });
             await sendInteractiveButtons(user.whatsappId, 'Generate Invoice?', [{ id: 'invoice_yes', title: 'Yes' }, { id: 'invoice_no', title: 'No' }]);
         } catch (e) {
@@ -433,9 +401,7 @@ async function handleLoggingExpense(user, text) {
         memory.push({ role: 'user', content: text });
     }
     memory = limitMemory(memory);
-
     const aiResponse = await gatherExpenseDetails(memory);
-
     if (aiResponse.status === 'incomplete') {
         await updateUserState(user.whatsappId, USER_STATES.LOGGING_EXPENSE, { memory: limitMemory(aiResponse.memory) });
         await sendTextMessage(user.whatsappId, aiResponse.reply);
@@ -443,7 +409,6 @@ async function handleLoggingExpense(user, text) {
         try {
             const finalData = aiResponse.data;
             if (user.isStaff) finalData.loggedBy = user.staffName;
-
             const banks = await getAllBankAccounts(user._id);
             if (banks.length > 0) {
                  await updateUserState(user.whatsappId, USER_STATES.AWAITING_BANK_SELECTION_EXPENSE, { transactionData: finalData });
@@ -467,9 +432,7 @@ async function handleAddingProduct(user, text) {
         memory.push({ role: 'user', content: text });
     }
     memory = limitMemory(memory);
-
     const aiResponse = await gatherProductDetails(memory, existingProduct);
-
     if (aiResponse.status === 'incomplete') {
         await updateUserState(user.whatsappId, USER_STATES.ADDING_PRODUCT, { memory: limitMemory(aiResponse.memory), existingProduct });
         await sendTextMessage(user.whatsappId, aiResponse.reply);
@@ -496,23 +459,21 @@ async function handleAddingProduct(user, text) {
     }
 }
 
+// [FIXED] Added fallback text
 async function handleLoggingCustomerPayment(user, text) {
     let { memory } = user.stateContext;
     if (memory.length === 0 || memory[memory.length - 1].content !== text) {
         memory.push({ role: 'user', content: text });
     }
     memory = limitMemory(memory);
-
     const aiResponse = await gatherPaymentDetails(memory, user.currency);
-
     if (aiResponse.status === 'incomplete') {
         await updateUserState(user.whatsappId, USER_STATES.LOGGING_CUSTOMER_PAYMENT, { memory: limitMemory(aiResponse.memory) });
-        await sendTextMessage(user.whatsappId, aiResponse.reply);
+        await sendTextMessage(user.whatsappId, aiResponse.reply || "Could you provide the payment details?");
     } else {
         try {
             const paymentData = aiResponse.data;
             if (user.isStaff) paymentData.loggedBy = user.staffName;
-
             const banks = await getAllBankAccounts(user._id);
             if (banks.length > 0) {
                 await updateUserState(user.whatsappId, USER_STATES.AWAITING_BANK_SELECTION_CUST_PAYMENT, { transactionData: paymentData });
@@ -530,18 +491,17 @@ async function handleLoggingCustomerPayment(user, text) {
     }
 }
 
+// [FIXED] Added fallback text
 async function handleAddingBankAccount(user, text) {
     let { memory } = user.stateContext;
     if (memory.length === 0 || memory[memory.length - 1].content !== text) {
         memory.push({ role: 'user', content: text });
     }
     memory = limitMemory(memory);
-
     const aiResponse = await gatherBankAccountDetails(memory, user.currency);
-
     if (aiResponse.status === 'incomplete') {
         await updateUserState(user.whatsappId, USER_STATES.ADDING_BANK_ACCOUNT, { memory: limitMemory(aiResponse.memory) });
-        await sendTextMessage(user.whatsappId, aiResponse.reply);
+        await sendTextMessage(user.whatsappId, aiResponse.reply || "What is the bank name and balance?");
     } else {
         const bankData = aiResponse.data;
         const balance = parsePrice(bankData.openingBalance);

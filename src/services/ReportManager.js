@@ -5,7 +5,6 @@ const transactionsCollection = () => getDB().collection('transactions');
 
 /**
  * Calculates Profit & Loss using Aggregation Framework.
- * Extremely fast compared to JS looping.
  */
 export async function getPnLData(userId, startDate, endDate) {
     try {
@@ -26,7 +25,7 @@ export async function getPnLData(userId, startDate, endDate) {
                             $group: {
                                 _id: null,
                                 totalRevenue: { $sum: { $multiply: ["$items.quantity", "$items.pricePerUnit"] } },
-                                totalCOGS: { $sum: { $multiply: ["$items.quantity", "$items.costPrice"] } } // Uses the snapshot!
+                                totalCOGS: { $sum: { $multiply: ["$items.quantity", "$items.costPrice"] } } 
                             }
                         }
                     ],
@@ -78,6 +77,7 @@ export async function getPnLData(userId, startDate, endDate) {
 
 /**
  * Fetches raw transaction list for detailed PDF reports (Sales/Expenses).
+ * [UPDATED] Now joins with Customers collection to get real names.
  */
 export async function getReportTransactions(userId, type, startDate, endDate) {
     const query = {
@@ -86,12 +86,32 @@ export async function getReportTransactions(userId, type, startDate, endDate) {
         date: { $gte: startDate, $lte: endDate }
     };
     
-    // If it's a sales report, we might want to lookup customer names efficiently
-    // But for simplicity, we'll assume customerName is snapshot/cached or we fetch normally.
-    // Ideally, perform a $lookup here if linkedCustomerId exists.
-    
-    return await transactionsCollection()
-        .find(query)
-        .sort({ date: 1 })
-        .toArray();
+    return await transactionsCollection().aggregate([
+        { $match: query },
+        // Join with customers table
+        { 
+            $lookup: {
+                from: 'customers',
+                localField: 'linkedCustomerId',
+                foreignField: '_id',
+                as: 'customerDetails'
+            }
+        },
+        // Unwind the array (preserve if no customer found)
+        { $unwind: { path: '$customerDetails', preserveNullAndEmptyArrays: true } },
+        // Project final shape
+        {
+            $project: {
+                date: 1,
+                type: 1,
+                amount: 1,
+                description: 1,
+                category: 1,
+                items: 1,
+                // Use real name if found, else default to 'Walk-in'
+                customerName: { $ifNull: ['$customerDetails.customerName', 'Walk-in'] }
+            }
+        },
+        { $sort: { date: 1 } }
+    ]).toArray();
 }

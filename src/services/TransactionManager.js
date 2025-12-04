@@ -1,136 +1,172 @@
-import { findOrCreateCustomer, updateBalanceOwed } from '../db/customerService.js';
-import { findProductByName, updateStock } from '../db/productService.js';
-import { createSaleTransaction, createExpenseTransaction, createCustomerPaymentTransaction } from '../db/transactionService.js';
-import { updateBankBalance } from '../db/bankService.js';
-import { sendTextMessage } from '../api/whatsappService.js'; // [NEW] Needed for alerts
+import { getDB } from './connection.js';
 import logger from '../utils/logger.js';
 import { ObjectId } from 'mongodb';
 
-export async function logSale(user, saleData) {
-    const { items, customerName, saleType, linkedBankId } = saleData;
-    if (!items || items.length === 0) throw new Error("No items found in the sale data.");
+const transactionsCollection = () => getDB().collection('transactions');
 
-    const customer = await findOrCreateCustomer(user._id, customerName);
-    let totalAmount = 0;
-    let descriptionParts = [];
-    const processedItems = [];
+// --- CREATION FUNCTIONS ---
 
-    // --- STEP 1 & 2: Process Items & Snapshot Cost ---
-    for (let i = 0; i < items.length; i++) {
-        const item = items[i];
-        
-        if (!item.productName || !item.quantity || isNaN(item.quantity) || item.pricePerUnit === undefined || isNaN(item.pricePerUnit)) {
-             throw new Error(`Item ${i+1} (${item.productName || 'Unknown'}) has invalid details.`);
-        }
-
-        const quantity = parseFloat(item.quantity);
-        const price = parseFloat(item.pricePerUnit);
-        totalAmount += quantity * price;
-
-        let costPriceSnapshot = 0;
-        let productId = null;
-
-        if (!item.isService) {
-            const product = await findProductByName(user._id, item.productName);
-            if (product) {
-                productId = product._id;
-                costPriceSnapshot = product.costPrice || 0;
-            }
-        }
-
-        processedItems.push({
-            productId: productId,
+export async function createSaleTransaction(saleData) {
+    try {
+        const sanitizedItems = saleData.items.map(item => ({
+            productId: item.productId ? new ObjectId(item.productId) : null,
             productName: item.productName,
-            quantity: quantity,
-            pricePerUnit: price,
-            costPrice: costPriceSnapshot, 
-            isService: !!item.isService
-        });
-        
-        descriptionParts.push(`${quantity} x ${item.productName}`);
+            quantity: item.quantity,
+            pricePerUnit: item.pricePerUnit,
+            costPrice: item.costPrice || 0,
+            isService: item.isService || false
+        }));
+
+        const transactionDoc = {
+            userId: saleData.userId,
+            type: 'SALE',
+            amount: saleData.totalAmount,
+            date: saleData.date,
+            description: saleData.description,
+            items: sanitizedItems,
+            linkedCustomerId: saleData.linkedCustomerId,
+            linkedBankId: saleData.linkedBankId || null,
+            paymentMethod: saleData.paymentMethod.toUpperCase(),
+            // [NEW] Save Due Date for Credit Sales
+            dueDate: saleData.dueDate ? new Date(saleData.dueDate) : null, 
+            createdAt: new Date()
+        };
+        const result = await transactionsCollection().insertOne(transactionDoc);
+        return await transactionsCollection().findOne({ _id: result.insertedId });
+    } catch (error) {
+        logger.error('Error creating sale transaction:', error);
+        throw new Error('Could not create sale transaction.');
     }
-
-    const description = `${descriptionParts.join(', ')} sold to ${customerName}`;
-
-    // --- STEP 3: Create Transaction ---
-    const transactionData = { 
-        userId: user._id, 
-        totalAmount, 
-        items: processedItems, 
-        date: new Date(), 
-        description, 
-        linkedCustomerId: customer._id, 
-        linkedBankId: linkedBankId ? new ObjectId(linkedBankId) : null, 
-        paymentMethod: saleType 
-    };
-
-    const transaction = await createSaleTransaction(transactionData);
-
-    // --- STEP 4: Update Inventory & WATCHDOG CHECK ---
-    for (const item of processedItems) {
-        if (item.productId && !item.isService) {
-             const updatedProduct = await updateStock(item.productId, -item.quantity, 'SALE', transaction._id);
-             
-             // [NEW] LOW STOCK ALERT
-             const threshold = updatedProduct.reorderLevel || 5; // Default to 5 if not set
-             if (updatedProduct.quantity <= threshold) {
-                 logger.info(`Low stock alert for ${updatedProduct.productName} (Qty: ${updatedProduct.quantity})`);
-                 await sendTextMessage(user.whatsappId, 
-                     `⚠️ *Low Stock Alert:*\n"${updatedProduct.productName}" is down to *${updatedProduct.quantity} units*.\n\nReply with 'Restock ${updatedProduct.productName} ...' to add more.`
-                 );
-             }
-        }
-    }
-   
-    // --- STEP 5: Financial Updates ---
-    if (saleType.toLowerCase() === 'credit') {
-        await updateBalanceOwed(customer._id, totalAmount);
-    } else if (linkedBankId) {
-        await updateBankBalance(new ObjectId(linkedBankId), totalAmount);
-    }
-
-    return transaction;
 }
 
-export async function logExpense(user, expenseData) {
-    const { category, amount, description, linkedBankId } = expenseData;
-    
-    const transaction = await createExpenseTransaction({
-        userId: user._id,
-        amount: parseFloat(amount),
-        date: new Date(),
-        description,
-        category,
-        linkedBankId: linkedBankId ? new ObjectId(linkedBankId) : null
-    });
-
-    if (linkedBankId) {
-        await updateBankBalance(new ObjectId(linkedBankId), -parseFloat(amount));
+export async function createExpenseTransaction(expenseData) {
+    try {
+        const doc = {
+            userId: expenseData.userId,
+            type: 'EXPENSE',
+            amount: expenseData.amount,
+            date: expenseData.date,
+            description: expenseData.description,
+            category: expenseData.category,
+            linkedBankId: expenseData.linkedBankId || null,
+            createdAt: new Date()
+        };
+        const result = await transactionsCollection().insertOne(doc);
+        return await transactionsCollection().findOne({ _id: result.insertedId });
+    } catch (error) {
+        logger.error('Error creating expense transaction:', error);
+        throw new Error('Could not create expense transaction.');
     }
-
-    return transaction;
 }
 
-export async function logCustomerPayment(user, paymentData) {
-    const { customerName, amount, linkedBankId } = paymentData;
-    const paymentAmount = parseFloat(amount);
-
-    const customer = await findOrCreateCustomer(user._id, customerName);
-
-    const transaction = await createCustomerPaymentTransaction({
-        userId: user._id,
-        linkedCustomerId: customer._id,
-        amount: paymentAmount,
-        date: new Date(),
-        description: `Payment received from ${customer.customerName}`,
-        linkedBankId: linkedBankId ? new ObjectId(linkedBankId) : null
-    });
-
-    const updatedCustomer = await updateBalanceOwed(customer._id, -paymentAmount);
-    
-    if (linkedBankId) {
-        await updateBankBalance(new ObjectId(linkedBankId), paymentAmount);
+export async function createCustomerPaymentTransaction(paymentData) {
+    try {
+        const doc = {
+            userId: paymentData.userId,
+            type: 'CUSTOMER_PAYMENT',
+            amount: paymentData.amount,
+            date: paymentData.date,
+            description: paymentData.description,
+            linkedCustomerId: paymentData.linkedCustomerId,
+            linkedBankId: paymentData.linkedBankId || null,
+            createdAt: new Date()
+        };
+        const result = await transactionsCollection().insertOne(doc);
+        return await transactionsCollection().findOne({ _id: result.insertedId });
+    } catch (error) {
+        logger.error('Error creating customer payment transaction:', error);
+        throw new Error('Could not create customer payment transaction.');
     }
+}
 
-    return { transaction, updatedCustomer };
+// --- READ / QUERY FUNCTIONS ---
+
+export async function getSummaryByDateRange(userId, type, startDate, endDate) {
+    try {
+        const pipeline = [
+            { $match: { userId, type, date: { $gte: startDate, $lte: endDate } } },
+            { $group: { _id: null, total: { $sum: "$amount" } } }
+        ];
+        const result = await transactionsCollection().aggregate(pipeline).toArray();
+        return result.length > 0 ? result[0].total : 0;
+    } catch (error) {
+        logger.error(`Error getting summary for user ${userId}:`, error);
+        throw new Error('Could not retrieve financial summary.');
+    }
+}
+
+export async function getRecentTransactions(userId, limit = 5) {
+    try {
+        return await transactionsCollection()
+            .find({ userId })
+            .sort({ date: -1 })
+            .limit(limit)
+            .toArray();
+    } catch (error) {
+        logger.error(`Error fetching recent transactions for user ${userId}:`, error);
+        throw new Error('Could not retrieve recent transactions.');
+    }
+}
+
+export async function getTransactionsByDateRange(userId, type, startDate, endDate) {
+    try {
+        return await transactionsCollection().find({
+            userId,
+            type,
+            date: { $gte: startDate, $lte: endDate }
+        }).sort({ date: 1 }).toArray();
+    } catch (error) {
+        logger.error(`Error getting transactions for user ${userId}:`, error);
+        throw new Error('Could not retrieve transactions.');
+    }
+}
+
+// [NEW] Helper for The Debt Collector
+export async function getDueTransactions(userId, startDate, endDate) {
+    try {
+        return await transactionsCollection().find({
+            userId,
+            type: 'SALE',
+            paymentMethod: 'CREDIT',
+            dueDate: { $gte: startDate, $lte: endDate }
+        }).toArray();
+    } catch (error) {
+        logger.error(`Error getting due transactions for ${userId}:`, error);
+        return [];
+    }
+}
+
+export async function findTransactionById(transactionId) {
+    try {
+        const id = typeof transactionId === 'string' ? new ObjectId(transactionId) : transactionId;
+        return await transactionsCollection().findOne({ _id: id });
+    } catch (error) {
+        logger.error(`Error finding transaction by ID ${transactionId}:`, error);
+        throw new Error('Could not find transaction.');
+    }
+}
+
+export async function updateTransactionById(transactionId, updateData) {
+    try {
+        const id = typeof transactionId === 'string' ? new ObjectId(transactionId) : transactionId;
+        return await transactionsCollection().findOneAndUpdate(
+            { _id: id },
+            { $set: updateData },
+            { returnDocument: 'after' }
+        );
+    } catch (error) {
+        logger.error(`Error updating transaction ${transactionId}:`, error);
+        throw new Error('Could not update transaction.');
+    }
+}
+
+export async function deleteTransactionById(transactionId) {
+    try {
+        const id = typeof transactionId === 'string' ? new ObjectId(transactionId) : transactionId;
+        const result = await transactionsCollection().deleteOne({ _id: id });
+        return result.deletedCount === 1;
+    } catch (error) {
+        logger.error(`Error deleting transaction by ID ${transactionId}:`, error);
+        throw new Error('Could not delete transaction.');
+    }
 }

@@ -44,6 +44,21 @@ const parsePrice = (priceInput) => {
     return isNaN(value) ? NaN : value * multiplier;
 };
 
+// [FIXED] Smart Date Parser Helper
+// Extracts date from AI context whether it's a string ("last_month") or specific dates
+const extractDateRange = (context, defaultPeriod = 'this_month') => {
+    let dateInput = defaultPeriod;
+    
+    if (context.dateRange) {
+        dateInput = context.dateRange;
+    } else if (context.startDate && context.endDate) {
+        // AI returned specific dates but not in a 'dateRange' object
+        dateInput = { startDate: context.startDate, endDate: context.endDate };
+    }
+    
+    return getDateRange(dateInput);
+};
+
 // Switches context for Staff members to the Owner's account
 async function getEffectiveUser(user) {
     if (user.role === 'STAFF' && user.linkedAccountId) {
@@ -77,7 +92,7 @@ export async function handleMessage(message) {
     else if (message.type === 'document') {
         const mime = message.document.mime_type;
         const rawUser = await findOrCreateUser(whatsappId);
-        const user = await getEffectiveUser(rawUser); // Use effective user to save to correct DB
+        const user = await getEffectiveUser(rawUser); 
         
         if (mime.includes('spreadsheet') || mime.includes('excel') || mime.includes('csv')) {
             await handleDocumentImport(user, message.document);
@@ -167,7 +182,6 @@ export async function handleMessage(message) {
           break;
 
       default:
-        // Smart Interrupt: If user sends a command while in a menu
         if (user.state.startsWith('AWAITING_')) {
             if (userInputText.length > 2) { 
                 await updateUserState(whatsappId, USER_STATES.IDLE);
@@ -267,7 +281,6 @@ async function handleIdleState(user, text) {
         }
     }
 
-    // Team Management (Owner Only)
     if (intent === 'MANAGE_TEAM') {
         if (user.role === 'STAFF') {
             await sendTextMessage(user.whatsappId, "⛔ Only the Business Owner can invite staff.");
@@ -278,10 +291,10 @@ async function handleIdleState(user, text) {
         return;
     }
 
-    // Excel Export (Accountant's Friend)
+    // [UPDATED] EXPORT DATA - Uses extractDateRange fix
     if (intent === 'EXPORT_DATA') {
         await sendTextMessage(user.whatsappId, "Gathering your records... 📊\nThis may take a few seconds.");
-        const { startDate, endDate } = getDateRange(context.dateRange || 'this_year');
+        const { startDate, endDate } = extractDateRange(context, 'this_year');
         
         try {
             const excelBuffer = await generateDataExport(user._id, startDate, endDate);
@@ -350,7 +363,9 @@ async function handleIdleState(user, text) {
     } else if (intent === INTENTS.GENERATE_REPORT) {
         if (context.reportType) {
             await sendTextMessage(user.whatsappId, "I've added your report to the queue. You'll receive it shortly! ⏳");
-            const { startDate, endDate } = getDateRange(context.dateRange || 'this_month');
+            
+            // [UPDATED] Uses extractDateRange fix
+            const { startDate, endDate } = extractDateRange(context, 'this_month');
             
             await queueReportGeneration(
                 user._id, 

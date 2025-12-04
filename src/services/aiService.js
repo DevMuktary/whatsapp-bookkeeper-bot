@@ -7,6 +7,11 @@ import { INTENTS } from '../utils/constants.js';
 const DEEPSEEK_API_URL = 'https://api.deepseek.com/chat/completions';
 const openai = new OpenAI({ apiKey: config.openai.apiKey });
 
+// --- MEDIA HELPERS ---
+
+/**
+ * Downloads media (audio/image) from WhatsApp servers.
+ */
 async function downloadWhatsAppMedia(mediaId) {
     try {
         const urlRes = await axios.get(`https://graph.facebook.com/v20.0/${mediaId}`, {
@@ -28,6 +33,7 @@ async function downloadWhatsAppMedia(mediaId) {
 export async function transcribeAudio(mediaId) {
     try {
         const audioBuffer = await downloadWhatsAppMedia(mediaId);
+        // Create a File-like object for OpenAI
         const file = await OpenAI.toFile(audioBuffer, 'voice_note.ogg', { type: 'audio/ogg' });
         
         const transcription = await openai.audio.transcriptions.create({
@@ -67,6 +73,8 @@ export async function analyzeImage(mediaId, caption = "") {
     }
 }
 
+// --- TEXT PARSING HELPERS ---
+
 const parsePrice = (priceInput) => {
     if (typeof priceInput === 'number') return priceInput;
     if (typeof priceInput !== 'string') return NaN;
@@ -95,6 +103,7 @@ async function callDeepSeek(messages, temperature = 0.1, enforceJson = true) {
       temperature: temperature,
     };
     
+    // Only add response_format if enforceJson is true AND the prompt requests JSON
     if (enforceJson && messages.some(m => m.role === 'system' && m.content.toLowerCase().includes('json'))) {
         payload.response_format = { type: "json_object" };
     }
@@ -108,6 +117,7 @@ async function callDeepSeek(messages, temperature = 0.1, enforceJson = true) {
 
     const content = response.data.choices[0].message.content;
 
+    // JSON Parsing Logic
     if (enforceJson && typeof content === 'string' && content.trim().startsWith('{')) {
          try {
              return JSON.parse(content);
@@ -154,22 +164,24 @@ export async function extractOnboardingDetails(text) {
   const messages = [
     {
       role: 'system',
-      content: "You are an expert entity extractor. Respond ONLY with a JSON object: {\"businessName\": \"Name\", \"email\": \"user@example.com\"}. If not found, use null."
+      content: "You are an expert entity extractor. Your task is to extract a business name and an email address from the user's message. Respond ONLY with a JSON object in the format {\"businessName\": \"The Extracted Name\", \"email\": \"user@example.com\"}. If a piece of information is not found, its value should be null."
     },
-    { role: 'user', content: text }
+    { role: 'user', content: `Here is the message: "${text}"` }
   ];
-  return await callDeepSeek(messages);
+  const responseJson = await callDeepSeek(messages);
+  return typeof responseJson === 'string' ? JSON.parse(responseJson) : responseJson;
 }
 
 export async function extractCurrency(text) {
     const messages = [
         {
             role: 'system',
-            content: "Identify the currency and return ISO 4217 code. JSON: {\"currency\": \"ISO_CODE\"}. Example: 'Naira' -> 'NGN'."
+            content: "You are an expert currency identification system. Your task is to identify the currency mentioned in the user's text and convert it to its standard 3-letter ISO 4217 code. Examples: 'Naira' or '₦' -> 'NGN', 'US dollars' or '$' -> 'USD', 'Ghana Cedis' -> 'GHS', 'pounds' -> 'GBP'. Respond ONLY with a JSON object in the format {\"currency\": \"ISO_CODE\"}. If no currency is found, the value should be null."
         },
-        { role: 'user', content: text }
+        { role: 'user', content: `Here is the message: "${text}"` }
     ];
-    return await callDeepSeek(messages);
+    const responseJson = await callDeepSeek(messages);
+    return typeof responseJson === 'string' ? JSON.parse(responseJson) : responseJson;
 }
 
 export async function getIntent(text) {
@@ -178,33 +190,40 @@ export async function getIntent(text) {
     TODAY: ${today}
 
     INTENTS:
-    - ${INTENTS.LOG_SALE}: "Sold 5 rice", "Credit sale"
-    - ${INTENTS.LOG_EXPENSE}: "Bought fuel", "Paid rent"
-    - ${INTENTS.ADD_PRODUCT}: "Restock rice", "New item"
+    - ${INTENTS.LOG_SALE}: "Sold 5 rice", "Credit sale to John"
+    - ${INTENTS.LOG_EXPENSE}: "Bought fuel 500", "Paid shop rent"
+    - ${INTENTS.ADD_PRODUCT}: "Restock rice 50 bags", "New item indomie 2000"
     - ${INTENTS.ADD_PRODUCTS_FROM_LIST}: "Add these: 1. Rice, 2. Beans" (Multi-line or bulk list)
     - ${INTENTS.ADD_MULTIPLE_PRODUCTS}: "I want to add many items"
-    - ${INTENTS.CHECK_STOCK}: "How many rice left?"
-    - ${INTENTS.GENERATE_REPORT}: "Send me a report", "P&L", "Sales report"
-    - ${INTENTS.GET_FINANCIAL_SUMMARY}: "Total sales today"
-    - ${INTENTS.ADD_BANK_ACCOUNT}: "Add bank UBA"
-    - ${INTENTS.LOG_CUSTOMER_PAYMENT}: "John paid 5000"
-    - ${INTENTS.GENERAL_CONVERSATION}: "Hello", "Thanks", "Hi"
-    - ${INTENTS.SHOW_MAIN_MENU}: "Menu", "Cancel"
-    - ${INTENTS.RECONCILE_TRANSACTION}: "Edit transaction", "Delete sale"
-    - ${INTENTS.GET_CUSTOMER_BALANCES}: "Who owes me?"
+    - ${INTENTS.CHECK_STOCK}: "How many rice left?", "Count stock"
+    - ${INTENTS.GENERATE_REPORT}: "Send me a report", "Expense report", "Sales report", "P&L", "Profit and Loss", "Report for last month"
+    - ${INTENTS.GET_FINANCIAL_SUMMARY}: "Total sales today", "How much did I spend?"
+    - ${INTENTS.ADD_BANK_ACCOUNT}: "Add bank UBA", "New account access bank"
+    - ${INTENTS.LOG_CUSTOMER_PAYMENT}: "John paid 5000", "Receive payment from Sarah"
+    - ${INTENTS.GENERAL_CONVERSATION}: "Hello", "Thanks", "Who are you?", "Hi"
+    - ${INTENTS.SHOW_MAIN_MENU}: "Menu", "Show options", "Cancel"
+    - ${INTENTS.RECONCILE_TRANSACTION}: "Edit transaction", "Delete sale", "I made a mistake"
+    - ${INTENTS.GET_CUSTOMER_BALANCES}: "Who owes me?", "Debtors list"
 
     RULES:
     1. If Intent is ${INTENTS.GENERATE_REPORT}:
        - Context MUST include "reportType": "SALES", "EXPENSES", "PNL", "INVENTORY", or "COGS".
-       - Dates: Calculate "startDate" and "endDate" (YYYY-MM-DD). Default "this_month".
-    2. General Conversation: Provide "generatedReply".
+       - Example: "Expense report" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "EXPENSES"}}
+       - If unspecified ("Generate report"), "reportType" is null.
+    
+    2. Dates: Calculate "startDate" and "endDate" (YYYY-MM-DD) based on user input (e.g., "last month", "today"). Default to "this_month".
 
-    Return JSON: {"intent": "...", "context": {...}}
+    3. General Conversation:
+       - If the user says "Hello" or asks a question, set intent to ${INTENTS.GENERAL_CONVERSATION}.
+       - You MUST provide a "generatedReply" string in the context.
+
+    Return JSON format: {"intent": "...", "context": {...}}
     `;
 
     const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: text }];
     let result = await callDeepSeek(messages);
     
+    // Post-processing to clean up extracted numbers
     if (result.context) {
         if (result.context.amount) result.context.amount = parsePrice(result.context.amount);
         if (result.context.totalAmount) result.context.totalAmount = parsePrice(result.context.totalAmount);
@@ -217,24 +236,39 @@ export async function getIntent(text) {
 }
 
 export async function getFinancialInsight(pnlData, currency) {
-    const systemPrompt = `Analyze this P&L data and give one friendly business tip. Data: ${JSON.stringify(pnlData)}`;
+    const systemPrompt = `Analyze this P&L data and give one friendly, short business tip. Data: ${JSON.stringify(pnlData)}`;
     const messages = [{ role: 'system', content: systemPrompt }];
     return await callDeepSeek(messages, 0.7, false);
 }
 
+// [UPDATED] Now extracts 'dueDate' for credit sales
 export async function gatherSaleDetails(conversationHistory, existingProduct = null, isService = false) { 
+    const today = new Date().toISOString().split('T')[0];
     const productInfo = isService 
-        ? "Service sale." 
-        : (existingProduct ? `Product: "${existingProduct.productName}", Price: ${existingProduct.sellingPrice}.` : 'New product.');
+        ? "The user confirmed this is a service." 
+        : (existingProduct ? `Existing product: "${existingProduct.productName}", Price: ${existingProduct.sellingPrice}.` : 'New product/service.');
 
-    const systemPrompt = `Bookkeeping assistant logging a sale.
+    const systemPrompt = `You are a bookkeeping assistant logging a sale. TODAY: ${today}.
     CONTEXT: ${productInfo}
-    GOAL: Collect 'items' (array of {productName, quantity, pricePerUnit}), 'customerName', 'saleType'.
-    Return JSON: {"status": "complete"/"incomplete", "data": {...}, "reply": "..."}`;
+    GOAL: Collect 'items' (array of {productName, quantity, pricePerUnit}), 'customerName', and 'saleType' (Cash/Credit/Bank).
+    
+    RULES:
+    1. Extract details. Default quantity is 1.
+    2. If product exists, use its price if user doesn't specify.
+    3. Once you have an item, add it to 'items'.
+    4. If 'saleType' is CREDIT, listen closely for a due date (e.g., "pay next friday", "due 25th").
+    5. If mentioned, calculate 'dueDate' as YYYY-MM-DD.
+    6. Ask "Anything else?" after adding items.
+    7. ONLY when user says "done"/"no", return {"status": "complete", "data": {...}}.
+    8. Otherwise return {"status": "incomplete", "reply": "Next question..."}.
+    
+    Return JSON format:
+    {"status": "complete"/"incomplete", "data": {"items": [], "customerName": "...", "saleType": "...", "dueDate": "YYYY-MM-DD"}, "reply": "..."}`;
 
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     let response = await callDeepSeek(messages, 0.5);
     
+    // Ensure numeric values
     if (response.status === 'complete' && response.data && response.data.items) {
         response.data.items = response.data.items.map(item => ({
             ...item,
@@ -246,9 +280,12 @@ export async function gatherSaleDetails(conversationHistory, existingProduct = n
 }
 
 export async function gatherExpenseDetails(conversationHistory) {
-    const systemPrompt = `Log expense (Category, Amount, Description).
-    Auto-Categorize if possible.
-    Return JSON: {"status": "complete"/"incomplete", "data": {...}, "reply": "..."}`;
+    const systemPrompt = `You are a smart bookkeeping assistant. Goal: Log expense (Category, Amount, Description).
+    RULES:
+    1. **Auto-Categorize** based on description (e.g. "fuel" -> "Transportation").
+    2. Return {"status": "complete", "data": {"category": "...", "amount": "...", "description": "..."}} when ready.
+    3. Otherwise {"status": "incomplete", "reply": "Question..."}.
+    Return JSON.`;
 
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     let response = await callDeepSeek(messages, 0.5);
@@ -262,16 +299,19 @@ export async function gatherExpenseDetails(conversationHistory) {
 // [UPDATED] Prompt now asks for 'reorderLevel'
 export async function gatherProductDetails(conversationHistory, existingProduct = null) {
     const existingDataInfo = existingProduct 
-        ? `Existing: Cost ${existingProduct.costPrice}, Sell ${existingProduct.sellingPrice}.`
+        ? `Existing product: Cost ${existingProduct.costPrice}, Sell ${existingProduct.sellingPrice}.`
         : 'New product.';
 
-    const systemPrompt = `Inventory Manager. Add/Update product.
+    const systemPrompt = `Inventory Manager. Goal: Add/Update product.
     FIELDS: productName, quantityAdded, costPrice, sellingPrice, reorderLevel.
     CONTEXT: ${existingDataInfo}
     RULES:
-    1. If user says "alert me at 10", set "reorderLevel": 10.
-    2. Default reorderLevel is 5 if not specified.
-    Return JSON: {"status": "complete"/"incomplete", "data": {...}, "reply": "..."}`;
+    1. If user says "same price", use existing data.
+    2. If user says "alert me at 10" or "warn when low", set "reorderLevel".
+    3. Default reorderLevel is 5 if not specified.
+    4. Return {"status": "complete", "data": {...}} when ready.
+    5. Otherwise {"status": "incomplete", "reply": "..."}.
+    Return JSON.`;
 
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     let response = await callDeepSeek(messages, 0.5);
@@ -288,8 +328,9 @@ export async function gatherProductDetails(conversationHistory, existingProduct 
 }
 
 export async function gatherPaymentDetails(conversationHistory, userCurrency) {
-    const systemPrompt = `Log Customer Payment. Need: "customerName", "amount". Currency: ${userCurrency}.
-    Return JSON.`;
+    const systemPrompt = `Log Customer Payment. Need: "customerName", "amount".
+    Assume currency is ${userCurrency}.
+    Return JSON: {"status": "complete"/"incomplete", ...}`;
 
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     let response = await callDeepSeek(messages, 0.5);
@@ -301,8 +342,9 @@ export async function gatherPaymentDetails(conversationHistory, userCurrency) {
 }
 
 export async function gatherBankAccountDetails(conversationHistory, userCurrency) {
-    const systemPrompt = `Add Bank Account. Need: "bankName", "openingBalance". Currency: ${userCurrency}.
-    Return JSON.`;
+    const systemPrompt = `Add Bank Account. Need: "bankName", "openingBalance".
+    Assume currency is ${userCurrency}.
+    Return JSON: {"status": "complete"/"incomplete", ...}`;
 
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     let response = await callDeepSeek(messages, 0.5);

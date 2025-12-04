@@ -7,9 +7,6 @@ import { INTENTS } from '../utils/constants.js';
 const DEEPSEEK_API_URL = 'https://api.deepseek.com/chat/completions';
 const openai = new OpenAI({ apiKey: config.openai.apiKey });
 
-/**
- * Downloads media (audio/image) from WhatsApp servers.
- */
 async function downloadWhatsAppMedia(mediaId) {
     try {
         const urlRes = await axios.get(`https://graph.facebook.com/v20.0/${mediaId}`, {
@@ -27,8 +24,6 @@ async function downloadWhatsAppMedia(mediaId) {
         throw new Error('Failed to download media file.');
     }
 }
-
-// --- VOICE & VISION ---
 
 export async function transcribeAudio(mediaId) {
     try {
@@ -71,8 +66,6 @@ export async function analyzeImage(mediaId, caption = "") {
         return null;
     }
 }
-
-// --- TEXT PARSING HELPERS ---
 
 const parsePrice = (priceInput) => {
     if (typeof priceInput === 'number') return priceInput;
@@ -134,7 +127,6 @@ async function callDeepSeek(messages, temperature = 0.1, enforceJson = true) {
 
 // --- CORE INTENT & ENTITY EXTRACTION ---
 
-// [NEW] Bulk Product Parser
 export async function parseBulkProductList(text) {
     const systemPrompt = `You are a data extraction assistant.
     TASK: Convert the user's product list text into a JSON array.
@@ -267,14 +259,19 @@ export async function gatherExpenseDetails(conversationHistory) {
     return { ...response, memory: [...conversationHistory, { role: 'assistant', content: JSON.stringify(response) }] };
 }
 
+// [UPDATED] Prompt now asks for 'reorderLevel'
 export async function gatherProductDetails(conversationHistory, existingProduct = null) {
     const existingDataInfo = existingProduct 
         ? `Existing: Cost ${existingProduct.costPrice}, Sell ${existingProduct.sellingPrice}.`
         : 'New product.';
 
-    const systemPrompt = `Inventory Manager. Add/Update product (productName, quantityAdded, costPrice, sellingPrice).
+    const systemPrompt = `Inventory Manager. Add/Update product.
+    FIELDS: productName, quantityAdded, costPrice, sellingPrice, reorderLevel.
     CONTEXT: ${existingDataInfo}
-    Return JSON: {"status": "complete"/"incomplete", ...}`;
+    RULES:
+    1. If user says "alert me at 10", set "reorderLevel": 10.
+    2. Default reorderLevel is 5 if not specified.
+    Return JSON: {"status": "complete"/"incomplete", "data": {...}, "reply": "..."}`;
 
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     let response = await callDeepSeek(messages, 0.5);
@@ -283,6 +280,9 @@ export async function gatherProductDetails(conversationHistory, existingProduct 
          response.data.costPrice = parsePrice(response.data.costPrice);
          response.data.sellingPrice = parsePrice(response.data.sellingPrice);
          response.data.quantityAdded = parseInt(response.data.quantityAdded, 10);
+         if (response.data.reorderLevel) {
+             response.data.reorderLevel = parseInt(response.data.reorderLevel, 10);
+         }
     }
     return { ...response, memory: [...conversationHistory, { role: 'assistant', content: JSON.stringify(response) }] };
 }

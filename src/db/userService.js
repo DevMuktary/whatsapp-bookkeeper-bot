@@ -1,6 +1,7 @@
 import { getDB } from './connection.js';
 import logger from '../utils/logger.js';
 import { USER_STATES } from '../utils/constants.js';
+import { ObjectId } from 'mongodb'; // [NEW] Needed for ID lookup
 
 const usersCollection = () => getDB().collection('users');
 
@@ -16,11 +17,9 @@ export async function findOrCreateUser(whatsappId) {
         email: null,
         isEmailVerified: false,
         currency: null,
-        // [NEW] Team Mode Fields
-        role: 'OWNER',          // 'OWNER' or 'STAFF'
-        linkedAccountId: null,  // If STAFF, this links to Owner's _id
-        joinCode: null,         // Code for others to join
-        
+        role: 'OWNER',
+        linkedAccountId: null,
+        joinCode: null,
         state: USER_STATES.NEW_USER, 
         stateContext: {},
         otp: null,
@@ -36,6 +35,17 @@ export async function findOrCreateUser(whatsappId) {
     logger.error(`Error in findOrCreateUser for ${whatsappId}:`, error);
     throw new Error('Could not find or create user.');
   }
+}
+
+// [NEW] Find User by DB ID (Used by Queue Worker)
+export async function findUserById(userId) {
+    try {
+        const id = typeof userId === 'string' ? new ObjectId(userId) : userId;
+        return await usersCollection().findOne({ _id: id });
+    } catch (error) {
+        logger.error(`Error finding user by ID ${userId}:`, error);
+        return null;
+    }
 }
 
 export async function updateUser(whatsappId, updateData) {
@@ -65,22 +75,17 @@ export async function getAllUsers() {
     }
 }
 
-// [NEW] TEAM MODE FUNCTIONS
-
 export async function createJoinCode(userId) {
-    // Generate a random 6-character code
     const code = Math.random().toString(36).substring(2, 8).toUpperCase();
     await usersCollection().updateOne({ _id: userId }, { $set: { joinCode: code } });
     return code;
 }
 
 export async function findOwnerByJoinCode(code) {
-    // Case insensitive search
     return await usersCollection().findOne({ joinCode: code, role: 'OWNER' });
 }
 
 export async function linkStaffToOwner(staffWhatsappId, ownerId) {
-    // Reset staff account to defaults but link it to owner
     await usersCollection().updateOne(
         { whatsappId: staffWhatsappId },
         { 
@@ -88,7 +93,7 @@ export async function linkStaffToOwner(staffWhatsappId, ownerId) {
                 role: 'STAFF', 
                 linkedAccountId: ownerId,
                 state: USER_STATES.IDLE,
-                currency: null // Will inherit from owner
+                currency: null 
             } 
         }
     );

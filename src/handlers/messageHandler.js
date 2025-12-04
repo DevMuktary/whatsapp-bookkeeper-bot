@@ -12,7 +12,7 @@ import { sendTextMessage, sendInteractiveButtons, sendMainMenu, sendReportMenu, 
 import { USER_STATES, INTENTS } from '../utils/constants.js';
 import { getDateRange } from '../utils/dateUtils.js';
 
-// [UPDATED] Import Queue Service instead of direct PDF generation
+// Import Queue Service
 import { queueReportGeneration } from '../services/QueueService.js';
 
 // Managers
@@ -23,6 +23,15 @@ import { executeTask } from './taskHandler.js';
 import logger from '../utils/logger.js';
 
 const CANCEL_KEYWORDS = ['cancel', 'stop', 'exit', 'abort', 'quit'];
+const MAX_MEMORY_DEPTH = 12; // Keep last 12 messages to save costs & prevent crashes
+
+// Helper to keep memory size in check
+const limitMemory = (memory) => {
+    if (memory.length > MAX_MEMORY_DEPTH) {
+        return memory.slice(-MAX_MEMORY_DEPTH);
+    }
+    return memory;
+};
 
 // Price Helper
 const parsePrice = (priceInput) => {
@@ -49,7 +58,7 @@ export async function handleMessage(message) {
     if (message.type === 'text') userInputText = message.text.body;
     else if (message.type === 'audio') userInputText = await transcribeAudio(message.audio.id) || "";
     else if (message.type === 'image') userInputText = await analyzeImage(message.image.id, message.image.caption) || "";
-    else return; // Ignore other types
+    else return; 
 
     if (!userInputText) {
         await sendTextMessage(whatsappId, "I couldn't understand that content. Please try again.");
@@ -75,7 +84,7 @@ export async function handleMessage(message) {
         }
     }
 
-    // --- 4. STATE HANDLING & SMART INTERRUPT ---
+    // --- 4. STATE HANDLING ---
     switch (user.state) {
       case USER_STATES.IDLE: 
           await handleIdleState(user, userInputText); 
@@ -158,11 +167,9 @@ async function handleIdleState(user, text) {
 
     } else if (intent === INTENTS.GENERATE_REPORT) {
         if (context.reportType) {
-            // [FIXED] Use Queue Service for scalability
             await sendTextMessage(user.whatsappId, "I've added your report to the queue. You'll receive it shortly! ⏳");
             const { startDate, endDate } = getDateRange(context.dateRange || 'this_month');
             
-            // Pass the calculated dates to the queue
             await queueReportGeneration(
                 user._id, 
                 user.currency, 
@@ -187,13 +194,20 @@ async function handleIdleState(user, text) {
 // --- TRANSACTION HANDLERS ---
 
 async function handleLoggingSale(user, text) {
-    const { memory, existingProduct, saleData } = user.stateContext;
-    if (memory[memory.length - 1].content !== text) memory.push({ role: 'user', content: text });
+    let { memory, existingProduct, saleData } = user.stateContext;
+    // Don't duplicate if it was just initialized
+    if (memory.length === 0 || memory[memory.length - 1].content !== text) {
+        memory.push({ role: 'user', content: text });
+    }
+    
+    // [OPTIMIZATION] Limit memory size
+    memory = limitMemory(memory);
 
     const aiResponse = await gatherSaleDetails(memory, existingProduct, saleData?.isService);
 
     if (aiResponse.status === 'incomplete') {
-        await updateUserState(user.whatsappId, USER_STATES.LOGGING_SALE, { ...user.stateContext, memory: aiResponse.memory });
+        // AI response is also added to memory inside aiService, but we must update the DB state
+        await updateUserState(user.whatsappId, USER_STATES.LOGGING_SALE, { ...user.stateContext, memory: limitMemory(aiResponse.memory) });
         await sendTextMessage(user.whatsappId, aiResponse.reply);
     } else {
         try {
@@ -219,13 +233,16 @@ async function handleLoggingSale(user, text) {
 }
 
 async function handleLoggingExpense(user, text) {
-    const { memory } = user.stateContext;
-    if (memory[memory.length - 1].content !== text) memory.push({ role: 'user', content: text });
+    let { memory } = user.stateContext;
+    if (memory.length === 0 || memory[memory.length - 1].content !== text) {
+        memory.push({ role: 'user', content: text });
+    }
+    memory = limitMemory(memory);
 
     const aiResponse = await gatherExpenseDetails(memory);
 
     if (aiResponse.status === 'incomplete') {
-        await updateUserState(user.whatsappId, USER_STATES.LOGGING_EXPENSE, { memory: aiResponse.memory });
+        await updateUserState(user.whatsappId, USER_STATES.LOGGING_EXPENSE, { memory: limitMemory(aiResponse.memory) });
         await sendTextMessage(user.whatsappId, aiResponse.reply);
     } else {
         try {
@@ -248,13 +265,16 @@ async function handleLoggingExpense(user, text) {
 }
 
 async function handleAddingProduct(user, text) {
-    const { memory, existingProduct } = user.stateContext;
-    if (memory[memory.length - 1].content !== text) memory.push({ role: 'user', content: text });
+    let { memory, existingProduct } = user.stateContext;
+    if (memory.length === 0 || memory[memory.length - 1].content !== text) {
+        memory.push({ role: 'user', content: text });
+    }
+    memory = limitMemory(memory);
 
     const aiResponse = await gatherProductDetails(memory, existingProduct);
 
     if (aiResponse.status === 'incomplete') {
-        await updateUserState(user.whatsappId, USER_STATES.ADDING_PRODUCT, { memory: aiResponse.memory, existingProduct });
+        await updateUserState(user.whatsappId, USER_STATES.ADDING_PRODUCT, { memory: limitMemory(aiResponse.memory), existingProduct });
         await sendTextMessage(user.whatsappId, aiResponse.reply);
     } else {
         try {
@@ -280,13 +300,16 @@ async function handleAddingProduct(user, text) {
 }
 
 async function handleLoggingCustomerPayment(user, text) {
-    const { memory } = user.stateContext;
-    if (memory[memory.length - 1].content !== text) memory.push({ role: 'user', content: text });
+    let { memory } = user.stateContext;
+    if (memory.length === 0 || memory[memory.length - 1].content !== text) {
+        memory.push({ role: 'user', content: text });
+    }
+    memory = limitMemory(memory);
 
     const aiResponse = await gatherPaymentDetails(memory, user.currency);
 
     if (aiResponse.status === 'incomplete') {
-        await updateUserState(user.whatsappId, USER_STATES.LOGGING_CUSTOMER_PAYMENT, { memory: aiResponse.memory });
+        await updateUserState(user.whatsappId, USER_STATES.LOGGING_CUSTOMER_PAYMENT, { memory: limitMemory(aiResponse.memory) });
         await sendTextMessage(user.whatsappId, aiResponse.reply);
     } else {
         try {
@@ -309,13 +332,16 @@ async function handleLoggingCustomerPayment(user, text) {
 }
 
 async function handleAddingBankAccount(user, text) {
-    const { memory } = user.stateContext;
-    if (memory[memory.length - 1].content !== text) memory.push({ role: 'user', content: text });
+    let { memory } = user.stateContext;
+    if (memory.length === 0 || memory[memory.length - 1].content !== text) {
+        memory.push({ role: 'user', content: text });
+    }
+    memory = limitMemory(memory);
 
     const aiResponse = await gatherBankAccountDetails(memory, user.currency);
 
     if (aiResponse.status === 'incomplete') {
-        await updateUserState(user.whatsappId, USER_STATES.ADDING_BANK_ACCOUNT, { memory: aiResponse.memory });
+        await updateUserState(user.whatsappId, USER_STATES.ADDING_BANK_ACCOUNT, { memory: limitMemory(aiResponse.memory) });
         await sendTextMessage(user.whatsappId, aiResponse.reply);
     } else {
         const bankData = aiResponse.data;
@@ -337,7 +363,6 @@ async function handleEditValue(user, text) {
     await executeTask(INTENTS.RECONCILE_TRANSACTION, user, { transactionId: transaction._id, action: 'edit', changes });
 }
 
-// ... handleOnboardingFlow (Standard Logic) ...
 async function handleOnboardingFlow(user, text) {
     if (user.state === USER_STATES.NEW_USER) {
         await sendTextMessage(user.whatsappId, "Welcome to Fynax Bookkeeper! 📊\nLet's get you set up.\n\nWhat is your **Business Name** and **Email Address**?");

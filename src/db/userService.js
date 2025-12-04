@@ -22,7 +22,7 @@ export async function findOrCreateUser(whatsappId) {
         email: null,
         isEmailVerified: false,
         currency: null,
-        state: USER_STATES.NEW_USER, // <-- IMPORTANT CHANGE HERE
+        state: USER_STATES.NEW_USER, 
         stateContext: {},
         otp: null,
         otpExpires: null,
@@ -68,4 +68,15 @@ export async function updateUser(whatsappId, updateData) {
  */
 export async function updateUserState(whatsappId, state, context = {}) {
     return updateUser(whatsappId, { state, stateContext: context });
+}
+
+// [NEW] Helper for Scheduler
+export async function getAllUsers() {
+    try {
+        // Only fetch users who have at least set a currency (active users)
+        return await usersCollection().find({ currency: { $ne: null } }).toArray();
+    } catch (error) {
+        logger.error('Error fetching all users:', error);
+        return [];
+    }
 }

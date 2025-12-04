@@ -1,6 +1,6 @@
 {
   "name": "fynax-bookkeeper",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "A WhatsApp bookkeeping assistant.",
   "main": "index.js",
   "type": "module",
@@ -8,6 +8,8 @@
     "start": "node index.js",
     "dev": "node --watch index.js"
   },
+  "author": "Fynax",
+  "license": "ISC",
   "dependencies": {
     "@getbrevo/brevo": "^2.2.0",
     "axios": "^1.7.2",
@@ -20,6 +22,7 @@
     "jsonwebtoken": "^9.0.2",
     "mime-types": "^2.1.35",
     "mongodb": "^6.6.2",
+    "node-cron": "^3.0.3",
     "openai": "^4.47.1",
     "pdfkit": "^0.15.0",
     "puppeteer": "^22.10.0",

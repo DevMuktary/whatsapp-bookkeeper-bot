@@ -10,10 +10,18 @@ export async function findProductByName(userId, productName) {
     return await productsCollection().findOne(query);
 }
 
-export async function upsertProduct(userId, productName, quantityAdded, costPrice, sellingPrice) {
+// [UPDATED] Added reorderLevel parameter (Default 5)
+export async function upsertProduct(userId, productName, quantityAdded, costPrice, sellingPrice, reorderLevel = 5) {
     const filter = { userId, productName: { $regex: new RegExp(`^${productName}$`, 'i') } };
     const update = {
-        $set: { userId, productName, costPrice, sellingPrice, updatedAt: new Date() },
+        $set: { 
+            userId, 
+            productName, 
+            costPrice, 
+            sellingPrice, 
+            reorderLevel, // Saved to DB
+            updatedAt: new Date() 
+        },
         $inc: { quantity: quantityAdded },
         $setOnInsert: { createdAt: new Date() }
     };
@@ -34,7 +42,7 @@ export async function upsertProduct(userId, productName, quantityAdded, costPric
 export async function updateStock(productId, quantityChange, reason, linkedTransactionId) {
     const filter = { _id: productId };
     
-    // [NEW] Safety Check: If reducing stock, ensure we have enough.
+    // Safety Check: If reducing stock, ensure we have enough.
     if (quantityChange < 0) {
         filter.quantity = { $gte: Math.abs(quantityChange) };
     }
@@ -49,7 +57,6 @@ export async function updateStock(productId, quantityChange, reason, linkedTrans
     );
 
     if (!updatedProduct) {
-        // If update failed, it means product missing OR insufficient stock
         const product = await productsCollection().findOne({ _id: productId });
         if (product && product.quantity < Math.abs(quantityChange)) {
             throw new Error(`Insufficient stock for "${product.productName}". Available: ${product.quantity}`);

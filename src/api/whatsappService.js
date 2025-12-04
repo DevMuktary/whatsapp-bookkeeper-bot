@@ -65,6 +65,12 @@ export async function uploadMedia(buffer, mimeType) {
 }
 
 export async function sendTextMessage(to, text) {
+  // Guard clause to prevent the (#100) error if text is empty/null
+  if (!text) {
+      logger.warn('Attempted to send empty text message. Skipping.');
+      return;
+  }
+
   const data = {
     messaging_product: 'whatsapp',
     to,
@@ -132,6 +138,12 @@ export async function sendInteractiveList(to, headerText, bodyText, buttonText, 
 
 // Function to send the Onboarding Flow
 export async function sendOnboardingFlow(to) {
+    if (!config.whatsapp.onboardingFlowId) {
+        logger.error("Onboarding Flow ID is missing in config.");
+        await sendTextMessage(to, "Setup is currently unavailable. Please try again later.");
+        return;
+    }
+
     const data = {
         messaging_product: "whatsapp",
         to: to,
@@ -154,7 +166,7 @@ export async function sendOnboardingFlow(to) {
                     mode: "published", 
                     flow_message_version: "3",
                     flow_token: "onboarding_token",
-                    flow_id: config.whatsapp.flowId,
+                    flow_id: config.whatsapp.onboardingFlowId, // [UPDATED]
                     flow_cta: "🚀 Setup Account",
                     flow_action: "navigate",
                     flow_action_payload: {
@@ -167,8 +179,14 @@ export async function sendOnboardingFlow(to) {
     await sendMessage(data);
 }
 
-// [NEW] Function to send the ADD BANK Flow
+// Function to send the ADD BANK Flow
 export async function sendAddBankFlow(to) {
+    if (!config.whatsapp.bankFlowId) {
+        logger.error("Bank Flow ID is missing in config.");
+        await sendTextMessage(to, "Bank setup is currently unavailable.");
+        return;
+    }
+
     const data = {
         messaging_product: "whatsapp",
         to: to,
@@ -191,11 +209,11 @@ export async function sendAddBankFlow(to) {
                     mode: "published", 
                     flow_message_version: "3",
                     flow_token: "add_bank_token",
-                    flow_id: config.whatsapp.flowId, // Same ID if screens are merged, or change if different
+                    flow_id: config.whatsapp.bankFlowId, // [UPDATED] Uses the dedicated Bank Flow ID
                     flow_cta: "➕ Add Account",
                     flow_action: "navigate",
                     flow_action_payload: {
-                        screen: "ADD_BANK_SCREEN" // Matches your new JSON
+                        screen: "ADD_BANK_SCREEN"
                     }
                 }
             }

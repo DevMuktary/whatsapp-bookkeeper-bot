@@ -10,7 +10,7 @@ import {
 } from './pdfService.js';
 import { sendDocument, sendTextMessage, uploadMedia } from '../api/whatsappService.js';
 import { getPnLData, getReportTransactions } from './ReportManager.js';
-import { findOrCreateUser } from '../db/userService.js'; 
+import { findUserById } from '../db/userService.js'; // [UPDATED] Import this instead of findOrCreateUser
 import { getAllProducts } from '../db/productService.js';
 
 // 1. Setup Redis Connection
@@ -24,18 +24,26 @@ connection.on('connect', () => {
     logger.info('Successfully connected to Redis Queue.');
 });
 
-// 2. Create the Queue (Producer)
+// 2. Create the Queue
 const reportQueue = new Queue('report-generation', { connection });
 
-// 3. Create the Worker (Consumer)
+// 3. Create the Worker
 const worker = new Worker('report-generation', async (job) => {
     const { userId, userCurrency, reportType, dateRange, whatsappId } = job.data;
-    logger.info(`Processing report job ${job.id} for ${whatsappId}`);
+    logger.info(`Processing report job ${job.id} for ${whatsappId} (Owner ID: ${userId})`);
 
     try {
-        // We need to fetch the full user object to get the Business Name for the PDF Header
-        const user = await findOrCreateUser(whatsappId);
+        // [FIX] Use the Owner's ID passed in the job to fetch the correct business details
+        const user = await findUserById(userId);
         
+        if (!user) {
+            throw new Error("User record not found for report generation.");
+        }
+        
+        // If staff, user object will be the Owner. 
+        // We ensure the currency matches the request just in case.
+        if (!user.currency) user.currency = userCurrency;
+
         await generateAndSend(user, reportType, dateRange, whatsappId);
         logger.info(`Job ${job.id} completed successfully.`);
     } catch (error) {
@@ -48,17 +56,14 @@ const worker = new Worker('report-generation', async (job) => {
     concurrency: 5 
 });
 
-/**
- * Adds a report generation task to the Redis queue.
- */
 export async function queueReportGeneration(userId, userCurrency, reportType, dateRange, whatsappId) {
     try {
         await reportQueue.add('generate-pdf', {
-            userId,
+            userId,        // This is the OWNER'S ID (Data Source)
             userCurrency,
             reportType,
             dateRange,
-            whatsappId
+            whatsappId     // This is the STAFF'S Phone (Recipient)
         });
         logger.info(`Report queued for ${whatsappId}`);
     } catch (error) {
@@ -67,12 +72,10 @@ export async function queueReportGeneration(userId, userCurrency, reportType, da
     }
 }
 
-// Internal function to route to the correct PDF generator
 async function generateAndSend(user, reportType, dateRange, whatsappId) {
     let pdfBuffer;
     let filename;
     
-    // Convert string dates back to Date objects for MongoDB
     const startDate = new Date(dateRange.startDate);
     const endDate = new Date(dateRange.endDate);
     const periodString = `${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`;
@@ -80,7 +83,6 @@ async function generateAndSend(user, reportType, dateRange, whatsappId) {
     if (reportType === 'PNL' || reportType === 'PROFIT') {
         const pnlData = await getPnLData(user._id, startDate, endDate);
         filename = 'PnL_Report.pdf';
-        // Pass user object so PDF can extract businessName
         pdfBuffer = await generatePnLReport(user, pnlData, periodString);
 
     } else if (reportType === 'SALES') {

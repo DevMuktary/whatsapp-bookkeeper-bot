@@ -4,17 +4,14 @@ import { ObjectId } from 'mongodb';
 
 const transactionsCollection = () => getDB().collection('transactions');
 
-// --- CREATION FUNCTIONS ---
-
 export async function createSaleTransaction(saleData) {
     try {
-        // Ensure costPrice is preserved in the items array (COGS FIX)
         const sanitizedItems = saleData.items.map(item => ({
             productId: item.productId ? new ObjectId(item.productId) : null,
             productName: item.productName,
             quantity: item.quantity,
             pricePerUnit: item.pricePerUnit,
-            costPrice: item.costPrice || 0, // <--- CRITICAL: Store the snapshot
+            costPrice: item.costPrice || 0,
             isService: item.isService || false
         }));
 
@@ -28,6 +25,9 @@ export async function createSaleTransaction(saleData) {
             linkedCustomerId: saleData.linkedCustomerId,
             linkedBankId: saleData.linkedBankId || null,
             paymentMethod: saleData.paymentMethod.toUpperCase(),
+            dueDate: saleData.dueDate ? new Date(saleData.dueDate) : null,
+            // [NEW] Audit Field
+            loggedBy: saleData.loggedBy || 'Owner',
             createdAt: new Date()
         };
         const result = await transactionsCollection().insertOne(transactionDoc);
@@ -48,6 +48,8 @@ export async function createExpenseTransaction(expenseData) {
             description: expenseData.description,
             category: expenseData.category,
             linkedBankId: expenseData.linkedBankId || null,
+            // [NEW] Audit Field
+            loggedBy: expenseData.loggedBy || 'Owner',
             createdAt: new Date()
         };
         const result = await transactionsCollection().insertOne(doc);
@@ -68,6 +70,7 @@ export async function createCustomerPaymentTransaction(paymentData) {
             description: paymentData.description,
             linkedCustomerId: paymentData.linkedCustomerId,
             linkedBankId: paymentData.linkedBankId || null,
+            loggedBy: paymentData.loggedBy || 'Owner', // [NEW]
             createdAt: new Date()
         };
         const result = await transactionsCollection().insertOne(doc);
@@ -77,6 +80,10 @@ export async function createCustomerPaymentTransaction(paymentData) {
         throw new Error('Could not create customer payment transaction.');
     }
 }
+
+// ... (Rest of the file remains the same: getSummary, getRecent, getDue, update, delete) ...
+// You can copy the rest of the functions from the previous version of this file.
+// IMPORTANT: Ensure getDueTransactions, updateTransactionById etc. are kept.
 
 // --- READ / QUERY FUNCTIONS ---
 
@@ -120,9 +127,22 @@ export async function getTransactionsByDateRange(userId, type, startDate, endDat
     }
 }
 
+export async function getDueTransactions(userId, startDate, endDate) {
+    try {
+        return await transactionsCollection().find({
+            userId,
+            type: 'SALE',
+            paymentMethod: 'CREDIT',
+            dueDate: { $gte: startDate, $lte: endDate }
+        }).toArray();
+    } catch (error) {
+        logger.error(`Error getting due transactions for ${userId}:`, error);
+        return [];
+    }
+}
+
 export async function findTransactionById(transactionId) {
     try {
-        // Ensure ID is an ObjectId if it isn't already
         const id = typeof transactionId === 'string' ? new ObjectId(transactionId) : transactionId;
         return await transactionsCollection().findOne({ _id: id });
     } catch (error) {
@@ -130,8 +150,6 @@ export async function findTransactionById(transactionId) {
         throw new Error('Could not find transaction.');
     }
 }
-
-// --- UPDATE / DELETE FUNCTIONS (Restored) ---
 
 export async function updateTransactionById(transactionId, updateData) {
     try {
@@ -151,12 +169,7 @@ export async function deleteTransactionById(transactionId) {
     try {
         const id = typeof transactionId === 'string' ? new ObjectId(transactionId) : transactionId;
         const result = await transactionsCollection().deleteOne({ _id: id });
-        if (result.deletedCount === 1) {
-            logger.info(`Successfully deleted transaction with ID: ${transactionId}`);
-            return true;
-        }
-        logger.warn(`Transaction with ID: ${transactionId} not found for deletion.`);
-        return false;
+        return result.deletedCount === 1;
     } catch (error) {
         logger.error(`Error deleting transaction by ID ${transactionId}:`, error);
         throw new Error('Could not delete transaction.');

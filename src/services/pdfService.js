@@ -1,4 +1,5 @@
 import PDFDocument from 'pdfkit';
+import axios from 'axios'; // [NEW] Required for fetching charts
 import logger from '../utils/logger.js';
 
 // --- Constants & Styles ---
@@ -35,6 +36,25 @@ const formatDate = (dateInput) => {
         year: 'numeric'
     }).format(date);
 };
+
+// [NEW] Fetch Chart Image from QuickChart.io
+async function fetchChartImage(chartConfig) {
+    try {
+        const response = await axios.post('https://quickchart.io/chart', {
+            backgroundColor: 'white',
+            width: 500,
+            height: 300,
+            format: 'png',
+            chart: chartConfig
+        }, {
+            responseType: 'arraybuffer'
+        });
+        return response.data;
+    } catch (error) {
+        logger.error('Error fetching chart:', error.message);
+        return null; // Fail silently so the report still generates without the chart
+    }
+}
 
 const drawHeader = (doc, user, title, period) => {
     // Business Name
@@ -103,8 +123,10 @@ const drawTableRow = (doc, y, columns, isHeader = false, isStriped = false, rowH
     doc.fillColor(COLORS.text);
 };
 
+// --- REPORT GENERATORS ---
+
 export function generateSalesReport(user, transactions, periodTitle) {
-    return new Promise((resolve, reject) => {
+    return new Promise(async (resolve, reject) => {
         try {
             const doc = new PDFDocument({ margin: 50, size: 'A4', bufferPages: true });
             const buffers = [];
@@ -113,10 +135,49 @@ export function generateSalesReport(user, transactions, periodTitle) {
 
             let currentY = drawHeader(doc, user, 'Sales Report', periodTitle);
 
+            // [NEW] SALES TREND CHART
+            // 1. Aggregate Sales by Day
+            const salesByDate = {};
+            transactions.forEach(tx => {
+                const dateKey = new Date(tx.date).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' }); // DD/MM
+                salesByDate[dateKey] = (salesByDate[dateKey] || 0) + tx.amount;
+            });
+            const sortedDates = Object.keys(salesByDate).sort((a,b) => {
+                 const [d1, m1] = a.split('/');
+                 const [d2, m2] = b.split('/');
+                 return new Date(2024, m1-1, d1) - new Date(2024, m2-1, d2);
+            });
+
+            if (sortedDates.length > 1) {
+                const chartBuffer = await fetchChartImage({
+                    type: 'line',
+                    data: {
+                        labels: sortedDates,
+                        datasets: [{
+                            label: 'Daily Sales Trend',
+                            data: sortedDates.map(d => salesByDate[d]),
+                            fill: false,
+                            borderColor: '#3498db',
+                            tension: 0.3
+                        }]
+                    }
+                });
+
+                if (chartBuffer) {
+                    doc.image(chartBuffer, 50, currentY, { width: 500, height: 250, align: 'center' });
+                    currentY += 270; // Adjust Y position after chart
+                }
+            }
+
+            // [END CHART]
+
             const colDate = { x: 50, width: 65, align: 'left' };
             const colCust = { x: 120, width: 90, align: 'left' };
             const colDesc = { x: 220, width: 190, align: 'left' };
             const colAmt = { x: 420, width: 100, align: 'right' };
+
+            // Check if we need a new page before starting table
+            if (currentY + 50 > 750) { doc.addPage(); currentY = 50; }
 
             drawTableRow(doc, currentY, [
                 { text: 'DATE', ...colDate },
@@ -165,6 +226,7 @@ export function generateSalesReport(user, transactions, periodTitle) {
             });
 
             currentY += 10;
+            if (currentY > 750) { doc.addPage(); currentY = 50; }
             doc.moveTo(50, currentY).lineTo(550, currentY).strokeColor(COLORS.border).stroke();
             currentY += 10;
             
@@ -291,7 +353,7 @@ export function generateInventoryReport(user, products) {
 }
 
 export function generatePnLReport(user, pnlData, periodTitle) {
-    return new Promise((resolve, reject) => {
+    return new Promise(async (resolve, reject) => {
         try {
             const doc = new PDFDocument({ margin: 50, size: 'A4', bufferPages: true });
             const buffers = [];
@@ -339,7 +401,7 @@ export function generatePnLReport(user, pnlData, periodTitle) {
             y += 20;
             
             pnlData.topExpenses.forEach(exp => {
-                drawSubItem(exp._id, exp.total);
+                drawSubItem(exp.category || exp._id, exp.amount);
             });
             y += 10;
             
@@ -358,6 +420,34 @@ export function generatePnLReport(user, pnlData, periodTitle) {
             doc.fillColor(COLORS.primary).fontSize(16).font(FONTS.bold).text('Net Profit / (Loss)', 60, y);
             doc.fillColor(isLoss ? 'red' : 'green')
                .text(formatCurrency(pnlData.netProfit, user.currency), rightX, y, { align: 'right', width: widthAmt });
+
+            // [NEW] PNL PIE CHART (EXPENSES)
+            if (pnlData.topExpenses && pnlData.topExpenses.length > 0) {
+                if (y + 320 > 750) { doc.addPage(); y = 50; }
+                else { y += 50; } // Spacing
+
+                const chartBuffer = await fetchChartImage({
+                    type: 'doughnut',
+                    data: {
+                        labels: pnlData.topExpenses.map(e => e.category || e._id),
+                        datasets: [{
+                            data: pnlData.topExpenses.map(e => e.amount),
+                            backgroundColor: ['#e74c3c', '#3498db', '#f1c40f', '#2ecc71', '#9b59b6', '#34495e']
+                        }]
+                    },
+                    options: {
+                        plugins: {
+                            title: { display: true, text: 'Expense Breakdown' },
+                            legend: { position: 'right' }
+                        }
+                    }
+                });
+
+                if (chartBuffer) {
+                    doc.image(chartBuffer, 50, y, { width: 500, height: 280, align: 'center' });
+                }
+            }
+            // [END CHART]
 
             drawFooter(doc);
             doc.end();

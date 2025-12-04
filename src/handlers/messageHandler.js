@@ -11,17 +11,16 @@ import { sendOtp } from '../services/emailService.js';
 import { sendTextMessage, sendInteractiveButtons, sendMainMenu, sendReportMenu, setTypingIndicator, uploadMedia, sendDocument } from '../api/whatsappService.js';
 import { USER_STATES, INTENTS } from '../utils/constants.js';
 import { getDateRange } from '../utils/dateUtils.js';
-import { generateSalesReport, generateExpenseReport, generateInventoryReport, generatePnLReport } from '../services/pdfService.js';
-import { getTransactionsByDateRange } from '../db/transactionService.js';
-import { getAllProducts } from '../db/productService.js';
-import { getPnLData } from '../services/ReportManager.js';
-import logger from '../utils/logger.js';
+
+// [UPDATED] Import Queue Service instead of direct PDF generation
+import { queueReportGeneration } from '../services/QueueService.js';
 
 // Managers
 import * as TransactionManager from '../services/TransactionManager.js';
 import * as InventoryManager from '../services/InventoryManager.js';
 import { createBankAccount } from '../db/bankService.js';
 import { executeTask } from './taskHandler.js';
+import logger from '../utils/logger.js';
 
 const CANCEL_KEYWORDS = ['cancel', 'stop', 'exit', 'abort', 'quit'];
 
@@ -36,28 +35,6 @@ const parsePrice = (priceInput) => {
     else if (cleaned.endsWith('m')) { multiplier = 1000000; numericPart = cleaned.slice(0, -1); }
     const value = parseFloat(numericPart);
     return isNaN(value) ? NaN : value * multiplier;
-};
-
-// List Helper
-const parseProductList = (text) => {
-    const products = [];
-    const lines = text.split('\n');
-    const lineRegex = /^\s*\d+\.?\s+(\d+)\s+(.+?)\s*[-:]\s*cost\s*[-:]?\s*([^,]+),?\s*sell\s*[-:]?\s*(.+)/i;
-    for (const line of lines) {
-        const match = line.trim().match(lineRegex);
-        if (match) {
-            try {
-                const [, quantityAdded, productName, costPriceStr, sellingPriceStr] = match;
-                products.push({
-                    quantityAdded: parseInt(quantityAdded.trim(), 10),
-                    productName: productName.trim(),
-                    costPrice: parsePrice(costPriceStr.trim()),
-                    sellingPrice: parsePrice(sellingPriceStr.trim())
-                });
-            } catch (e) {}
-        }
-    }
-    return products;
 };
 
 export async function handleMessage(message) {
@@ -75,7 +52,6 @@ export async function handleMessage(message) {
     else return; // Ignore other types
 
     if (!userInputText) {
-        // Only reply if audio/image failed completely
         await sendTextMessage(whatsappId, "I couldn't understand that content. Please try again.");
         return;
     }
@@ -123,11 +99,9 @@ export async function handleMessage(message) {
           await handleEditValue(user, userInputText);
           break;
 
-      // Smart Interrupt: If user sends a command while in a menu, reset and handle it
       default:
         if (user.state.startsWith('AWAITING_')) {
             if (userInputText.length > 2) { 
-                // Assume it's a command, not a button click error
                 await updateUserState(whatsappId, USER_STATES.IDLE);
                 await handleIdleState(user, userInputText);
             } else {
@@ -184,8 +158,19 @@ async function handleIdleState(user, text) {
 
     } else if (intent === INTENTS.GENERATE_REPORT) {
         if (context.reportType) {
-            // [FIXED] Direct call to generation function, no queue
-            await generateAndSendReport(user, context.reportType.toUpperCase(), context.dateRange);
+            // [FIXED] Use Queue Service for scalability
+            await sendTextMessage(user.whatsappId, "I've added your report to the queue. You'll receive it shortly! ⏳");
+            const { startDate, endDate } = getDateRange(context.dateRange || 'this_month');
+            
+            // Pass the calculated dates to the queue
+            await queueReportGeneration(
+                user._id, 
+                user.currency, 
+                context.reportType.toUpperCase(), 
+                { startDate, endDate }, 
+                user.whatsappId
+            );
+            await sendMainMenu(user.whatsappId);
         } else {
             await updateUserState(user.whatsappId, USER_STATES.AWAITING_REPORT_TYPE_SELECTION);
             await sendReportMenu(user.whatsappId);
@@ -196,50 +181,6 @@ async function handleIdleState(user, text) {
 
     } else {
         await executeTask(intent, user, context);
-    }
-}
-
-// --- REPORT GENERATION (Direct & Reliable) ---
-async function generateAndSendReport(user, reportType, dateRange) {
-    await sendTextMessage(user.whatsappId, "Generating your report... 📄");
-    
-    const { startDate, endDate } = getDateRange(dateRange || 'this_month');
-    let pdfBuffer;
-    let filename;
-
-    try {
-        if (reportType === 'SALES') {
-            const txs = await getTransactionsByDateRange(user._id, 'SALE', startDate, endDate);
-            pdfBuffer = await generateSalesReport(user, txs, `${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`);
-            filename = 'Sales_Report.pdf';
-        } else if (reportType === 'EXPENSES') {
-            const txs = await getTransactionsByDateRange(user._id, 'EXPENSE', startDate, endDate);
-            pdfBuffer = await generateExpenseReport(user, txs, `${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`);
-            filename = 'Expense_Report.pdf';
-        } else if (reportType === 'INVENTORY') {
-            const prods = await getAllProducts(user._id);
-            pdfBuffer = await generateInventoryReport(user, prods);
-            filename = 'Inventory_Report.pdf';
-        } else if (reportType === 'PNL' || reportType === 'PROFIT') {
-            const pnlData = await getPnLData(user._id, startDate, endDate);
-            pdfBuffer = await generatePnLReport(user, pnlData, `${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`);
-            filename = 'PnL_Report.pdf';
-        }
-
-        if (pdfBuffer) {
-            const mediaId = await uploadMedia(pdfBuffer, 'application/pdf');
-            if (mediaId) {
-                await sendDocument(user.whatsappId, mediaId, filename, "Here is your report.");
-                await sendMainMenu(user.whatsappId);
-            } else {
-                await sendTextMessage(user.whatsappId, "Failed to upload report.");
-            }
-        } else {
-            await sendTextMessage(user.whatsappId, "No data found for this report.");
-        }
-    } catch (e) {
-        logger.error("Report Gen Error:", e);
-        await sendTextMessage(user.whatsappId, "Error generating report.");
     }
 }
 

@@ -41,25 +41,12 @@ const parsePrice = (priceInput) => {
     return isNaN(value) ? NaN : value * multiplier;
 };
 
-// [NEW] Helper to switch context for Staff
 async function getEffectiveUser(user) {
     if (user.role === 'STAFF' && user.linkedAccountId) {
-        // Fetch Owner to get currency and correct DB ID
-        // We assume the linkedAccountId is valid.
-        // We create a "Hybrid" user object:
-        // - _id: Owner's ID (so data saves to owner)
-        // - currency: Owner's currency
-        // - role: STAFF (kept for permission checks)
-        // - staffName: The actual user's name/phone
-        
-        // Note: In a real app, you'd fetch the owner doc here to get their currency settings
-        // For simplicity, we assume staff inherits context or we fetch owner:
-        // const owner = await findUserById(user.linkedAccountId); (Implement if needed)
-        
         return {
             ...user,
-            _id: user.linkedAccountId, // CRITICAL: Swap ID
-            originalUserId: user._id,  // Keep track of real user
+            _id: user.linkedAccountId, 
+            originalUserId: user._id, 
             staffName: user.businessName || user.whatsappId,
             isStaff: true
         };
@@ -82,7 +69,7 @@ export async function handleMessage(message) {
     else if (message.type === 'document') {
         const mime = message.document.mime_type;
         const user = await findOrCreateUser(whatsappId);
-        const effectiveUser = await getEffectiveUser(user); // Use effective user for imports
+        const effectiveUser = await getEffectiveUser(user); 
         
         if (mime.includes('spreadsheet') || mime.includes('excel') || mime.includes('csv')) {
             await handleDocumentImport(effectiveUser, message.document);
@@ -100,24 +87,12 @@ export async function handleMessage(message) {
     }
 
     const rawUser = await findOrCreateUser(whatsappId);
-    // [NEW] Apply Context Switch
     const user = await getEffectiveUser(rawUser);
     
     const lowerCaseText = userInputText.trim().toLowerCase();
 
-    // --- TEAM MANAGEMENT COMMANDS ---
-    // Owner adds staff
-    if (lowerCaseText.startsWith('add staff') || lowerCaseText.startsWith('invite staff')) {
-        if (user.role === 'STAFF') {
-            await sendTextMessage(whatsappId, "⛔ Only the Business Owner can invite staff.");
-            return;
-        }
-        const code = await createJoinCode(user._id);
-        await sendTextMessage(whatsappId, `👥 **Team Invite**\n\nShare this code with your staff:\n\n**${code}**\n\nAsk them to send the message: *"Join ${code}"* to this bot.`);
-        return;
-    }
-
-    // Staff joins
+    // --- SYSTEM COMMANDS (JOIN) ---
+    // Staff joining is a precise code, so we use startsWith
     if (lowerCaseText.startsWith('join ')) {
         const code = lowerCaseText.split(' ')[1]?.toUpperCase();
         if (code) {
@@ -125,7 +100,6 @@ export async function handleMessage(message) {
             if (owner) {
                 await linkStaffToOwner(whatsappId, owner._id);
                 await sendTextMessage(whatsappId, `✅ Success! You have joined **${owner.businessName}**. You can now log sales and check stock for them.`);
-                // Notify Owner
                 await sendTextMessage(owner.whatsappId, `🔔 **New Staff:** ${user.businessName || whatsappId} just joined your team.`);
             } else {
                 await sendTextMessage(whatsappId, "❌ Invalid or expired invite code.");
@@ -210,26 +184,20 @@ export async function handleMessage(message) {
 export async function handleFlowResponse(message) {
     const whatsappId = message.from;
     const responseJson = JSON.parse(message.interactive.nfm_reply.response_json);
-    
     const { business_name, email, currency } = responseJson;
 
     try {
         await sendTextMessage(whatsappId, "Creating your account... 🔄");
-
         await updateUser(whatsappId, {
             businessName: business_name,
             email: email,
             currency: currency,
             isEmailVerified: false 
         });
-
         const otp = await sendOtp(email, business_name);
         await updateUser(whatsappId, { otp, otpExpires: new Date(Date.now() + 600000) });
-        
         await updateUserState(whatsappId, USER_STATES.ONBOARDING_AWAIT_OTP);
-        
         await sendTextMessage(whatsappId, `✅ Account created for **${business_name}**!\n\nI sent a verification code to ${email}. Please enter it below to finish.`);
-
     } catch (error) {
         logger.error("Flow Error:", error);
         await sendTextMessage(whatsappId, "Error setting up account. Please try again.");
@@ -252,22 +220,17 @@ async function handleDocumentImport(user, document) {
     await sendTextMessage(user.whatsappId, "Receiving your file... 📂");
     try {
         const { products, errors } = await parseExcelImport(document.id);
-        
         if (products.length === 0) {
             await sendTextMessage(user.whatsappId, "I couldn't find any valid products in that file. Check the columns: Name, Qty, Cost, Sell.");
             return;
         }
-
         await updateUserState(user.whatsappId, USER_STATES.AWAITING_BULK_PRODUCT_CONFIRMATION, { products });
-        
         const preview = products.slice(0, 5).map(p => `• ${p.quantityAdded}x ${p.productName}`).join('\n');
         const errorMsg = errors.length > 0 ? `\n⚠️ ${errors.length} rows skipped (missing info).` : "";
-        
         await sendInteractiveButtons(user.whatsappId, `I read ${products.length} products from the file!${errorMsg}\n\nTop 5:\n${preview}`, [
             { id: 'confirm_bulk_add', title: '✅ Import All' },
             { id: 'cancel', title: '❌ Cancel' }
         ]);
-
     } catch (e) {
         await sendTextMessage(user.whatsappId, `Error reading file: ${e.message}`);
     }
@@ -281,7 +244,6 @@ async function handleIdleState(user, text) {
     // [NEW] Permission Check for Staff
     if (user.isStaff) {
         const RESTRICTED_INTENTS = [INTENTS.RECONCILE_TRANSACTION, INTENTS.ADD_BANK_ACCOUNT];
-        // Staff can generate sales reports, but maybe not P&L. Let's block P&L specifically.
         if (RESTRICTED_INTENTS.includes(intent)) {
             await sendTextMessage(user.whatsappId, "⛔ Access Denied. Only the Business Owner can do that.");
             return;
@@ -290,6 +252,17 @@ async function handleIdleState(user, text) {
             await sendTextMessage(user.whatsappId, "⛔ Access Denied. Staff cannot view Profit & Loss.");
             return;
         }
+    }
+
+    // [NEW] Intelligent Team Management Handling
+    if (intent === 'MANAGE_TEAM') {
+        if (user.role === 'STAFF') {
+            await sendTextMessage(user.whatsappId, "⛔ Only the Business Owner can invite staff.");
+            return;
+        }
+        const code = await createJoinCode(user._id);
+        await sendTextMessage(user.whatsappId, `👥 **Team Invite**\n\nShare this code with your staff:\n\n**${code}**\n\nAsk them to send the message: *"Join ${code}"* to this bot.`);
+        return;
     }
 
     if (intent === INTENTS.GENERAL_CONVERSATION) {
@@ -370,7 +343,6 @@ async function handleLoggingSale(user, text) {
     if (memory.length === 0 || memory[memory.length - 1].content !== text) {
         memory.push({ role: 'user', content: text });
     }
-    
     memory = limitMemory(memory);
 
     const aiResponse = await gatherSaleDetails(memory, existingProduct, saleData?.isService);
@@ -381,8 +353,6 @@ async function handleLoggingSale(user, text) {
     } else {
         try {
             const finalData = { ...saleData, ...aiResponse.data };
-            
-            // [NEW] Pass Staff Name
             if (user.isStaff) finalData.loggedBy = user.staffName;
 
             const banks = await getAllBankAccounts(user._id);
@@ -395,7 +365,6 @@ async function handleLoggingSale(user, text) {
             }
             const txn = await TransactionManager.logSale(user, finalData);
             await sendTextMessage(user.whatsappId, `✅ Sale logged! Amount: ${user.currency} ${txn.amount.toLocaleString()}`);
-            
             await updateUserState(user.whatsappId, USER_STATES.AWAITING_INVOICE_CONFIRMATION, { transaction: txn });
             await sendInteractiveButtons(user.whatsappId, 'Generate Invoice?', [{ id: 'invoice_yes', title: 'Yes' }, { id: 'invoice_no', title: 'No' }]);
         } catch (e) {
@@ -420,7 +389,7 @@ async function handleLoggingExpense(user, text) {
     } else {
         try {
             const finalData = aiResponse.data;
-            if (user.isStaff) finalData.loggedBy = user.staffName; // [NEW]
+            if (user.isStaff) finalData.loggedBy = user.staffName;
 
             const banks = await getAllBankAccounts(user._id);
             if (banks.length > 0) {
@@ -489,7 +458,7 @@ async function handleLoggingCustomerPayment(user, text) {
     } else {
         try {
             const paymentData = aiResponse.data;
-            if (user.isStaff) paymentData.loggedBy = user.staffName; // [NEW]
+            if (user.isStaff) paymentData.loggedBy = user.staffName;
 
             const banks = await getAllBankAccounts(user._id);
             if (banks.length > 0) {

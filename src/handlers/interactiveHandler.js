@@ -8,10 +8,10 @@ import logger from '../utils/logger.js';
 import { handleMessage } from './messageHandler.js';
 import { ObjectId } from 'mongodb';
 
-// [NEW] Import Managers
+// Import Managers
 import * as TransactionManager from '../services/TransactionManager.js';
 import * as InventoryManager from '../services/InventoryManager.js';
-import { executeTask } from './taskHandler.js'; // Keep for Reconciliation/Edits
+import { executeTask } from './taskHandler.js'; 
 
 export async function handleInteractiveMessage(message) {
     const whatsappId = message.from;
@@ -37,7 +37,6 @@ export async function handleInteractiveMessage(message) {
 async function handleButtonReply(user, buttonId, originalMessage) {
     switch (user.state) {
         case USER_STATES.IDLE:
-            // Treat button click as text
             await handleMessage({
                 from: originalMessage.from,
                 id: originalMessage.id,
@@ -85,11 +84,23 @@ async function handleButtonReply(user, buttonId, originalMessage) {
 }
 
 async function handleListReply(user, listId, originalMessage) {
-    // List replies usually route back to IDLE logic or specific selection logic
+    // [FIX] Check for bank selection ID from List Message
+    if (listId.startsWith('select_bank:')) {
+        let intent;
+        if (user.state === USER_STATES.AWAITING_BANK_SELECTION_SALE) intent = INTENTS.LOG_SALE;
+        else if (user.state === USER_STATES.AWAITING_BANK_SELECTION_EXPENSE) intent = INTENTS.LOG_EXPENSE;
+        else if (user.state === USER_STATES.AWAITING_BANK_SELECTION_PURCHASE) intent = INTENTS.ADD_PRODUCT;
+        else if (user.state === USER_STATES.AWAITING_BANK_SELECTION_CUST_PAYMENT) intent = INTENTS.LOG_CUSTOMER_PAYMENT;
+
+        if (intent) {
+            await handleBankSelection(user, listId, intent);
+            return;
+        }
+    }
+
     if (user.state === USER_STATES.AWAITING_TRANSACTION_SELECTION) {
         await handleTransactionSelection(user, listId);
     } else {
-        // Treat as text command
         if (user.state === USER_STATES.AWAITING_REPORT_TYPE_SELECTION) {
              await updateUserState(user.whatsappId, USER_STATES.IDLE);
         }
@@ -118,16 +129,13 @@ async function handleBankSelection(user, buttonId, intent) {
 
     await sendTextMessage(user.whatsappId, "Great, noting that down... 📝");
 
-    // [FIX] Route to the correct Manager instead of executeTask
     try {
         if (intent === INTENTS.LOG_SALE) {
             const txn = await TransactionManager.logSale(user, transactionData);
             await sendTextMessage(user.whatsappId, `✅ Sale logged! Amount: ${user.currency} ${txn.amount.toLocaleString()}`);
-            
-            // Ask for Invoice
             await updateUserState(user.whatsappId, USER_STATES.AWAITING_INVOICE_CONFIRMATION, { transaction: txn });
             await sendInteractiveButtons(user.whatsappId, 'Generate Invoice?', [{ id: 'invoice_yes', title: 'Yes' }, { id: 'invoice_no', title: 'No' }]);
-            return; // Exit here, invoice handler will reset state
+            return; 
 
         } else if (intent === INTENTS.LOG_EXPENSE) {
             await TransactionManager.logExpense(user, transactionData);
@@ -142,7 +150,6 @@ async function handleBankSelection(user, buttonId, intent) {
             await sendTextMessage(user.whatsappId, `✅ Stock updated for "${product.productName}".`);
         }
 
-        // Reset state for non-invoice flows
         await updateUserState(user.whatsappId, USER_STATES.IDLE);
         await sendMainMenu(user.whatsappId);
 
@@ -184,7 +191,6 @@ async function handleInvoiceConfirmation(user, buttonId) {
             await sendTextMessage(user.whatsappId, "Generating invoice... 🧾");
             try {
                 const customer = await findCustomerById(transaction.linkedCustomerId);
-                // Use the ORIGINAL PDF Generator
                 const pdfBuffer = await generateInvoice(user, transaction, customer);
                 const mediaId = await uploadMedia(pdfBuffer, 'application/pdf');
                 if (mediaId) {
@@ -225,12 +231,12 @@ async function handleSaleTypeConfirmation(user, buttonId) {
         }
         await sendTextMessage(user.whatsappId, "Noted as service. Continuing sale...");
         await updateUserState(user.whatsappId, USER_STATES.LOGGING_SALE, { memory, saleData: updatedSaleData, isService: true });
-        // Re-trigger message handler to process next step
+        // Re-trigger message handler
         await handleMessage({ from: user.whatsappId, id: null, text: { body: memory[memory.length -1]?.content || "" }, type: 'text'});
     }
 }
 
-// --- RECONCILIATION & EDITS (Delegated to TaskHandler) ---
+// --- RECONCILIATION & EDITS ---
 
 async function handleTransactionSelection(user, listId) {
     const [action, txIdStr] = listId.split(':');
@@ -261,7 +267,6 @@ async function handleReconcileAction(user, buttonId) {
             { id: 'cancel_delete', title: 'Cancel' }
         ]);
     } else if (buttonId === 'action_edit') {
-        // Simplified edit flow
         let buttons = [];
         if (transaction.type === 'SALE') buttons = [{ id: 'edit_field:unitsSold', title: 'Edit Quantity' }, { id: 'edit_field:amountPerUnit', title: 'Edit Price' }];
         else buttons = [{ id: 'edit_field:amount', title: 'Edit Amount' }];

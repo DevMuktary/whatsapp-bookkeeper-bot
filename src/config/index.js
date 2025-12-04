@@ -6,7 +6,9 @@ const config = {
     token: process.env.WHATSAPP_TOKEN,
     phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID,
     verifyToken: process.env.WHATSAPP_VERIFY_TOKEN,
-    flowId: process.env.WHATSAPP_FLOW_ID // [NEW] Add this to your .env file
+    // [UPDATED] Separate Flow IDs
+    onboardingFlowId: process.env.WHATSAPP_ONBOARDING_FLOW_ID || process.env.WHATSAPP_FLOW_ID, // Fallback to old name
+    bankFlowId: process.env.WHATSAPP_BANK_FLOW_ID 
   },
   deepseek: {
     apiKey: process.env.DEEPSEEK_API_KEY

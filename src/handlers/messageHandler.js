@@ -25,6 +25,8 @@ import { ObjectId } from 'mongodb';
 const CANCEL_KEYWORDS = ['cancel', 'stop', 'exit', 'abort', 'quit'];
 const MAX_MEMORY_DEPTH = 12;
 
+// --- HELPERS ---
+
 const limitMemory = (memory) => {
     if (memory.length > MAX_MEMORY_DEPTH) return memory.slice(-MAX_MEMORY_DEPTH);
     return memory;
@@ -56,8 +58,8 @@ async function getEffectiveUser(user) {
     if (user.role === 'STAFF' && user.linkedAccountId) {
         return {
             ...user,
-            _id: user.linkedAccountId,
-            originalUserId: user._id, 
+            _id: user.linkedAccountId, // Swap ID to Owner's
+            originalUserId: user._id,  // Keep track of real user
             staffName: user.businessName || user.whatsappId,
             isStaff: true
         };
@@ -85,6 +87,21 @@ export async function askForBankSelection(user, transactionData, nextState, prom
     }
 }
 
+// [FIXED] FUNCTION DEFINITION FOR handleManageBanks
+async function handleManageBanks(user) {
+    if (user.isStaff) {
+        await sendTextMessage(user.whatsappId, "⛔ Access Denied. Only the Business Owner can manage bank accounts.");
+        return;
+    }
+    
+    await updateUserState(user.whatsappId, USER_STATES.AWAITING_BANK_MENU_SELECTION);
+    
+    await sendInteractiveButtons(user.whatsappId, "Manage Bank Accounts 🏦\nWhat would you like to do?", [
+        { id: 'bank_action:add', title: 'Add New Bank ➕' },
+        { id: 'bank_action:check', title: 'Check Balance 💰' }
+    ]);
+}
+
 // --- MAIN HANDLER ---
 
 export async function handleMessage(message) {
@@ -94,6 +111,7 @@ export async function handleMessage(message) {
   try {
     await setTypingIndicator(whatsappId, 'on', messageId);
     
+    // 1. MEDIA & INPUT PROCESSING
     let userInputText = "";
     if (message.type === 'text') userInputText = message.text.body;
     else if (message.type === 'audio') userInputText = await transcribeAudio(message.audio.id) || "";
@@ -123,7 +141,7 @@ export async function handleMessage(message) {
     const user = await getEffectiveUser(rawUser);
     const lowerCaseText = userInputText.trim().toLowerCase();
 
-    // SYSTEM COMMANDS
+    // 2. SYSTEM COMMANDS (JOIN TEAM)
     if (lowerCaseText.startsWith('join ')) {
         const code = lowerCaseText.split(' ')[1]?.toUpperCase();
         if (code) {
@@ -141,7 +159,7 @@ export async function handleMessage(message) {
         return;
     }
 
-    // ONBOARDING
+    // 3. ONBOARDING (FLOWS)
     if (user.state === USER_STATES.NEW_USER && user.role !== 'STAFF') {
         if (CANCEL_KEYWORDS.includes(lowerCaseText)) {
              await sendTextMessage(whatsappId, "Okay, message me whenever you are ready to start!");
@@ -156,6 +174,7 @@ export async function handleMessage(message) {
         return;
     }
 
+    // 4. CANCELLATION
     if (CANCEL_KEYWORDS.includes(lowerCaseText)) {
         if (user.state !== USER_STATES.IDLE) {
             await updateUserState(whatsappId, USER_STATES.IDLE, {});
@@ -165,6 +184,7 @@ export async function handleMessage(message) {
         }
     }
 
+    // 5. STATE ROUTING
     switch (user.state) {
       case USER_STATES.IDLE: 
           await handleIdleState(user, userInputText); 
@@ -224,11 +244,14 @@ export async function handleMessage(message) {
   }
 }
 
+// --- SPECIAL HANDLERS (FLOWS, OTP, DOCS) ---
+
 export async function handleFlowResponse(message) {
     const whatsappId = message.from;
     let responseJson = {};
     try {
         responseJson = JSON.parse(message.interactive.nfm_reply.response_json);
+        logger.info(`Flow Response from ${whatsappId}:`, JSON.stringify(responseJson));
     } catch (parseError) {
         logger.error("Failed to parse flow response JSON", parseError);
         return;
@@ -307,6 +330,8 @@ async function handleDocumentImport(user, document) {
         await sendTextMessage(user.whatsappId, `Error reading file: ${e.message}`);
     }
 }
+
+// --- IDLE STATE LOGIC (INTENT ROUTING) ---
 
 async function handleIdleState(user, text) {
     const { intent, context } = await getIntent(text);
@@ -401,7 +426,7 @@ async function handleIdleState(user, text) {
 
     } else if (intent === INTENTS.GENERATE_REPORT) {
         if (context.reportType) {
-            await sendTextMessage(user.whatsappId, "I've added your report to the report generation queue. You'll receive it shortly! ⏳");
+            await sendTextMessage(user.whatsappId, "I've added your report to the queue. You'll receive it shortly! ⏳");
             const { startDate, endDate } = extractDateRange(context, 'this_month');
             await queueReportGeneration(
                 user._id, 
@@ -452,7 +477,6 @@ async function handleLoggingSale(user, text) {
     }
 }
 
-// [UPDATED] Handles multiple expenses and bank selection
 async function handleLoggingExpense(user, text) {
     let { memory } = user.stateContext;
     if (memory.length === 0 || memory[memory.length - 1].content !== text) memory.push({ role: 'user', content: text });
@@ -463,7 +487,6 @@ async function handleLoggingExpense(user, text) {
         await sendTextMessage(user.whatsappId, aiResponse.reply);
     } else {
         try {
-            // Expenses come as an array or single object from AI
             const expenses = aiResponse.data.expenses || [aiResponse.data];
             
             if (user.isStaff) {
@@ -472,12 +495,10 @@ async function handleLoggingExpense(user, text) {
 
             const banks = await getAllBankAccounts(user._id);
             if (banks.length > 0) {
-                 // Trigger bank selection for the batch
                  await askForBankSelection(user, { expenses }, USER_STATES.AWAITING_BANK_SELECTION_EXPENSE, 'Paid from which account?');
                  return;
             }
             
-            // If no banks, log immediately
             for (const exp of expenses) {
                 await TransactionManager.logExpense(user, exp);
             }

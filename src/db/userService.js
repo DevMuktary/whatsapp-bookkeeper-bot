@@ -4,12 +4,6 @@ import { USER_STATES } from '../utils/constants.js';
 
 const usersCollection = () => getDB().collection('users');
 
-/**
- * Finds a user by their WhatsApp ID or creates a new one if they don't exist.
- * New users are started in the NEW_USER state to trigger the welcome sequence.
- * @param {string} whatsappId The user's WhatsApp ID (phone number).
- * @returns {Promise<object>} The user document.
- */
 export async function findOrCreateUser(whatsappId) {
   try {
     let user = await usersCollection().findOne({ whatsappId });
@@ -22,6 +16,11 @@ export async function findOrCreateUser(whatsappId) {
         email: null,
         isEmailVerified: false,
         currency: null,
+        // [NEW] Team Mode Fields
+        role: 'OWNER',          // 'OWNER' or 'STAFF'
+        linkedAccountId: null,  // If STAFF, this links to Owner's _id
+        joinCode: null,         // Code for others to join
+        
         state: USER_STATES.NEW_USER, 
         stateContext: {},
         otp: null,
@@ -39,12 +38,6 @@ export async function findOrCreateUser(whatsappId) {
   }
 }
 
-/**
- * Updates a user's document.
- * @param {string} whatsappId The user's WhatsApp ID.
- * @param {object} updateData The fields to update.
- * @returns {Promise<object>} The updated user document.
- */
 export async function updateUser(whatsappId, updateData) {
     try {
         const result = await usersCollection().findOneAndUpdate(
@@ -59,24 +52,45 @@ export async function updateUser(whatsappId, updateData) {
     }
 }
 
-/**
- * A specific helper to update a user's state and context.
- * @param {string} whatsappId The user's WhatsApp ID.
- * @param {string} state The new state from USER_STATES.
- * @param {object} context Optional context to store for the state.
- * @returns {Promise<object>} The updated user document.
- */
 export async function updateUserState(whatsappId, state, context = {}) {
     return updateUser(whatsappId, { state, stateContext: context });
 }
 
-// [NEW] Helper for Scheduler
 export async function getAllUsers() {
     try {
-        // Only fetch users who have at least set a currency (active users)
         return await usersCollection().find({ currency: { $ne: null } }).toArray();
     } catch (error) {
         logger.error('Error fetching all users:', error);
         return [];
     }
+}
+
+// [NEW] TEAM MODE FUNCTIONS
+
+export async function createJoinCode(userId) {
+    // Generate a random 6-character code
+    const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+    await usersCollection().updateOne({ _id: userId }, { $set: { joinCode: code } });
+    return code;
+}
+
+export async function findOwnerByJoinCode(code) {
+    // Case insensitive search
+    return await usersCollection().findOne({ joinCode: code, role: 'OWNER' });
+}
+
+export async function linkStaffToOwner(staffWhatsappId, ownerId) {
+    // Reset staff account to defaults but link it to owner
+    await usersCollection().updateOne(
+        { whatsappId: staffWhatsappId },
+        { 
+            $set: { 
+                role: 'STAFF', 
+                linkedAccountId: ownerId,
+                state: USER_STATES.IDLE,
+                currency: null // Will inherit from owner
+            } 
+        }
+    );
+    return await usersCollection().findOne({ whatsappId: staffWhatsappId });
 }

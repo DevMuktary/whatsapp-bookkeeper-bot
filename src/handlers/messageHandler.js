@@ -15,6 +15,7 @@ import { USER_STATES, INTENTS } from '../utils/constants.js';
 import { getDateRange } from '../utils/dateUtils.js';
 import { queueReportGeneration } from '../services/QueueService.js';
 import { parseExcelImport } from '../services/FileImportService.js';
+import { generateDataExport } from '../services/exportService.js';
 import * as TransactionManager from '../services/TransactionManager.js';
 import * as InventoryManager from '../services/InventoryManager.js';
 import { createBankAccount } from '../db/bankService.js';
@@ -23,6 +24,8 @@ import logger from '../utils/logger.js';
 
 const CANCEL_KEYWORDS = ['cancel', 'stop', 'exit', 'abort', 'quit'];
 const MAX_MEMORY_DEPTH = 12;
+
+// --- HELPERS ---
 
 const limitMemory = (memory) => {
     if (memory.length > MAX_MEMORY_DEPTH) return memory.slice(-MAX_MEMORY_DEPTH);
@@ -41,18 +44,21 @@ const parsePrice = (priceInput) => {
     return isNaN(value) ? NaN : value * multiplier;
 };
 
+// Switches context for Staff members to the Owner's account
 async function getEffectiveUser(user) {
     if (user.role === 'STAFF' && user.linkedAccountId) {
         return {
             ...user,
-            _id: user.linkedAccountId, 
-            originalUserId: user._id, 
+            _id: user.linkedAccountId, // Swap ID to Owner's
+            originalUserId: user._id,  // Keep track of real user
             staffName: user.businessName || user.whatsappId,
             isStaff: true
         };
     }
     return user;
 }
+
+// --- MAIN HANDLER ---
 
 export async function handleMessage(message) {
   const whatsappId = message.from;
@@ -61,18 +67,20 @@ export async function handleMessage(message) {
   try {
     await setTypingIndicator(whatsappId, 'on', messageId);
     
+    // 1. MEDIA & INPUT PROCESSING
     let userInputText = "";
     if (message.type === 'text') userInputText = message.text.body;
     else if (message.type === 'audio') userInputText = await transcribeAudio(message.audio.id) || "";
     else if (message.type === 'image') userInputText = await analyzeImage(message.image.id, message.image.caption) || "";
     
+    // HANDLE EXCEL IMPORT (BULK PRODUCTS)
     else if (message.type === 'document') {
         const mime = message.document.mime_type;
-        const user = await findOrCreateUser(whatsappId);
-        const effectiveUser = await getEffectiveUser(user); 
+        const rawUser = await findOrCreateUser(whatsappId);
+        const user = await getEffectiveUser(rawUser); // Use effective user to save to correct DB
         
         if (mime.includes('spreadsheet') || mime.includes('excel') || mime.includes('csv')) {
-            await handleDocumentImport(effectiveUser, message.document);
+            await handleDocumentImport(user, message.document);
             return;
         } else {
             await sendTextMessage(whatsappId, "I can only read Excel (.xlsx) or CSV files for inventory.");
@@ -91,18 +99,17 @@ export async function handleMessage(message) {
     
     const lowerCaseText = userInputText.trim().toLowerCase();
 
-    // --- SYSTEM COMMANDS (JOIN) ---
-    // Staff joining is a precise code, so we use startsWith
+    // 2. SYSTEM COMMANDS (JOIN TEAM)
     if (lowerCaseText.startsWith('join ')) {
         const code = lowerCaseText.split(' ')[1]?.toUpperCase();
         if (code) {
             const owner = await findOwnerByJoinCode(code);
             if (owner) {
                 await linkStaffToOwner(whatsappId, owner._id);
-                await sendTextMessage(whatsappId, `✅ Success! You have joined **${owner.businessName}**. You can now log sales and check stock for them.`);
+                await sendTextMessage(whatsappId, `✅ Success! You have joined **${owner.businessName}**. You can now log sales for them.`);
                 await sendTextMessage(owner.whatsappId, `🔔 **New Staff:** ${user.businessName || whatsappId} just joined your team.`);
             } else {
-                await sendTextMessage(whatsappId, "❌ Invalid or expired invite code.");
+                await sendTextMessage(whatsappId, "❌ Invalid invite code.");
             }
         } else {
             await sendTextMessage(whatsappId, "Please type 'Join [Code]', e.g., 'Join X7K9P2'.");
@@ -110,7 +117,7 @@ export async function handleMessage(message) {
         return;
     }
 
-    // --- ONBOARDING ---
+    // 3. ONBOARDING (FLOWS)
     if (user.state === USER_STATES.NEW_USER && user.role !== 'STAFF') {
         if (CANCEL_KEYWORDS.includes(lowerCaseText)) {
              await sendTextMessage(whatsappId, "Okay, message me whenever you are ready to start!");
@@ -125,7 +132,7 @@ export async function handleMessage(message) {
         return;
     }
 
-    // --- CANCELLATION ---
+    // 4. CANCELLATION
     if (CANCEL_KEYWORDS.includes(lowerCaseText)) {
         if (user.state !== USER_STATES.IDLE) {
             await updateUserState(whatsappId, USER_STATES.IDLE, {});
@@ -135,7 +142,7 @@ export async function handleMessage(message) {
         }
     }
 
-    // --- STATE HANDLING ---
+    // 5. STATE ROUTING
     switch (user.state) {
       case USER_STATES.IDLE: 
           await handleIdleState(user, userInputText); 
@@ -160,6 +167,7 @@ export async function handleMessage(message) {
           break;
 
       default:
+        // Smart Interrupt: If user sends a command while in a menu
         if (user.state.startsWith('AWAITING_')) {
             if (userInputText.length > 2) { 
                 await updateUserState(whatsappId, USER_STATES.IDLE);
@@ -179,7 +187,7 @@ export async function handleMessage(message) {
   }
 }
 
-// --- NEW ONBOARDING HANDLERS ---
+// --- SPECIAL HANDLERS (FLOWS, OTP, DOCS) ---
 
 export async function handleFlowResponse(message) {
     const whatsappId = message.from;
@@ -220,31 +228,36 @@ async function handleDocumentImport(user, document) {
     await sendTextMessage(user.whatsappId, "Receiving your file... 📂");
     try {
         const { products, errors } = await parseExcelImport(document.id);
+        
         if (products.length === 0) {
             await sendTextMessage(user.whatsappId, "I couldn't find any valid products in that file. Check the columns: Name, Qty, Cost, Sell.");
             return;
         }
+
         await updateUserState(user.whatsappId, USER_STATES.AWAITING_BULK_PRODUCT_CONFIRMATION, { products });
+        
         const preview = products.slice(0, 5).map(p => `• ${p.quantityAdded}x ${p.productName}`).join('\n');
         const errorMsg = errors.length > 0 ? `\n⚠️ ${errors.length} rows skipped (missing info).` : "";
+        
         await sendInteractiveButtons(user.whatsappId, `I read ${products.length} products from the file!${errorMsg}\n\nTop 5:\n${preview}`, [
             { id: 'confirm_bulk_add', title: '✅ Import All' },
             { id: 'cancel', title: '❌ Cancel' }
         ]);
+
     } catch (e) {
         await sendTextMessage(user.whatsappId, `Error reading file: ${e.message}`);
     }
 }
 
-// --- STATE LOGIC ---
+// --- IDLE STATE LOGIC (INTENT ROUTING) ---
 
 async function handleIdleState(user, text) {
     const { intent, context } = await getIntent(text);
 
-    // [NEW] Permission Check for Staff
+    // Permission Check for Staff
     if (user.isStaff) {
-        const RESTRICTED_INTENTS = [INTENTS.RECONCILE_TRANSACTION, INTENTS.ADD_BANK_ACCOUNT];
-        if (RESTRICTED_INTENTS.includes(intent)) {
+        const RESTRICTED = [INTENTS.RECONCILE_TRANSACTION, INTENTS.ADD_BANK_ACCOUNT, 'EXPORT_DATA'];
+        if (RESTRICTED.includes(intent) || (intent === 'EXPORT_DATA')) {
             await sendTextMessage(user.whatsappId, "⛔ Access Denied. Only the Business Owner can do that.");
             return;
         }
@@ -254,7 +267,7 @@ async function handleIdleState(user, text) {
         }
     }
 
-    // [NEW] Intelligent Team Management Handling
+    // Team Management (Owner Only)
     if (intent === 'MANAGE_TEAM') {
         if (user.role === 'STAFF') {
             await sendTextMessage(user.whatsappId, "⛔ Only the Business Owner can invite staff.");
@@ -262,6 +275,28 @@ async function handleIdleState(user, text) {
         }
         const code = await createJoinCode(user._id);
         await sendTextMessage(user.whatsappId, `👥 **Team Invite**\n\nShare this code with your staff:\n\n**${code}**\n\nAsk them to send the message: *"Join ${code}"* to this bot.`);
+        return;
+    }
+
+    // Excel Export (Accountant's Friend)
+    if (intent === 'EXPORT_DATA') {
+        await sendTextMessage(user.whatsappId, "Gathering your records... 📊\nThis may take a few seconds.");
+        const { startDate, endDate } = getDateRange(context.dateRange || 'this_year');
+        
+        try {
+            const excelBuffer = await generateDataExport(user._id, startDate, endDate);
+            const mediaId = await uploadMedia(excelBuffer, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+            
+            if (mediaId) {
+                const filename = `Fynax_Data_${new Date().toISOString().split('T')[0]}.xlsx`;
+                await sendDocument(user.whatsappId, mediaId, filename, "Here is your data export. 📁");
+            } else {
+                await sendTextMessage(user.whatsappId, "Failed to upload file.");
+            }
+        } catch (e) {
+            logger.error("Export failed", e);
+            await sendTextMessage(user.whatsappId, "Sorry, I couldn't generate the export file.");
+        }
         return;
     }
 
@@ -338,6 +373,8 @@ async function handleIdleState(user, text) {
     }
 }
 
+// --- CONVERSATIONAL TASK HANDLERS ---
+
 async function handleLoggingSale(user, text) {
     let { memory, existingProduct, saleData } = user.stateContext;
     if (memory.length === 0 || memory[memory.length - 1].content !== text) {
@@ -365,6 +402,7 @@ async function handleLoggingSale(user, text) {
             }
             const txn = await TransactionManager.logSale(user, finalData);
             await sendTextMessage(user.whatsappId, `✅ Sale logged! Amount: ${user.currency} ${txn.amount.toLocaleString()}`);
+            
             await updateUserState(user.whatsappId, USER_STATES.AWAITING_INVOICE_CONFIRMATION, { transaction: txn });
             await sendInteractiveButtons(user.whatsappId, 'Generate Invoice?', [{ id: 'invoice_yes', title: 'Yes' }, { id: 'invoice_no', title: 'No' }]);
         } catch (e) {

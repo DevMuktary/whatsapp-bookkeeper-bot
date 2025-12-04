@@ -3,8 +3,7 @@ import config from './src/config/index.js';
 import logger from './src/utils/logger.js';
 import whatsappWebhook from './src/webhooks/whatsapp.js';
 import { connectToDB } from './src/db/connection.js';
-
-// Removed QueueService import because we are no longer using background workers.
+import { startDailyScheduler } from './src/services/scheduler.js'; // [NEW]
 
 // Initialize Express app
 const app = express();
@@ -23,6 +22,10 @@ app.use(express.json({
 try {
   await connectToDB();
   logger.info('Successfully connected to the database.');
+  
+  // [NEW] Start the Daily Scheduler after DB connects
+  startDailyScheduler();
+
 } catch (error) {
   logger.error('Failed to connect to the database on startup. Exiting.', error);
   process.exit(1);

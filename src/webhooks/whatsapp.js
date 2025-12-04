@@ -3,12 +3,12 @@ import config from '../config/index.js';
 import logger from '../utils/logger.js';
 import { handleMessage } from '../handlers/messageHandler.js';
 import { handleInteractiveMessage } from '../handlers/interactiveHandler.js';
-import { sendTextMessage } from '../api/whatsappService.js'; // [NEW] Needed to send the warning
+import { sendTextMessage } from '../api/whatsappService.js';
 
 const router = express.Router();
 
 // --- RATE LIMIT CONFIGURATION ---
-const RATE_LIMIT = 10;           // Max messages
+const RATE_LIMIT = 10;           // Max messages allowed
 const RATE_WINDOW = 60 * 1000;   // Per 1 minute (in milliseconds)
 const userRateLimit = new Map(); // Simple in-memory store
 
@@ -18,7 +18,6 @@ const userRateLimit = new Map(); // Simple in-memory store
  */
 async function isRateLimited(whatsappId) {
     const now = Date.now();
-    
     let record = userRateLimit.get(whatsappId);
 
     // If no record exists, or the time window has passed, start a new window
@@ -72,14 +71,15 @@ router.post('/', async (req, res) => {
           const message = changes.messages[0];
           const whatsappId = message.from;
 
-          // [NEW] CHECK RATE LIMIT BEFORE PROCESSING
+          // 1. CHECK RATE LIMIT BEFORE PROCESSING
           if (await isRateLimited(whatsappId)) {
               logger.warn(`Rate limit hit for ${whatsappId}. Dropping message.`);
               return; // Stop execution here
           }
           
-          // If safe, proceed to handlers
-          if (message.type === 'text' || message.type === 'image' || message.type === 'audio') {
+          // 2. ROUTE MESSAGE
+          // [UPDATED] Added 'document' to supported types
+          if (['text', 'image', 'audio', 'document'].includes(message.type)) {
               await handleMessage(message);
           } 
           else if (message.type === 'interactive') {

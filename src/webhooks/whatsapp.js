@@ -1,7 +1,7 @@
 import express from 'express';
 import config from '../config/index.js';
 import logger from '../utils/logger.js';
-import { handleMessage } from '../handlers/messageHandler.js';
+import { handleMessage, handleFlowResponse } from '../handlers/messageHandler.js'; // [UPDATED] Import handleFlowResponse
 import { handleInteractiveMessage } from '../handlers/interactiveHandler.js';
 import { sendTextMessage } from '../api/whatsappService.js';
 
@@ -12,15 +12,10 @@ const RATE_LIMIT = 10;           // Max messages allowed
 const RATE_WINDOW = 60 * 1000;   // Per 1 minute (in milliseconds)
 const userRateLimit = new Map(); // Simple in-memory store
 
-/**
- * Checks if a user has exceeded the rate limit.
- * Returns TRUE if they should be blocked.
- */
 async function isRateLimited(whatsappId) {
     const now = Date.now();
     let record = userRateLimit.get(whatsappId);
 
-    // If no record exists, or the time window has passed, start a new window
     if (!record || (now - record.startTime > RATE_WINDOW)) {
         record = { count: 0, startTime: now, warningSent: false };
         userRateLimit.set(whatsappId, record);
@@ -28,17 +23,15 @@ async function isRateLimited(whatsappId) {
 
     record.count++;
 
-    // If they exceeded the limit
     if (record.count > RATE_LIMIT) {
-        // Only warn them ONCE per window (to avoid spamming the warning itself)
         if (!record.warningSent) {
             await sendTextMessage(whatsappId, "⛔ Whoa, slow down! You are sending too many messages. Please wait a minute.");
             record.warningSent = true;
         }
-        return true; // BLOCK this message
+        return true; 
     }
 
-    return false; // ALLOW this message
+    return false; 
 }
 
 // Route for WhatsApp webhook verification
@@ -58,7 +51,6 @@ router.get('/', (req, res) => {
 
 // Route for receiving messages and events
 router.post('/', async (req, res) => {
-  // Always return 200 OK immediately to WhatsApp so they don't keep retrying
   res.sendStatus(200);
 
   const body = req.body;
@@ -71,19 +63,24 @@ router.post('/', async (req, res) => {
           const message = changes.messages[0];
           const whatsappId = message.from;
 
-          // 1. CHECK RATE LIMIT BEFORE PROCESSING
+          // 1. CHECK RATE LIMIT
           if (await isRateLimited(whatsappId)) {
               logger.warn(`Rate limit hit for ${whatsappId}. Dropping message.`);
-              return; // Stop execution here
+              return; 
           }
           
           // 2. ROUTE MESSAGE
-          // [UPDATED] Added 'document' to supported types
           if (['text', 'image', 'audio', 'document'].includes(message.type)) {
               await handleMessage(message);
           } 
           else if (message.type === 'interactive') {
-              await handleInteractiveMessage(message);
+              const interactive = message.interactive;
+              // [NEW] Check for Flow Response
+              if (interactive.type === 'nfm_reply') {
+                  await handleFlowResponse(message);
+              } else {
+                  await handleInteractiveMessage(message);
+              }
           }
       }
     }

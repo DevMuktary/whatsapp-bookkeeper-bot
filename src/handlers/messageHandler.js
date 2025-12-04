@@ -2,17 +2,20 @@ import { findOrCreateUser, updateUser, updateUserState } from '../db/userService
 import { findProductByName } from '../db/productService.js';
 import { getAllBankAccounts } from '../db/bankService.js';
 import { 
-    extractOnboardingDetails, extractCurrency, getIntent, 
-    gatherSaleDetails, gatherExpenseDetails, gatherProductDetails, 
+    getIntent, gatherSaleDetails, gatherExpenseDetails, gatherProductDetails, 
     gatherPaymentDetails, gatherBankAccountDetails,
-    transcribeAudio, analyzeImage, parseBulkProductList 
+    transcribeAudio, analyzeImage, parseBulkProductList,
+    // extractOnboardingDetails and extractCurrency are removed as Flows handle this
 } from '../services/aiService.js';
 import { sendOtp } from '../services/emailService.js';
-import { sendTextMessage, sendInteractiveButtons, sendMainMenu, sendReportMenu, setTypingIndicator, uploadMedia, sendDocument } from '../api/whatsappService.js';
+import { 
+    sendTextMessage, sendInteractiveButtons, sendMainMenu, sendReportMenu, 
+    setTypingIndicator, uploadMedia, sendDocument, sendOnboardingFlow 
+} from '../api/whatsappService.js';
 import { USER_STATES, INTENTS } from '../utils/constants.js';
 import { getDateRange } from '../utils/dateUtils.js';
 
-// [NEW] Imports for Queue and File Import
+// Imports for Queue and File Import
 import { queueReportGeneration } from '../services/QueueService.js';
 import { parseExcelImport } from '../services/FileImportService.js';
 
@@ -24,7 +27,7 @@ import { executeTask } from './taskHandler.js';
 import logger from '../utils/logger.js';
 
 const CANCEL_KEYWORDS = ['cancel', 'stop', 'exit', 'abort', 'quit'];
-const MAX_MEMORY_DEPTH = 12; // Keep last 12 messages to save costs & prevent crashes
+const MAX_MEMORY_DEPTH = 12;
 
 // Helper to keep memory size in check
 const limitMemory = (memory) => {
@@ -60,10 +63,10 @@ export async function handleMessage(message) {
     else if (message.type === 'audio') userInputText = await transcribeAudio(message.audio.id) || "";
     else if (message.type === 'image') userInputText = await analyzeImage(message.image.id, message.image.caption) || "";
     
-    // [NEW] HANDLE DOCUMENT UPLOAD IMMEDIATELY
+    // HANDLE DOCUMENT UPLOAD
     else if (message.type === 'document') {
         const mime = message.document.mime_type;
-        const user = await findOrCreateUser(whatsappId); // Need user for state update
+        const user = await findOrCreateUser(whatsappId);
         
         if (mime.includes('spreadsheet') || mime.includes('excel') || mime.includes('csv')) {
             await handleDocumentImport(user, message.document);
@@ -73,7 +76,7 @@ export async function handleMessage(message) {
             return;
         }
     }
-    else return; // Ignore other types
+    else return; 
 
     if (!userInputText) {
         await sendTextMessage(whatsappId, "I couldn't understand that content. Please try again.");
@@ -83,10 +86,22 @@ export async function handleMessage(message) {
     const user = await findOrCreateUser(whatsappId);
     const lowerCaseText = userInputText.trim().toLowerCase();
 
-    // --- 2. ONBOARDING ---
-    if ([USER_STATES.NEW_USER, USER_STATES.ONBOARDING_AWAIT_BUSINESS_AND_EMAIL, USER_STATES.ONBOARDING_AWAIT_OTP, USER_STATES.ONBOARDING_AWAIT_CURRENCY].includes(user.state)) {
-        await handleOnboardingFlow(user, userInputText);
+    // --- 2. ONBOARDING (NEW FLOW LOGIC) ---
+    // If user is NEW, trigger the flow (unless they are cancelling)
+    if (user.state === USER_STATES.NEW_USER) {
+        if (CANCEL_KEYWORDS.includes(lowerCaseText)) {
+             await sendTextMessage(whatsappId, "Okay, message me whenever you are ready to start!");
+             return;
+        }
+        // Send the Native Form
+        await sendOnboardingFlow(whatsappId);
         return; 
+    }
+
+    // OTP Verification is the only manual text step left
+    if (user.state === USER_STATES.ONBOARDING_AWAIT_OTP) {
+        await handleOtpVerification(user, userInputText);
+        return;
     }
 
     // --- 3. CANCELLATION ---
@@ -124,7 +139,7 @@ export async function handleMessage(message) {
           break;
 
       default:
-        // Smart Interrupt: If user sends a command while in a menu
+        // Smart Interrupt
         if (user.state.startsWith('AWAITING_')) {
             if (userInputText.length > 2) { 
                 await updateUserState(whatsappId, USER_STATES.IDLE);
@@ -142,6 +157,80 @@ export async function handleMessage(message) {
     logger.error(`Error in message handler for ${whatsappId}:`, error);
     await sendTextMessage(whatsappId, `Something went wrong: ${error.message}.`);
   }
+}
+
+// --- NEW ONBOARDING HANDLERS ---
+
+export async function handleFlowResponse(message) {
+    const whatsappId = message.from;
+    const responseJson = JSON.parse(message.interactive.nfm_reply.response_json);
+    
+    // Extract data from our JSON Form
+    const { business_name, email, currency } = responseJson;
+
+    try {
+        await sendTextMessage(whatsappId, "Creating your account... 🔄");
+
+        // 1. Save all details at once
+        await updateUser(whatsappId, {
+            businessName: business_name,
+            email: email,
+            currency: currency,
+            isEmailVerified: false 
+        });
+
+        // 2. Trigger Email Verification
+        const otp = await sendOtp(email, business_name);
+        await updateUser(whatsappId, { otp, otpExpires: new Date(Date.now() + 600000) });
+        
+        // 3. Move to OTP State
+        await updateUserState(whatsappId, USER_STATES.ONBOARDING_AWAIT_OTP);
+        
+        await sendTextMessage(whatsappId, `✅ Account created for **${business_name}**!\n\nI sent a verification code to ${email}. Please enter it below to finish.`);
+
+    } catch (error) {
+        logger.error("Flow Error:", error);
+        await sendTextMessage(whatsappId, "Error setting up account. Please try again.");
+    }
+}
+
+async function handleOtpVerification(user, text) {
+    const inputOtp = text.trim();
+    if (user.otp === inputOtp) {
+        await updateUser(user.whatsappId, { isEmailVerified: true }); // Clear OTP
+        await updateUserState(user.whatsappId, USER_STATES.IDLE);
+        await sendTextMessage(user.whatsappId, "✅ Email verified! Your account is ready.");
+        await sendMainMenu(user.whatsappId);
+    } else {
+        await sendTextMessage(user.whatsappId, "❌ Invalid code. Please check your email and try again.");
+    }
+}
+
+// --- BULK IMPORT HANDLER ---
+
+async function handleDocumentImport(user, document) {
+    await sendTextMessage(user.whatsappId, "Receiving your file... 📂");
+    try {
+        const { products, errors } = await parseExcelImport(document.id);
+        
+        if (products.length === 0) {
+            await sendTextMessage(user.whatsappId, "I couldn't find any valid products in that file. Check the columns: Name, Qty, Cost, Sell.");
+            return;
+        }
+
+        await updateUserState(user.whatsappId, USER_STATES.AWAITING_BULK_PRODUCT_CONFIRMATION, { products });
+        
+        const preview = products.slice(0, 5).map(p => `• ${p.quantityAdded}x ${p.productName}`).join('\n');
+        const errorMsg = errors.length > 0 ? `\n⚠️ ${errors.length} rows skipped (missing info).` : "";
+        
+        await sendInteractiveButtons(user.whatsappId, `I read ${products.length} products from the file!${errorMsg}\n\nTop 5:\n${preview}`, [
+            { id: 'confirm_bulk_add', title: '✅ Import All' },
+            { id: 'cancel', title: '❌ Cancel' }
+        ]);
+
+    } catch (e) {
+        await sendTextMessage(user.whatsappId, `Error reading file: ${e.message}`);
+    }
 }
 
 // --- STATE LOGIC ---
@@ -182,10 +271,8 @@ async function handleIdleState(user, text) {
         await handleAddingBankAccount({ ...user, stateContext: { memory: [{ role: 'user', content: text }] } }, text);
 
     } else if (intent === INTENTS.ADD_PRODUCTS_FROM_LIST || intent === INTENTS.ADD_MULTIPLE_PRODUCTS) {
-        // [UX] Suggest File Upload
         await sendTextMessage(user.whatsappId, "To add many products at once, the fastest way is to **send me an Excel file**! 📁\n\nEnsure it has columns: *Name, Qty, Cost, Sell*.\n\nOr, you can just paste the list here (e.g. '10 Rice 2000').");
         
-        // If they actually sent text (not just "I want to add bulk"), try to parse it anyway
         if (text.length > 20) { 
              const products = await parseBulkProductList(text);
              if (products.length > 0) {
@@ -203,7 +290,6 @@ async function handleIdleState(user, text) {
             await sendTextMessage(user.whatsappId, "I've added your report to the queue. You'll receive it shortly! ⏳");
             const { startDate, endDate } = getDateRange(context.dateRange || 'this_month');
             
-            // [SCALING] Use Queue
             await queueReportGeneration(
                 user._id, 
                 user.currency, 
@@ -225,35 +311,7 @@ async function handleIdleState(user, text) {
     }
 }
 
-// --- BULK IMPORT HANDLER ---
-
-async function handleDocumentImport(user, document) {
-    await sendTextMessage(user.whatsappId, "Receiving your file... 📂");
-    try {
-        const { products, errors } = await parseExcelImport(document.id);
-        
-        if (products.length === 0) {
-            await sendTextMessage(user.whatsappId, "I couldn't find any valid products in that file. Check the columns: Name, Qty, Cost, Sell.");
-            return;
-        }
-
-        // Save to state and ask for confirmation
-        await updateUserState(user.whatsappId, USER_STATES.AWAITING_BULK_PRODUCT_CONFIRMATION, { products });
-        
-        const preview = products.slice(0, 5).map(p => `• ${p.quantityAdded}x ${p.productName}`).join('\n');
-        const errorMsg = errors.length > 0 ? `\n⚠️ ${errors.length} rows skipped (missing info).` : "";
-        
-        await sendInteractiveButtons(user.whatsappId, `I read ${products.length} products from the file!${errorMsg}\n\nTop 5:\n${preview}`, [
-            { id: 'confirm_bulk_add', title: '✅ Import All' },
-            { id: 'cancel', title: '❌ Cancel' }
-        ]);
-
-    } catch (e) {
-        await sendTextMessage(user.whatsappId, `Error reading file: ${e.message}`);
-    }
-}
-
-// --- TRANSACTION HANDLERS (With Memory Limits) ---
+// --- TRANSACTION HANDLERS ---
 
 async function handleLoggingSale(user, text) {
     let { memory, existingProduct, saleData } = user.stateContext;
@@ -261,7 +319,6 @@ async function handleLoggingSale(user, text) {
         memory.push({ role: 'user', content: text });
     }
     
-    // [OPTIMIZATION] Limit memory size
     memory = limitMemory(memory);
 
     const aiResponse = await gatherSaleDetails(memory, existingProduct, saleData?.isService);
@@ -421,38 +478,4 @@ async function handleEditValue(user, text) {
     const { transaction, fieldToEdit } = user.stateContext;
     const changes = { [fieldToEdit]: text };
     await executeTask(INTENTS.RECONCILE_TRANSACTION, user, { transactionId: transaction._id, action: 'edit', changes });
-}
-
-async function handleOnboardingFlow(user, text) {
-    if (user.state === USER_STATES.NEW_USER) {
-        await sendTextMessage(user.whatsappId, "Welcome to Fynax Bookkeeper! 📊\nLet's get you set up.\n\nWhat is your **Business Name** and **Email Address**?");
-        await updateUserState(user.whatsappId, USER_STATES.ONBOARDING_AWAIT_BUSINESS_AND_EMAIL);
-    } else if (user.state === USER_STATES.ONBOARDING_AWAIT_BUSINESS_AND_EMAIL) {
-        const { businessName, email } = await extractOnboardingDetails(text);
-        if (businessName && email) {
-            const otp = await sendOtp(email, businessName);
-            await updateUser(user.whatsappId, { businessName, email, otp, otpExpires: new Date(Date.now() + 600000) });
-            await updateUserState(user.whatsappId, USER_STATES.ONBOARDING_AWAIT_OTP);
-            await sendTextMessage(user.whatsappId, `I've sent a code to ${email}. Please enter it here.`);
-        } else {
-            await sendTextMessage(user.whatsappId, "I need both your Business Name and Email. Please try again.");
-        }
-    } else if (user.state === USER_STATES.ONBOARDING_AWAIT_OTP) {
-        if (user.otp === text.trim()) {
-            await updateUserState(user.whatsappId, USER_STATES.ONBOARDING_AWAIT_CURRENCY);
-            await sendTextMessage(user.whatsappId, "✅ Email verified! What currency do you use? (e.g., Naira, USD)");
-        } else {
-            await sendTextMessage(user.whatsappId, "Invalid code.");
-        }
-    } else if (user.state === USER_STATES.ONBOARDING_AWAIT_CURRENCY) {
-        const { currency } = await extractCurrency(text);
-        if (currency) {
-            await updateUser(user.whatsappId, { currency });
-            await updateUserState(user.whatsappId, USER_STATES.IDLE);
-            await sendTextMessage(user.whatsappId, `All set! Currency: ${currency}.`);
-            await sendMainMenu(user.whatsappId);
-        } else {
-            await sendTextMessage(user.whatsappId, "Unknown currency.");
-        }
-    }
 }

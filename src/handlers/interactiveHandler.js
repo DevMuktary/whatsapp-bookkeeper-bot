@@ -2,10 +2,11 @@ import { findOrCreateUser, updateUserState } from '../db/userService.js';
 import { findTransactionById } from '../db/transactionService.js';
 import { findCustomerById } from '../db/customerService.js';
 import { generateInvoice } from '../services/pdfService.js';
-import { uploadMedia, sendDocument, sendTextMessage, sendInteractiveButtons, sendMainMenu, setTypingIndicator } from '../api/whatsappService.js';
+import { uploadMedia, sendDocument, sendTextMessage, sendInteractiveButtons, sendInteractiveList, sendMainMenu, setTypingIndicator, sendAddBankFlow } from '../api/whatsappService.js';
 import { USER_STATES, INTENTS } from '../utils/constants.js';
 import logger from '../utils/logger.js';
 import { handleMessage } from './messageHandler.js';
+import { getAllBankAccounts } from '../db/bankService.js'; // [NEW]
 import { ObjectId } from 'mongodb';
 
 // Import Managers
@@ -36,6 +37,30 @@ export async function handleInteractiveMessage(message) {
 
 async function handleButtonReply(user, buttonId, originalMessage) {
     switch (user.state) {
+        // [NEW] BANK MENU HANDLER
+        case USER_STATES.AWAITING_BANK_MENU_SELECTION:
+            if (buttonId === 'bank_action:add') {
+                if (user.role === 'STAFF') {
+                    await sendTextMessage(user.whatsappId, "⛔ Staff cannot add bank accounts.");
+                    await updateUserState(user.whatsappId, USER_STATES.IDLE);
+                } else {
+                    await sendAddBankFlow(user.whatsappId);
+                }
+            } else if (buttonId === 'bank_action:check') {
+                const banks = await getAllBankAccounts(user._id);
+                if (banks.length === 0) {
+                    await sendTextMessage(user.whatsappId, "You haven't added any banks yet.");
+                    await updateUserState(user.whatsappId, USER_STATES.IDLE);
+                } else {
+                    const sections = [{
+                        title: "Select Bank",
+                        rows: banks.map(b => ({ id: `view_balance:${b._id}`, title: b.bankName }))
+                    }];
+                    await sendInteractiveList(user.whatsappId, "Check Balance", "Select a bank to view its balance.", "Show List", sections);
+                }
+            }
+            break;
+
         case USER_STATES.IDLE:
             await handleMessage({
                 from: originalMessage.from,
@@ -84,7 +109,23 @@ async function handleButtonReply(user, buttonId, originalMessage) {
 }
 
 async function handleListReply(user, listId, originalMessage) {
-    // [FIX] Check for bank selection ID from List Message
+    // [NEW] VIEW BALANCE HANDLER
+    if (listId.startsWith('view_balance:')) {
+        const bankId = listId.split(':')[1];
+        const banks = await getAllBankAccounts(user._id);
+        const bank = banks.find(b => b._id.toString() === bankId);
+        
+        if (bank) {
+            await sendTextMessage(user.whatsappId, `🏦 **${bank.bankName}**\n\nBalance: **${user.currency} ${bank.balance.toLocaleString()}**`);
+        } else {
+            await sendTextMessage(user.whatsappId, "Bank not found.");
+        }
+        await updateUserState(user.whatsappId, USER_STATES.IDLE);
+        await sendMainMenu(user.whatsappId);
+        return;
+    }
+
+    // CHECK FOR TRANSACTION BANK SELECTION
     if (listId.startsWith('select_bank:')) {
         let intent;
         if (user.state === USER_STATES.AWAITING_BANK_SELECTION_SALE) intent = INTENTS.LOG_SALE;
@@ -231,7 +272,6 @@ async function handleSaleTypeConfirmation(user, buttonId) {
         }
         await sendTextMessage(user.whatsappId, "Noted as service. Continuing sale...");
         await updateUserState(user.whatsappId, USER_STATES.LOGGING_SALE, { memory, saleData: updatedSaleData, isService: true });
-        // Re-trigger message handler
         await handleMessage({ from: user.whatsappId, id: null, text: { body: memory[memory.length -1]?.content || "" }, type: 'text'});
     }
 }

@@ -9,9 +9,6 @@ const openai = new OpenAI({ apiKey: config.openai.apiKey });
 
 // --- MEDIA HELPERS ---
 
-/**
- * Downloads media (audio/image) from WhatsApp servers.
- */
 async function downloadWhatsAppMedia(mediaId) {
     try {
         const urlRes = await axios.get(`https://graph.facebook.com/v20.0/${mediaId}`, {
@@ -33,7 +30,6 @@ async function downloadWhatsAppMedia(mediaId) {
 export async function transcribeAudio(mediaId) {
     try {
         const audioBuffer = await downloadWhatsAppMedia(mediaId);
-        // Create a File-like object for OpenAI
         const file = await OpenAI.toFile(audioBuffer, 'voice_note.ogg', { type: 'audio/ogg' });
         
         const transcription = await openai.audio.transcriptions.create({
@@ -103,7 +99,6 @@ async function callDeepSeek(messages, temperature = 0.1, enforceJson = true) {
       temperature: temperature,
     };
     
-    // Only add response_format if enforceJson is true AND the prompt requests JSON
     if (enforceJson && messages.some(m => m.role === 'system' && m.content.toLowerCase().includes('json'))) {
         payload.response_format = { type: "json_object" };
     }
@@ -117,7 +112,6 @@ async function callDeepSeek(messages, temperature = 0.1, enforceJson = true) {
 
     const content = response.data.choices[0].message.content;
 
-    // JSON Parsing Logic
     if (enforceJson && typeof content === 'string' && content.trim().startsWith('{')) {
          try {
              return JSON.parse(content);
@@ -189,35 +183,28 @@ export async function getIntent(text) {
 
     INTENTS:
     - ${INTENTS.LOG_SALE}: "Sold 5 rice", "Credit sale to John"
-    - ${INTENTS.LOG_EXPENSE}: "Bought fuel 500", "Paid shop rent"
-    - ${INTENTS.ADD_PRODUCT}: "Restock rice 50 bags", "New item indomie 2000"
+    - ${INTENTS.LOG_EXPENSE}: "Bought fuel", "Paid rent"
+    - ${INTENTS.ADD_PRODUCT}: "Restock rice", "New item"
     - ${INTENTS.ADD_PRODUCTS_FROM_LIST}: "Add these: 1. Rice, 2. Beans" (Multi-line or bulk list)
     - ${INTENTS.ADD_MULTIPLE_PRODUCTS}: "I want to add many items"
     - ${INTENTS.CHECK_STOCK}: "How many rice left?", "Count stock"
-    - ${INTENTS.GENERATE_REPORT}: "Send me a report", "Expense report", "Sales report", "P&L", "Profit and Loss", "Report for last month"
-    - ${INTENTS.GET_FINANCIAL_SUMMARY}: "Total sales today", "How much did I spend?"
+    - ${INTENTS.GENERATE_REPORT}: "Send me a report", "P&L", "Sales report"
+    - ${INTENTS.GET_FINANCIAL_SUMMARY}: "Total sales today"
     - ${INTENTS.ADD_BANK_ACCOUNT}: "Add bank UBA", "New account access bank"
     - ${INTENTS.LOG_CUSTOMER_PAYMENT}: "John paid 5000", "Receive payment from Sarah"
-    - ${INTENTS.GENERAL_CONVERSATION}: "Hello", "Thanks", "Who are you?", "Hi"
-    - ${INTENTS.SHOW_MAIN_MENU}: "Menu", "Show options", "Cancel"
-    - ${INTENTS.RECONCILE_TRANSACTION}: "Edit transaction", "Delete sale", "I made a mistake"
-    - ${INTENTS.GET_CUSTOMER_BALANCES}: "Who owes me?", "Debtors list"
+    - ${INTENTS.GENERAL_CONVERSATION}: "Hello", "Thanks", "Hi"
+    - ${INTENTS.SHOW_MAIN_MENU}: "Menu", "Cancel"
+    - ${INTENTS.RECONCILE_TRANSACTION}: "Edit transaction", "Delete sale"
+    - ${INTENTS.GET_CUSTOMER_BALANCES}: "Who owes me?"
     - MANAGE_TEAM: "Add staff", "Invite employee", "Create login for my manager"
     - EXPORT_DATA: "Export my data", "Download excel", "Send me all records", "Backup"
 
     RULES:
     1. If Intent is ${INTENTS.GENERATE_REPORT}:
        - Context MUST include "reportType": "SALES", "EXPENSES", "PNL", "INVENTORY", or "COGS".
-       - Example: "Expense report" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "EXPENSES"}}
-       - If unspecified ("Generate report"), "reportType" is null.
-    
-    2. Dates: Calculate "startDate" and "endDate" (YYYY-MM-DD) based on user input (e.g., "last month", "today"). Default to "this_month".
-
-    3. General Conversation:
-       - If the user says "Hello" or asks a question, set intent to ${INTENTS.GENERAL_CONVERSATION}.
-       - You MUST provide a "generatedReply" string in the context.
-    
-    4. MANAGE_TEAM: Only if user wants to add/invite someone.
+       - Dates: Calculate "startDate" and "endDate" (YYYY-MM-DD). Default "this_month".
+    2. General Conversation: Provide "generatedReply".
+    3. MANAGE_TEAM: Only if user wants to add/invite someone.
 
     Return JSON format: {"intent": "...", "context": {...}}
     `;
@@ -225,7 +212,6 @@ export async function getIntent(text) {
     const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: text }];
     let result = await callDeepSeek(messages);
     
-    // Post-processing to clean up extracted numbers
     if (result.context) {
         if (result.context.amount) result.context.amount = parsePrice(result.context.amount);
         if (result.context.totalAmount) result.context.totalAmount = parsePrice(result.context.totalAmount);
@@ -246,10 +232,10 @@ export async function getFinancialInsight(pnlData, currency) {
 export async function gatherSaleDetails(conversationHistory, existingProduct = null, isService = false) { 
     const today = new Date().toISOString().split('T')[0];
     const productInfo = isService 
-        ? "The user confirmed this is a service." 
-        : (existingProduct ? `Existing product: "${existingProduct.productName}", Price: ${existingProduct.sellingPrice}.` : 'New product/service.');
+        ? "Service sale." 
+        : (existingProduct ? `Product: "${existingProduct.productName}", Price: ${existingProduct.sellingPrice}.` : 'New product.');
 
-    const systemPrompt = `You are a bookkeeping assistant logging a sale. TODAY: ${today}.
+    const systemPrompt = `Bookkeeping assistant logging a sale. TODAY: ${today}.
     CONTEXT: ${productInfo}
     GOAL: Collect 'items' (array of {productName, quantity, pricePerUnit}), 'customerName', and 'saleType' (Cash/Credit/Bank).
     
@@ -257,19 +243,12 @@ export async function gatherSaleDetails(conversationHistory, existingProduct = n
     1. Extract details. Default quantity is 1.
     2. If product exists, use its price if user doesn't specify.
     3. Once you have an item, add it to 'items'.
-    4. If 'saleType' is CREDIT, listen closely for a due date (e.g., "pay next friday", "due 25th").
-    5. If mentioned, calculate 'dueDate' as YYYY-MM-DD.
-    6. Ask "Anything else?" after adding items.
-    7. ONLY when user says "done"/"no", return {"status": "complete", "data": {...}}.
-    8. Otherwise return {"status": "incomplete", "reply": "Next question..."}.
-    
-    Return JSON format:
-    {"status": "complete"/"incomplete", "data": {"items": [], "customerName": "...", "saleType": "...", "dueDate": "YYYY-MM-DD"}, "reply": "..."}`;
+    4. If 'saleType' is CREDIT, listen for a due date (e.g., "pay next friday"). Calculate 'dueDate'.
+    5. Return JSON: {"status": "complete"/"incomplete", "data": {"items": [], "customerName": "...", "saleType": "...", "dueDate": "YYYY-MM-DD"}, "reply": "..."}`;
 
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     let response = await callDeepSeek(messages, 0.5);
     
-    // Ensure numeric values
     if (response.status === 'complete' && response.data && response.data.items) {
         response.data.items = response.data.items.map(item => ({
             ...item,
@@ -281,37 +260,25 @@ export async function gatherSaleDetails(conversationHistory, existingProduct = n
 }
 
 export async function gatherExpenseDetails(conversationHistory) {
-    const systemPrompt = `You are a smart bookkeeping assistant. Goal: Log expense (Category, Amount, Description).
-    RULES:
-    1. **Auto-Categorize** based on description (e.g. "fuel" -> "Transportation").
-    2. Return {"status": "complete", "data": {"category": "...", "amount": "...", "description": "..."}} when ready.
-    3. Otherwise {"status": "incomplete", "reply": "Question..."}.
-    Return JSON.`;
-
+    const systemPrompt = `Log expense (Category, Amount, Description). Auto-Categorize. 
+    Return JSON: {"status": "complete"/"incomplete", "data": {...}, "reply": "..."}`;
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     let response = await callDeepSeek(messages, 0.5);
-
-    if (response.status === 'complete' && response.data) {
-        response.data.amount = parsePrice(response.data.amount);
-    }
+    if (response.status === 'complete' && response.data) response.data.amount = parsePrice(response.data.amount);
     return { ...response, memory: [...conversationHistory, { role: 'assistant', content: JSON.stringify(response) }] };
 }
 
 export async function gatherProductDetails(conversationHistory, existingProduct = null) {
     const existingDataInfo = existingProduct 
-        ? `Existing product: Cost ${existingProduct.costPrice}, Sell ${existingProduct.sellingPrice}.`
+        ? `Existing: Cost ${existingProduct.costPrice}, Sell ${existingProduct.sellingPrice}.`
         : 'New product.';
 
-    const systemPrompt = `Inventory Manager. Goal: Add/Update product.
+    const systemPrompt = `Inventory Manager. Add/Update product.
     FIELDS: productName, quantityAdded, costPrice, sellingPrice, reorderLevel.
     CONTEXT: ${existingDataInfo}
     RULES:
-    1. If user says "same price", use existing data.
-    2. If user says "alert me at 10" or "warn when low", set "reorderLevel".
-    3. Default reorderLevel is 5 if not specified.
-    4. Return {"status": "complete", "data": {...}} when ready.
-    5. Otherwise {"status": "incomplete", "reply": "..."}.
-    Return JSON.`;
+    1. If user says "alert me at 10", set "reorderLevel": 10.
+    2. Return JSON: {"status": "complete"/"incomplete", "data": {...}, "reply": "..."}`;
 
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     let response = await callDeepSeek(messages, 0.5);
@@ -320,17 +287,15 @@ export async function gatherProductDetails(conversationHistory, existingProduct 
          response.data.costPrice = parsePrice(response.data.costPrice);
          response.data.sellingPrice = parsePrice(response.data.sellingPrice);
          response.data.quantityAdded = parseInt(response.data.quantityAdded, 10);
-         if (response.data.reorderLevel) {
-             response.data.reorderLevel = parseInt(response.data.reorderLevel, 10);
-         }
+         if (response.data.reorderLevel) response.data.reorderLevel = parseInt(response.data.reorderLevel, 10);
     }
     return { ...response, memory: [...conversationHistory, { role: 'assistant', content: JSON.stringify(response) }] };
 }
 
+// [FIXED] Now specifically asks for 'reply' to prevent empty message errors
 export async function gatherPaymentDetails(conversationHistory, userCurrency) {
-    const systemPrompt = `Log Customer Payment. Need: "customerName", "amount".
-    Assume currency is ${userCurrency}.
-    Return JSON: {"status": "complete"/"incomplete", ...}`;
+    const systemPrompt = `Log Customer Payment. Need: "customerName", "amount". Currency: ${userCurrency}. 
+    Return JSON: {"status": "complete"/"incomplete", "data": {"customerName": "...", "amount": "..."}, "reply": "Question to ask user..."}`;
 
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     let response = await callDeepSeek(messages, 0.5);
@@ -341,10 +306,10 @@ export async function gatherPaymentDetails(conversationHistory, userCurrency) {
     return { ...response, memory: [...conversationHistory, { role: 'assistant', content: JSON.stringify(response) }] };
 }
 
+// [FIXED] Now specifically asks for 'reply'
 export async function gatherBankAccountDetails(conversationHistory, userCurrency) {
-    const systemPrompt = `Add Bank Account. Need: "bankName", "openingBalance".
-    Assume currency is ${userCurrency}.
-    Return JSON: {"status": "complete"/"incomplete", ...}`;
+    const systemPrompt = `Add Bank Account. Need: "bankName", "openingBalance". Currency: ${userCurrency}. 
+    Return JSON: {"status": "complete"/"incomplete", "data": {"bankName": "...", "openingBalance": "..."}, "reply": "Question to ask user..."}`;
 
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     let response = await callDeepSeek(messages, 0.5);

@@ -5,11 +5,10 @@ import { generateInvoice } from '../services/pdfService.js';
 import { uploadMedia, sendDocument, sendTextMessage, sendInteractiveButtons, sendInteractiveList, sendMainMenu, setTypingIndicator, sendAddBankFlow } from '../api/whatsappService.js';
 import { USER_STATES, INTENTS } from '../utils/constants.js';
 import logger from '../utils/logger.js';
-import { handleMessage } from './messageHandler.js';
-import { getAllBankAccounts } from '../db/bankService.js'; // [NEW]
+import { handleMessage, askForBankSelection } from './messageHandler.js'; // [UPDATED] Imported askForBankSelection
+import { getAllBankAccounts } from '../db/bankService.js'; 
 import { ObjectId } from 'mongodb';
 
-// Import Managers
 import * as TransactionManager from '../services/TransactionManager.js';
 import * as InventoryManager from '../services/InventoryManager.js';
 import { executeTask } from './taskHandler.js'; 
@@ -37,7 +36,6 @@ export async function handleInteractiveMessage(message) {
 
 async function handleButtonReply(user, buttonId, originalMessage) {
     switch (user.state) {
-        // [NEW] BANK MENU HANDLER
         case USER_STATES.AWAITING_BANK_MENU_SELECTION:
             if (buttonId === 'bank_action:add') {
                 if (user.role === 'STAFF') {
@@ -88,6 +86,11 @@ async function handleButtonReply(user, buttonId, originalMessage) {
         case USER_STATES.AWAITING_BANK_SELECTION_CUST_PAYMENT:
             await handleBankSelection(user, buttonId, INTENTS.LOG_CUSTOMER_PAYMENT);
             break;
+        // [NEW] Bulk Import Bank Selection
+        case USER_STATES.AWAITING_BANK_SELECTION_BULK:
+            await handleBankSelection(user, buttonId, INTENTS.ADD_PRODUCTS_FROM_LIST);
+            break;
+
         case USER_STATES.AWAITING_SALE_TYPE_CONFIRMATION:
             await handleSaleTypeConfirmation(user, buttonId);
             break;
@@ -109,7 +112,6 @@ async function handleButtonReply(user, buttonId, originalMessage) {
 }
 
 async function handleListReply(user, listId, originalMessage) {
-    // [NEW] VIEW BALANCE HANDLER
     if (listId.startsWith('view_balance:')) {
         const bankId = listId.split(':')[1];
         const banks = await getAllBankAccounts(user._id);
@@ -125,13 +127,13 @@ async function handleListReply(user, listId, originalMessage) {
         return;
     }
 
-    // CHECK FOR TRANSACTION BANK SELECTION
     if (listId.startsWith('select_bank:')) {
         let intent;
         if (user.state === USER_STATES.AWAITING_BANK_SELECTION_SALE) intent = INTENTS.LOG_SALE;
         else if (user.state === USER_STATES.AWAITING_BANK_SELECTION_EXPENSE) intent = INTENTS.LOG_EXPENSE;
         else if (user.state === USER_STATES.AWAITING_BANK_SELECTION_PURCHASE) intent = INTENTS.ADD_PRODUCT;
         else if (user.state === USER_STATES.AWAITING_BANK_SELECTION_CUST_PAYMENT) intent = INTENTS.LOG_CUSTOMER_PAYMENT;
+        else if (user.state === USER_STATES.AWAITING_BANK_SELECTION_BULK) intent = INTENTS.ADD_PRODUCTS_FROM_LIST;
 
         if (intent) {
             await handleBankSelection(user, listId, intent);
@@ -160,12 +162,24 @@ async function handleBankSelection(user, buttonId, intent) {
     const [action, bankIdStr] = buttonId.split(':');
     if (action !== 'select_bank') return;
 
-    const transactionData = user.stateContext.transactionData;
+    let transactionData = user.stateContext.transactionData;
+    let linkedBankId = null;
     
     if (bankIdStr !== 'none') {
-         transactionData.linkedBankId = new ObjectId(bankIdStr);
+         linkedBankId = new ObjectId(bankIdStr);
+    }
+
+    // Apply bank ID to the transaction data
+    if (intent === INTENTS.ADD_PRODUCTS_FROM_LIST) {
+        // Bulk import: transactionData is actually { products: [...] } but saved as products in state
+        // We need to retrieve it from state first
+        // Actually, handleBulkProductConfirmation saved it as user.stateContext.products
+        // So we will rebuild transactionData here
+        transactionData = { products: user.stateContext.products, linkedBankId };
+    } else if (intent === INTENTS.LOG_EXPENSE && transactionData.expenses) {
+        transactionData.expenses = transactionData.expenses.map(e => ({ ...e, linkedBankId }));
     } else {
-        transactionData.linkedBankId = null; 
+        transactionData.linkedBankId = linkedBankId;
     }
 
     await sendTextMessage(user.whatsappId, "Great, noting that down... 📝");
@@ -179,8 +193,15 @@ async function handleBankSelection(user, buttonId, intent) {
             return; 
 
         } else if (intent === INTENTS.LOG_EXPENSE) {
-            await TransactionManager.logExpense(user, transactionData);
-            await sendTextMessage(user.whatsappId, "✅ Expense logged successfully.");
+            if (transactionData.expenses) {
+                for (const exp of transactionData.expenses) {
+                    await TransactionManager.logExpense(user, exp);
+                }
+                await sendTextMessage(user.whatsappId, `✅ ${transactionData.expenses.length} expenses logged successfully.`);
+            } else {
+                await TransactionManager.logExpense(user, transactionData);
+                await sendTextMessage(user.whatsappId, "✅ Expense logged successfully.");
+            }
 
         } else if (intent === INTENTS.LOG_CUSTOMER_PAYMENT) {
             await TransactionManager.logCustomerPayment(user, transactionData);
@@ -189,6 +210,20 @@ async function handleBankSelection(user, buttonId, intent) {
         } else if (intent === INTENTS.ADD_PRODUCT) {
             const product = await InventoryManager.addProduct(user, transactionData);
             await sendTextMessage(user.whatsappId, `✅ Stock updated for "${product.productName}".`);
+        
+        } else if (intent === INTENTS.ADD_PRODUCTS_FROM_LIST) {
+            const productsToAdd = transactionData.products;
+            // Add bank ID to each product item
+            const enrichedProducts = productsToAdd.map(p => ({ ...p, linkedBankId: transactionData.linkedBankId }));
+            
+            await sendTextMessage(user.whatsappId, "Adding products... 📦");
+            const result = await InventoryManager.addBulkProducts(user, enrichedProducts);
+            
+            if (result.errors.length > 0) {
+                await sendTextMessage(user.whatsappId, `✅ Added ${result.added.length} items.\n⚠️ Failed to add: ${result.errors.join(', ')}`);
+            } else {
+                await sendTextMessage(user.whatsappId, `✅ Successfully added all ${result.added.length} products!`);
+            }
         }
 
         await updateUserState(user.whatsappId, USER_STATES.IDLE);
@@ -205,6 +240,22 @@ async function handleBulkProductConfirmation(user, buttonId) {
     if (buttonId === 'confirm_bulk_add') {
         const productsToAdd = user.stateContext.products;
         if (productsToAdd && productsToAdd.length > 0) {
+            // [UPDATED] Trigger Bank Selection
+            const banks = await getAllBankAccounts(user._id);
+            if (banks.length > 0) {
+                // Store products in state so handleBankSelection can pick them up
+                // The bank prompt expects transactionData to exist or we use state.products
+                // We transition to AWAITING_BANK_SELECTION_BULK
+                await askForBankSelection(
+                    user, 
+                    { products: productsToAdd }, 
+                    USER_STATES.AWAITING_BANK_SELECTION_BULK, 
+                    'Paid for stock from which account?'
+                );
+                return;
+            }
+
+            // No banks? Proceed as before
             await sendTextMessage(user.whatsappId, "Adding products... 📦");
             const result = await InventoryManager.addBulkProducts(user, productsToAdd);
             
@@ -275,8 +326,6 @@ async function handleSaleTypeConfirmation(user, buttonId) {
         await handleMessage({ from: user.whatsappId, id: null, text: { body: memory[memory.length -1]?.content || "" }, type: 'text'});
     }
 }
-
-// --- RECONCILIATION & EDITS ---
 
 async function handleTransactionSelection(user, listId) {
     const [action, txIdStr] = listId.split(':');

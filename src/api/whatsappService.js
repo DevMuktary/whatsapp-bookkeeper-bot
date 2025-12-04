@@ -18,7 +18,6 @@ async function sendMessage(data) {
   }
 }
 
-// [UPDATED] "Clever" combination of Read Receipt + Typing Indicator logic
 export async function setTypingIndicator(to, action, messageId = null) {
     if (!messageId) {
         return;
@@ -90,7 +89,7 @@ export async function sendDocument(to, mediaId, filename, caption) {
 }
 
 export async function sendInteractiveButtons(to, bodyText, buttons) {
-  const formattedButtons = buttons.slice(0, 3).map(btn => ({ // WhatsApp allows max 3 buttons
+  const formattedButtons = buttons.slice(0, 3).map(btn => ({ 
     type: 'reply',
     reply: { id: btn.id, title: btn.title }
   }));
@@ -131,10 +130,43 @@ export async function sendInteractiveList(to, headerText, bodyText, buttonText, 
     await sendMessage(data);
 }
 
-/**
- * Sends a structured main menu of options to the user using an interactive list.
- * @param {string} to The recipient's WhatsApp ID.
- */
+// [NEW] Function to send the Onboarding Flow
+export async function sendOnboardingFlow(to) {
+    const data = {
+        messaging_product: "whatsapp",
+        to: to,
+        type: "interactive",
+        interactive: {
+            type: "flow",
+            header: {
+                type: "text",
+                text: "Welcome to Fynax Bookkeeper! 📊"
+            },
+            body: {
+                text: "Please set up your account to start logging sales."
+            },
+            footer: {
+                text: "Takes 30 seconds"
+            },
+            action: {
+                name: "flow",
+                parameters: {
+                    mode: "published", // Use "draft" if you haven't published yet
+                    flow_message_version: "3",
+                    flow_token: "onboarding_token",
+                    flow_id: config.whatsapp.flowId,
+                    flow_cta: "🚀 Setup Account",
+                    flow_action: "navigate",
+                    flow_action_payload: {
+                        screen: "SIGN_UP_SCREEN"
+                    }
+                }
+            }
+        }
+    };
+    await sendMessage(data);
+}
+
 export async function sendMainMenu(to) {
     const sections = [
         {
@@ -160,10 +192,6 @@ export async function sendMainMenu(to) {
     );
 }
 
-/**
- * Sends a menu of available report types.
- * @param {string} to The recipient's WhatsApp ID.
- */
 export async function sendReportMenu(to) {
     const sections = [
         {

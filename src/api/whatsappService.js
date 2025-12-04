@@ -130,7 +130,7 @@ export async function sendInteractiveList(to, headerText, bodyText, buttonText, 
     await sendMessage(data);
 }
 
-// [NEW] Function to send the Onboarding Flow
+// Function to send the Onboarding Flow
 export async function sendOnboardingFlow(to) {
     const data = {
         messaging_product: "whatsapp",
@@ -151,7 +151,7 @@ export async function sendOnboardingFlow(to) {
             action: {
                 name: "flow",
                 parameters: {
-                    mode: "published", // Use "draft" if you haven't published yet
+                    mode: "published", 
                     flow_message_version: "3",
                     flow_token: "onboarding_token",
                     flow_id: config.whatsapp.flowId,
@@ -159,6 +159,43 @@ export async function sendOnboardingFlow(to) {
                     flow_action: "navigate",
                     flow_action_payload: {
                         screen: "SIGN_UP_SCREEN"
+                    }
+                }
+            }
+        }
+    };
+    await sendMessage(data);
+}
+
+// [NEW] Function to send the ADD BANK Flow
+export async function sendAddBankFlow(to) {
+    const data = {
+        messaging_product: "whatsapp",
+        to: to,
+        type: "interactive",
+        interactive: {
+            type: "flow",
+            header: {
+                type: "text",
+                text: "Add Bank Account 🏦"
+            },
+            body: {
+                text: "Add a new bank or mobile money account to track your balances."
+            },
+            footer: {
+                text: "Secure & Private"
+            },
+            action: {
+                name: "flow",
+                parameters: {
+                    mode: "published", 
+                    flow_message_version: "3",
+                    flow_token: "add_bank_token",
+                    flow_id: config.whatsapp.flowId, // Same ID if screens are merged, or change if different
+                    flow_cta: "➕ Add Account",
+                    flow_action: "navigate",
+                    flow_action_payload: {
+                        screen: "ADD_BANK_SCREEN" // Matches your new JSON
                     }
                 }
             }

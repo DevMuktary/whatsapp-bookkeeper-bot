@@ -189,34 +189,43 @@ export async function getIntent(text) {
 
     INTENTS:
     - ${INTENTS.LOG_SALE}: "Sold 5 rice", "Credit sale to John"
-    - ${INTENTS.LOG_EXPENSE}: "Bought fuel", "Paid rent"
-    - ${INTENTS.ADD_PRODUCT}: "Restock rice", "New item"
+    - ${INTENTS.LOG_EXPENSE}: "Bought fuel 500", "Paid shop rent"
+    - ${INTENTS.ADD_PRODUCT}: "Restock rice 50 bags", "New item indomie 2000"
     - ${INTENTS.ADD_PRODUCTS_FROM_LIST}: "Add these: 1. Rice, 2. Beans" (Multi-line or bulk list)
     - ${INTENTS.ADD_MULTIPLE_PRODUCTS}: "I want to add many items"
-    - ${INTENTS.CHECK_STOCK}: "How many rice left?"
-    - ${INTENTS.GENERATE_REPORT}: "Send me a report", "P&L", "Sales report"
-    - ${INTENTS.GET_FINANCIAL_SUMMARY}: "Total sales today"
-    - ${INTENTS.ADD_BANK_ACCOUNT}: "Add bank UBA"
-    - ${INTENTS.LOG_CUSTOMER_PAYMENT}: "John paid 5000"
-    - ${INTENTS.GENERAL_CONVERSATION}: "Hello", "Thanks", "Hi"
-    - ${INTENTS.SHOW_MAIN_MENU}: "Menu", "Cancel"
-    - ${INTENTS.RECONCILE_TRANSACTION}: "Edit transaction", "Delete sale"
-    - ${INTENTS.GET_CUSTOMER_BALANCES}: "Who owes me?"
+    - ${INTENTS.CHECK_STOCK}: "How many rice left?", "Count stock"
+    - ${INTENTS.GENERATE_REPORT}: "Send me a report", "Expense report", "Sales report", "P&L", "Profit and Loss", "Report for last month"
+    - ${INTENTS.GET_FINANCIAL_SUMMARY}: "Total sales today", "How much did I spend?"
+    - ${INTENTS.ADD_BANK_ACCOUNT}: "Add bank UBA", "New account access bank"
+    - ${INTENTS.LOG_CUSTOMER_PAYMENT}: "John paid 5000", "Receive payment from Sarah"
+    - ${INTENTS.GENERAL_CONVERSATION}: "Hello", "Thanks", "Who are you?", "Hi"
+    - ${INTENTS.SHOW_MAIN_MENU}: "Menu", "Show options", "Cancel"
+    - ${INTENTS.RECONCILE_TRANSACTION}: "Edit transaction", "Delete sale", "I made a mistake"
+    - ${INTENTS.GET_CUSTOMER_BALANCES}: "Who owes me?", "Debtors list"
     - MANAGE_TEAM: "Add staff", "Invite employee", "Create login for my manager"
+    - EXPORT_DATA: "Export my data", "Download excel", "Send me all records", "Backup"
 
     RULES:
     1. If Intent is ${INTENTS.GENERATE_REPORT}:
        - Context MUST include "reportType": "SALES", "EXPENSES", "PNL", "INVENTORY", or "COGS".
-       - Dates: Calculate "startDate" and "endDate" (YYYY-MM-DD). Default "this_month".
-    2. General Conversation: Provide "generatedReply".
-    3. MANAGE_TEAM: Only if user wants to add/invite someone.
+       - Example: "Expense report" -> {"intent": "${INTENTS.GENERATE_REPORT}", "context": {"reportType": "EXPENSES"}}
+       - If unspecified ("Generate report"), "reportType" is null.
+    
+    2. Dates: Calculate "startDate" and "endDate" (YYYY-MM-DD) based on user input (e.g., "last month", "today"). Default to "this_month".
 
-    Return JSON: {"intent": "...", "context": {...}}
+    3. General Conversation:
+       - If the user says "Hello" or asks a question, set intent to ${INTENTS.GENERAL_CONVERSATION}.
+       - You MUST provide a "generatedReply" string in the context.
+    
+    4. MANAGE_TEAM: Only if user wants to add/invite someone.
+
+    Return JSON format: {"intent": "...", "context": {...}}
     `;
 
     const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: text }];
     let result = await callDeepSeek(messages);
     
+    // Post-processing to clean up extracted numbers
     if (result.context) {
         if (result.context.amount) result.context.amount = parsePrice(result.context.amount);
         if (result.context.totalAmount) result.context.totalAmount = parsePrice(result.context.totalAmount);
@@ -229,7 +238,7 @@ export async function getIntent(text) {
 }
 
 export async function getFinancialInsight(pnlData, currency) {
-    const systemPrompt = `Analyze this P&L data and give one friendly business tip. Data: ${JSON.stringify(pnlData)}`;
+    const systemPrompt = `Analyze this P&L data and give one friendly, short business tip. Data: ${JSON.stringify(pnlData)}`;
     const messages = [{ role: 'system', content: systemPrompt }];
     return await callDeepSeek(messages, 0.7, false);
 }
@@ -237,18 +246,18 @@ export async function getFinancialInsight(pnlData, currency) {
 export async function gatherSaleDetails(conversationHistory, existingProduct = null, isService = false) { 
     const today = new Date().toISOString().split('T')[0];
     const productInfo = isService 
-        ? "Service sale." 
-        : (existingProduct ? `Product: "${existingProduct.productName}", Price: ${existingProduct.sellingPrice}.` : 'New product.');
+        ? "The user confirmed this is a service." 
+        : (existingProduct ? `Existing product: "${existingProduct.productName}", Price: ${existingProduct.sellingPrice}.` : 'New product/service.');
 
-    const systemPrompt = `Bookkeeping assistant logging a sale. TODAY: ${today}.
+    const systemPrompt = `You are a bookkeeping assistant logging a sale. TODAY: ${today}.
     CONTEXT: ${productInfo}
-    GOAL: Collect 'items' (array of {productName, quantity, pricePerUnit}), 'customerName', 'saleType'.
+    GOAL: Collect 'items' (array of {productName, quantity, pricePerUnit}), 'customerName', and 'saleType' (Cash/Credit/Bank).
     
     RULES:
     1. Extract details. Default quantity is 1.
     2. If product exists, use its price if user doesn't specify.
     3. Once you have an item, add it to 'items'.
-    4. If 'saleType' is CREDIT, listen for a due date (e.g., "pay next friday", "due 25th").
+    4. If 'saleType' is CREDIT, listen closely for a due date (e.g., "pay next friday", "due 25th").
     5. If mentioned, calculate 'dueDate' as YYYY-MM-DD.
     6. Ask "Anything else?" after adding items.
     7. ONLY when user says "done"/"no", return {"status": "complete", "data": {...}}.

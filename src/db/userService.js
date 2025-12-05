@@ -9,30 +9,38 @@ const usersCollection = () => getDB().collection('users');
 
 // --- REDIS SETUP ---
 const redis = new IORedis(config.redis.url, config.redis.options);
-const CACHE_TTL = 600; 
+const CACHE_TTL = 600; // 10 minutes
 
 redis.on('error', (err) => {
-    // Suppress connection errors here
+    // Suppress connection errors here to avoid spamming logs
 });
 
 const getKey = (type, id) => `user:${type}:${id.toString()}`;
 
-// [NEW] GATEKEEPER FUNCTION
+// [UPDATED] GATEKEEPER FUNCTION (Fixes the NaN bug)
 export function checkSubscriptionAccess(user) {
     const now = new Date();
     
+    // Helper to ensure we have a valid Date object (fixes Redis string issue)
+    const getValidDate = (dateVal) => dateVal ? new Date(dateVal) : null;
+
+    const trialEnd = getValidDate(user.trialEndsAt);
+    const subEnd = getValidDate(user.subscriptionExpiresAt);
+
     // 1. Check Trial
-    if (user.trialEndsAt && new Date(user.trialEndsAt) > now) {
-        return { allowed: true, type: 'TRIAL', daysLeft: Math.ceil((user.trialEndsAt - now) / (1000 * 60 * 60 * 24)) };
+    if (trialEnd && trialEnd > now) {
+        // Force new Date() on trialEnd before subtraction
+        const diffTime = trialEnd.getTime() - now.getTime();
+        const daysLeft = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        return { allowed: true, type: 'TRIAL', daysLeft: daysLeft };
     }
 
     // 2. Check Active Subscription
-    if (user.subscriptionExpiresAt && new Date(user.subscriptionExpiresAt) > now) {
-        return { allowed: true, type: 'ACTIVE', daysLeft: Math.ceil((user.subscriptionExpiresAt - now) / (1000 * 60 * 60 * 24)) };
+    if (subEnd && subEnd > now) {
+        const diffTime = subEnd.getTime() - now.getTime();
+        const daysLeft = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        return { allowed: true, type: 'ACTIVE', daysLeft: daysLeft };
     }
-
-    // 3. Check Grace Period (e.g., 24 hours after expiry)
-    // Optional: Add logic here if desired.
 
     return { allowed: false, type: 'EXPIRED' };
 }
@@ -48,7 +56,7 @@ export async function findOrCreateUser(whatsappId) {
     if (!user) {
       logger.info(`New user detected: ${whatsappId}. Creating new user record.`);
       
-      // [UPDATED] Initialize Trial (7 Days)
+      // Initialize Trial (7 Days)
       const trialEnd = new Date();
       trialEnd.setDate(trialEnd.getDate() + 7);
 
@@ -65,12 +73,12 @@ export async function findOrCreateUser(whatsappId) {
         stateContext: {},
         otp: null,
         otpExpires: null,
-        // [NEW] Subscription Fields
+        // Subscription Fields
         subscriptionStatus: 'TRIAL',
         trialEndsAt: trialEnd,
         subscriptionExpiresAt: null,
         paystackCustomerCode: null,
-        dedicatedAccount: null, // For NGN Static Account
+        dedicatedAccount: null, 
         createdAt: new Date(),
         updatedAt: new Date(),
       };

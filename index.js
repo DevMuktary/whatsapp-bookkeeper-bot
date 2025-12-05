@@ -3,7 +3,8 @@ import config from './src/config/index.js';
 import logger from './src/utils/logger.js';
 import whatsappWebhook from './src/webhooks/whatsapp.js';
 import { connectToDB } from './src/db/connection.js';
-import { startDailyScheduler } from './src/services/scheduler.js'; // [NEW]
+import { startDailyScheduler } from './src/services/scheduler.js';
+import { configureWhatsappCommands } from './src/services/whatsappSetup.js'; // [NEW]
 
 // Initialize Express app
 const app = express();
@@ -23,8 +24,11 @@ try {
   await connectToDB();
   logger.info('Successfully connected to the database.');
   
-  // [NEW] Start the Daily Scheduler after DB connects
+  // Start Background Services
   startDailyScheduler();
+  
+  // [NEW] Setup WhatsApp Menu (Runs once on startup)
+  configureWhatsappCommands();
 
 } catch (error) {
   logger.error('Failed to connect to the database on startup. Exiting.', error);

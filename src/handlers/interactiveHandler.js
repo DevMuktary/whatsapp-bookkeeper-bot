@@ -6,8 +6,9 @@ import { uploadMedia, sendDocument, sendTextMessage, sendInteractiveButtons, sen
 import { USER_STATES, INTENTS } from '../utils/constants.js';
 import logger from '../utils/logger.js';
 import { handleMessage } from './messageHandler.js';
-import { askForBankSelection } from './actionHandler.js'; // [UPDATED] Import from new file
+import { askForBankSelection } from './actionHandler.js'; 
 import { getAllBankAccounts } from '../db/bankService.js'; 
+import { createDedicatedAccount, initializePayment } from '../services/paymentService.js'; // [NEW IMPORT]
 import { ObjectId } from 'mongodb';
 
 import * as TransactionManager from '../services/TransactionManager.js';
@@ -36,6 +37,32 @@ export async function handleInteractiveMessage(message) {
 }
 
 async function handleButtonReply(user, buttonId, originalMessage) {
+    // [NEW] Payment Handling
+    if (buttonId.startsWith('payment_method:')) {
+        const type = buttonId.split(':')[1];
+        if (type === 'ngn') {
+            await sendTextMessage(user.whatsappId, "Generating your dedicated account number... ⏳");
+            try {
+                const account = await createDedicatedAccount(user);
+                await sendTextMessage(user.whatsappId, 
+                    `🏦 **Bank Transfer Details**\n\nPlease transfer **₦7,500** to:\n\nBank: **${account.bankName}**\nAccount: **${account.accountNumber}**\nName: **${account.accountName}**\n\nOnce you transfer, your subscription will activate automatically within minutes!`
+                );
+            } catch (e) {
+                await sendTextMessage(user.whatsappId, "Error creating account. Please try again later.");
+            }
+        } else if (type === 'usd') {
+            await sendTextMessage(user.whatsappId, "Generating secure payment link... ⏳");
+            try {
+                const link = await initializePayment(user, 'USD');
+                await sendTextMessage(user.whatsappId, `🌍 **Pay securely via Card**\n\nClick here to pay $5.00: ${link}`);
+            } catch (e) {
+                await sendTextMessage(user.whatsappId, "Error creating link.");
+            }
+        }
+        await updateUserState(user.whatsappId, USER_STATES.IDLE);
+        return;
+    }
+
     switch (user.state) {
         case USER_STATES.AWAITING_BANK_MENU_SELECTION:
             if (buttonId === 'bank_action:add') {
@@ -112,6 +139,16 @@ async function handleButtonReply(user, buttonId, originalMessage) {
 }
 
 async function handleListReply(user, listId, originalMessage) {
+    if (listId === 'check subscription') {
+        await handleMessage({
+            from: originalMessage.from,
+            id: originalMessage.id,
+            text: { body: 'check subscription' },
+            type: 'text'
+        });
+        return;
+    }
+
     if (listId.startsWith('view_balance:')) {
         const bankId = listId.split(':')[1];
         const banks = await getAllBankAccounts(user._id);
@@ -156,7 +193,12 @@ async function handleListReply(user, listId, originalMessage) {
     }
 }
 
-// --- HANDLERS ---
+// ... (Rest of functions: handleBankSelection, etc. remain unchanged. Copy from previous ActionHandler) ...
+// For brevity, assuming the rest of the file is the same as the previous version provided.
+// If you need the full file again, I can provide it, but it's very long. 
+// Just ensure `handleButtonReply` and `handleListReply` logic above is pasted in.
+
+// --- RE-INSERTING THE REST FOR COMPLETENESS ---
 
 async function handleBankSelection(user, buttonId, intent) {
     const [action, bankIdStr] = buttonId.split(':');
@@ -169,10 +211,7 @@ async function handleBankSelection(user, buttonId, intent) {
          linkedBankId = new ObjectId(bankIdStr);
     }
 
-    // Apply bank ID to transaction data
     if (intent === INTENTS.ADD_PRODUCTS_FROM_LIST) {
-        // For bulk import, the products are likely in transactionData.products
-        // If not (due to state format), we default to empty array
         const productsToAdd = transactionData.products || [];
         transactionData = { 
             products: productsToAdd, 
@@ -214,9 +253,7 @@ async function handleBankSelection(user, buttonId, intent) {
             await sendTextMessage(user.whatsappId, `✅ Stock updated for "${product.productName}".`);
         
         } else if (intent === INTENTS.ADD_PRODUCTS_FROM_LIST) {
-            // Bulk Import Execution
             const productsToAdd = transactionData.products;
-            // Map bank ID to each item
             const enrichedProducts = productsToAdd.map(p => ({ 
                 ...p, 
                 linkedBankId: transactionData.linkedBankId,
@@ -252,17 +289,15 @@ async function handleBulkProductConfirmation(user, buttonId) {
             
             const banks = await getAllBankAccounts(user._id);
             if (banks.length > 0) {
-                // Trigger Bank Selection using helper from actionHandler
                 await askForBankSelection(
                     user, 
-                    { products: productsToAdd }, // Pass products to transactionData
+                    { products: productsToAdd }, 
                     USER_STATES.AWAITING_BANK_SELECTION_BULK, 
                     'Paid for stock from which account?'
                 );
                 return;
             }
 
-            // No banks? Proceed.
             await sendTextMessage(user.whatsappId, "Adding products... 📦");
             const result = await InventoryManager.addBulkProducts(user, productsToAdd);
             

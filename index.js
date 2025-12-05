@@ -1,6 +1,7 @@
 import express from 'express';
 import config from './src/config/index.js';
 import logger from './src/utils/logger.js';
+import paystackWebhook from './src/webhooks/paystack.js';
 import whatsappWebhook from './src/webhooks/whatsapp.js';
 import { connectToDB } from './src/db/connection.js';
 import { startDailyScheduler } from './src/services/scheduler.js';
@@ -37,6 +38,7 @@ try {
 
 // --- ROUTES ---
 app.use('/api/webhook', whatsappWebhook);
+app.use('/api/paystack', paystackWebhook); 
 
 // --- SERVER INITIALIZATION ---
 const PORT = config.port || 3000;

@@ -65,7 +65,6 @@ export async function uploadMedia(buffer, mimeType) {
 }
 
 export async function sendTextMessage(to, text) {
-  // Guard clause to prevent the (#100) error if text is empty/null
   if (!text) {
       logger.warn('Attempted to send empty text message. Skipping.');
       return;
@@ -136,7 +135,6 @@ export async function sendInteractiveList(to, headerText, bodyText, buttonText, 
     await sendMessage(data);
 }
 
-// Function to send the Onboarding Flow
 export async function sendOnboardingFlow(to) {
     if (!config.whatsapp.onboardingFlowId) {
         logger.error("Onboarding Flow ID is missing in config.");
@@ -155,7 +153,7 @@ export async function sendOnboardingFlow(to) {
                 text: "Welcome to Fynax Bookkeeper! 📊"
             },
             body: {
-                text: "Please set up your account to start logging sales."
+                text: "Please set up your account to start logging sales. You get 7 Days Free Trial!"
             },
             footer: {
                 text: "Takes 30 seconds"
@@ -166,7 +164,7 @@ export async function sendOnboardingFlow(to) {
                     mode: "published", 
                     flow_message_version: "3",
                     flow_token: "onboarding_token",
-                    flow_id: config.whatsapp.onboardingFlowId, // [UPDATED]
+                    flow_id: config.whatsapp.onboardingFlowId, 
                     flow_cta: "🚀 Setup Account",
                     flow_action: "navigate",
                     flow_action_payload: {
@@ -179,7 +177,6 @@ export async function sendOnboardingFlow(to) {
     await sendMessage(data);
 }
 
-// Function to send the ADD BANK Flow
 export async function sendAddBankFlow(to) {
     if (!config.whatsapp.bankFlowId) {
         logger.error("Bank Flow ID is missing in config.");
@@ -209,7 +206,7 @@ export async function sendAddBankFlow(to) {
                     mode: "published", 
                     flow_message_version: "3",
                     flow_token: "add_bank_token",
-                    flow_id: config.whatsapp.bankFlowId, // [UPDATED] Uses the dedicated Bank Flow ID
+                    flow_id: config.whatsapp.bankFlowId, 
                     flow_cta: "➕ Add Account",
                     flow_action: "navigate",
                     flow_action_payload: {
@@ -233,8 +230,8 @@ export async function sendMainMenu(to) {
                 { id: 'generate report', title: '📊 Generate a Report', description: 'Get a PDF report for your business.' },
                 { id: 'get financial insight', title: '💡 Get Financial Insight', description: 'Receive an AI-powered tip.' },
                 { id: 'edit a transaction', title: '✏️ Edit/Delete a Record', description: 'Correct a previous entry.' },
-                { id: 'log a customer payment', title: '💰 Log Customer Payment', description: 'Record a payment from a customer.' },
-                { id: 'manage bank accounts', title: '🏦 Manage Bank Accounts', description: 'Add or check bank balances.' },
+                // [NEW] Subscription Button
+                { id: 'check subscription', title: '💳 My Subscription', description: 'Check status or renew.' },
             ]
         }
     ];
@@ -266,5 +263,16 @@ export async function sendReportMenu(to) {
         'Which report would you like to generate? Please choose from the list.',
         'Select Report',
         sections
+    );
+}
+
+// [NEW] Payment Options
+export async function sendPaymentOptions(to) {
+    await sendInteractiveButtons(to, 
+        "💳 **Upgrade to Premium**\n\nChoose your location to see payment options:", 
+        [
+            { id: 'payment_method:ngn', title: '🇳🇬 Nigeria (₦7,500)' },
+            { id: 'payment_method:usd', title: '🌍 International ($5)' }
+        ]
     );
 }

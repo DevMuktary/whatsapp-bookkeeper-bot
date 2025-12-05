@@ -9,16 +9,12 @@ const openai = new OpenAI({ apiKey: config.openai.apiKey });
 
 // --- MEDIA HELPERS ---
 
-/**
- * Downloads media (audio/image) from WhatsApp servers.
- */
 async function downloadWhatsAppMedia(mediaId) {
     try {
         const urlRes = await axios.get(`https://graph.facebook.com/v20.0/${mediaId}`, {
             headers: { 'Authorization': `Bearer ${config.whatsapp.token}` }
         });
         const mediaUrl = urlRes.data.url;
-
         const mediaRes = await axios.get(mediaUrl, {
             responseType: 'arraybuffer',
             headers: { 'Authorization': `Bearer ${config.whatsapp.token}` }
@@ -33,13 +29,8 @@ async function downloadWhatsAppMedia(mediaId) {
 export async function transcribeAudio(mediaId) {
     try {
         const audioBuffer = await downloadWhatsAppMedia(mediaId);
-        // Create a File-like object for OpenAI
         const file = await OpenAI.toFile(audioBuffer, 'voice_note.ogg', { type: 'audio/ogg' });
-        
-        const transcription = await openai.audio.transcriptions.create({
-            file: file,
-            model: "whisper-1",
-        });
+        const transcription = await openai.audio.transcriptions.create({ file: file, model: "whisper-1" });
         return transcription.text;
     } catch (error) {
         logger.error('Audio transcription failed:', error);
@@ -124,7 +115,6 @@ async function callDeepSeek(messages, temperature = 0.1, enforceJson = true) {
       temperature: temperature,
     };
     
-    // Only add response_format if enforceJson is true AND the prompt requests JSON
     if (enforceJson && messages.some(m => m.role === 'system' && m.content.toLowerCase().includes('json'))) {
         payload.response_format = { type: "json_object" };
     }
@@ -134,35 +124,46 @@ async function callDeepSeek(messages, temperature = 0.1, enforceJson = true) {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${config.deepseek.apiKey}`
       },
-      timeout: 8000 // Timeout to prevent hanging
+      timeout: 8000 
     });
 
     const content = response.data.choices[0].message.content;
 
-    // JSON Parsing Logic
     if (enforceJson && typeof content === 'string' && content.trim().startsWith('{')) {
          try {
              return JSON.parse(content);
          } catch (parseError) {
-             logger.warn("AI response looked like JSON but failed to parse:", content);
+             logger.warn("AI response JSON parse error:", content);
              return content;
          }
     }
-
     return content;
 
   } catch (error) {
     logger.error('DeepSeek API Error:', error.message);
-    throw error; // Rethrow to be caught by caller
+    throw error; 
   }
 }
 
-// --- [UPDATED] CORE INTENT & ENTITY EXTRACTION ---
+// --- [UPDATED] CORE INTENT ---
 
 export async function getIntent(text) {
+    const t = text.toLowerCase().trim();
+
+    // 1. FAST PATH: Force strict keywords BEFORE asking AI
+    if (['menu', 'options', 'home', 'start', 'cancel', 'stop', 'exit'].includes(t)) {
+        return { intent: INTENTS.SHOW_MAIN_MENU, context: {} };
+    }
+    if (t === 'hi' || t === 'hello' || t === 'hey') {
+         return { intent: INTENTS.GENERAL_CONVERSATION, context: { generatedReply: "Hello! How can I help you today?" } };
+    }
+    if (t.includes('balance') && t.length < 20) {
+        return { intent: INTENTS.CHECK_BANK_BALANCE, context: {} };
+    }
+
+    // 2. AI PATH
     try {
         const today = new Date().toISOString().split('T')[0];
-        // [FIX] Strict rules added to System Prompt to prevent hallucination
         const systemPrompt = `You are an intent classifier. Respond ONLY with JSON.
         TODAY: ${today}
 
@@ -217,13 +218,7 @@ export async function getFinancialInsight(pnlData, currency) {
 
 export async function extractOnboardingDetails(text) {
   try {
-      const messages = [
-        {
-          role: 'system',
-          content: "You are an expert entity extractor. Respond ONLY with a JSON object: {\"businessName\": \"Name\", \"email\": \"user@example.com\"}. If not found, use null."
-        },
-        { role: 'user', content: text }
-      ];
+      const messages = [{ role: 'system', content: "Extract JSON: {\"businessName\", \"email\"}" }, { role: 'user', content: text }];
       return await callDeepSeek(messages);
   } catch (e) {
       logger.error("Error extracting onboarding details:", e);
@@ -233,16 +228,10 @@ export async function extractOnboardingDetails(text) {
 
 export async function extractCurrency(text) {
     try {
-        const messages = [
-            {
-                role: 'system',
-                content: "Identify the currency and return ISO 4217 code. JSON: {\"currency\": \"ISO_CODE\"}. Example: 'Naira' -> 'NGN'."
-            },
-            { role: 'user', content: text }
-        ];
+        const messages = [{ role: 'system', content: "Extract JSON: {\"currency\": \"ISO_CODE\"}" }, { role: 'user', content: text }];
         return await callDeepSeek(messages);
     } catch (e) {
-        return { currency: 'NGN' }; // Default fallback
+        return { currency: 'NGN' }; 
     }
 }
 

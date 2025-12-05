@@ -95,25 +95,24 @@ const parsePrice = (priceInput) => {
     return isNaN(value) ? NaN : value * multiplier;
 };
 
-// [NEW] Fallback Logic if AI Fails
+// [UPDATED] Robust Fallback Logic
 function getFallbackIntent(text) {
     const t = text.toLowerCase();
     
-    // Simple keyword matching for core intents
+    // Strict Keywords
+    if (t.includes('insight') || t.includes('tip') || t.includes('advice')) return { intent: INTENTS.GET_FINANCIAL_INSIGHT, context: {} };
     if (t.includes('sold') || t.includes('sale') || t.includes('sell')) return { intent: INTENTS.LOG_SALE, context: {} };
-    if (t.includes('bought') || t.includes('buy') || t.includes('expense') || t.includes('spent') || t.includes('paid')) return { intent: INTENTS.LOG_EXPENSE, context: {} };
+    if (t.includes('bought') || t.includes('expense') || t.includes('spent') || t.includes('paid')) return { intent: INTENTS.LOG_EXPENSE, context: {} };
     if (t.includes('stock') || t.includes('inventory') || t.includes('count')) return { intent: INTENTS.CHECK_STOCK, context: {} };
-    if (t.includes('menu') || t.includes('start') || t.includes('hi') || t.includes('hello')) return { intent: INTENTS.SHOW_MAIN_MENU, context: {} };
+    if (t.includes('menu') || t.includes('start') || t.includes('hi') || t.includes('options')) return { intent: INTENTS.SHOW_MAIN_MENU, context: {} };
     if (t.includes('balance') || t.includes('how much in')) return { intent: INTENTS.CHECK_BANK_BALANCE, context: {} };
     if (t.includes('owe') || t.includes('debt') || t.includes('debtor')) return { intent: INTENTS.GET_CUSTOMER_BALANCES, context: {} };
-    if (t.includes('report') || t.includes('pdf')) return { intent: INTENTS.GENERATE_REPORT, context: {} };
-    if (t.includes('insight') || t.includes('tip')) return { intent: INTENTS.GET_FINANCIAL_INSIGHT, context: {} };
+    if (t.includes('report') || t.includes('pdf') || t.includes('p&l') || t.includes('statement')) return { intent: INTENTS.GENERATE_REPORT, context: {} };
     if (t.includes('join')) return { intent: INTENTS.GENERAL_CONVERSATION, context: { generatedReply: "To join a team, please type 'Join [Code]'." } };
     
-    // Default fallback
     return { 
         intent: INTENTS.GENERAL_CONVERSATION, 
-        context: { generatedReply: "I'm having trouble connecting to my brain right now. 🧠\nPlease use the menu to select an option, or try again in a moment." } 
+        context: { generatedReply: "I'm having trouble connecting to my brain right now. 🧠\nPlease use the menu to select an option." } 
     };
 }
 
@@ -135,7 +134,7 @@ async function callDeepSeek(messages, temperature = 0.1, enforceJson = true) {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${config.deepseek.apiKey}`
       },
-      timeout: 8000 // [UPDATED] 8 Second Timeout to prevent server hanging
+      timeout: 8000 // Timeout to prevent hanging
     });
 
     const content = response.data.choices[0].message.content;
@@ -153,38 +152,66 @@ async function callDeepSeek(messages, temperature = 0.1, enforceJson = true) {
     return content;
 
   } catch (error) {
-    logger.error('Error calling DeepSeek API:', error.response ? JSON.stringify(error.response.data, null, 2) : error.message);
-    throw error; // Rethrow to be caught by the caller's try/catch block
+    logger.error('DeepSeek API Error:', error.message);
+    throw error; // Rethrow to be caught by caller
   }
 }
 
-// --- CORE INTENT & ENTITY EXTRACTION ---
+// --- [UPDATED] CORE INTENT & ENTITY EXTRACTION ---
 
-export async function parseBulkProductList(text) {
+export async function getIntent(text) {
     try {
-        const systemPrompt = `You are a data extraction assistant.
-        TASK: Convert the user's product list text into a JSON array.
-        
-        INPUT FORMAT EXAMPLES:
-        - "5 rice 2000 2500" (Qty, Name, Cost, Sell)
-        - "10 bags of cement, cost 5k, sell 6k"
-        - "Milk: 20 pcs, cp=500, sp=600"
+        const today = new Date().toISOString().split('T')[0];
+        // [FIX] Strict rules added to System Prompt to prevent hallucination
+        const systemPrompt = `You are an intent classifier. Respond ONLY with JSON.
+        TODAY: ${today}
 
-        OUTPUT FORMAT:
-        Return ONLY a JSON object: { "products": [ { "productName": "...", "quantityAdded": 10, "costPrice": 5000, "sellingPrice": 6000 } ] }
-        
-        RULES:
-        1. If price is missing, set to 0.
-        2. If quantity is missing, set to 1.
-        3. Clean up product names (remove emoji, capitalize).
+        INTENTS:
+        - ${INTENTS.LOG_SALE}: "Sold 5 rice", "Credit sale to John"
+        - ${INTENTS.LOG_EXPENSE}: "Bought fuel 500", "Paid shop rent"
+        - ${INTENTS.ADD_PRODUCT}: "Restock rice", "New item indomie"
+        - ${INTENTS.GENERATE_REPORT}: "Send me a PDF", "Sales report", "P&L", "Profit and Loss".
+        - ${INTENTS.GET_FINANCIAL_INSIGHT}: "Get financial insight", "Give me a business tip", "Analyze my profit", "How is my business doing?".
+        - ${INTENTS.GET_FINANCIAL_SUMMARY}: "Total sales today", "How much did I spend?"
+        - ${INTENTS.CHECK_BANK_BALANCE}: "Check my balance", "How much in Opay?"
+        - ${INTENTS.GENERAL_CONVERSATION}: "Hello", "Thanks", "Hi".
+
+        CRITICAL RULES:
+        1. If user says "Get Financial Insight" or "Financial Insight", the intent is ${INTENTS.GET_FINANCIAL_INSIGHT}. It is NOT a report. Do NOT set reportType.
+        2. If user says "Generate Report" or "P&L", the intent is ${INTENTS.GENERATE_REPORT}.
+        3. "Financial Insight" != "Financial Report". Insight = Text Advice. Report = PDF.
+        4. If user says "Financial insight and [something]", it is still ${INTENTS.GET_FINANCIAL_INSIGHT}.
+
+        Return JSON format: {"intent": "...", "context": {...}}
         `;
 
         const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: text }];
-        const response = await callDeepSeek(messages, 0.1, true);
-        return response.products || [];
+        let result = await callDeepSeek(messages);
+        
+        // Post-processing to clean up extracted numbers
+        if (result.context) {
+            if (result.context.amount) result.context.amount = parsePrice(result.context.amount);
+            if (result.context.totalAmount) result.context.totalAmount = parsePrice(result.context.totalAmount);
+            if (result.context.amountPerUnit) result.context.amountPerUnit = parsePrice(result.context.amountPerUnit);
+            if (result.context.unitsSold) result.context.unitsSold = parseInt(result.context.unitsSold, 10) || 1;
+            if (result.context.openingBalance) result.context.openingBalance = parsePrice(result.context.openingBalance);
+        }
+        
+        return result;
+
+    } catch (error) {
+        logger.warn("AI Service Error. Using Fallback logic.");
+        return getFallbackIntent(text);
+    }
+}
+
+export async function getFinancialInsight(pnlData, currency) {
+    try {
+        const systemPrompt = `You are a financial advisor. Analyze this P&L data and give ONE short, friendly, actionable business tip (max 2 sentences). Data: ${JSON.stringify(pnlData)}`;
+        const messages = [{ role: 'system', content: systemPrompt }];
+        return await callDeepSeek(messages, 0.7, false);
     } catch (e) {
-        logger.error("Error parsing bulk list:", e);
-        return [];
+        return "Great job tracking your finances! Consistent records are the key to growing your business.";
     }
 }
 
@@ -219,76 +246,31 @@ export async function extractCurrency(text) {
     }
 }
 
-export async function getIntent(text) {
-    // [UPDATED] Wrap in Try/Catch for Fallback
+export async function parseBulkProductList(text) {
     try {
-        const today = new Date().toISOString().split('T')[0];
-        const systemPrompt = `You are an intent classifier. Respond ONLY with JSON.
-        TODAY: ${today}
+        const systemPrompt = `You are a data extraction assistant.
+        TASK: Convert the user's product list text into a JSON array.
+        
+        INPUT FORMAT EXAMPLES:
+        - "5 rice 2000 2500" (Qty, Name, Cost, Sell)
+        - "10 bags of cement, cost 5k, sell 6k"
+        - "Milk: 20 pcs, cp=500, sp=600"
 
-        INTENTS:
-        - ${INTENTS.LOG_SALE}: "Sold 5 rice", "Credit sale to John"
-        - ${INTENTS.LOG_EXPENSE}: "Bought fuel 500", "Paid shop rent"
-        - ${INTENTS.ADD_PRODUCT}: "Restock rice 50 bags", "New item indomie 2000"
-        - ${INTENTS.ADD_PRODUCTS_FROM_LIST}: "Add these: 1. Rice, 2. Beans" (Multi-line or bulk list)
-        - ${INTENTS.ADD_MULTIPLE_PRODUCTS}: "I want to add many items"
-        - ${INTENTS.CHECK_STOCK}: "How many rice left?", "Count stock"
-        - ${INTENTS.GENERATE_REPORT}: "Send me a report", "Expense report", "Sales report", "P&L", "Profit and Loss", "Report for last month"
-        - ${INTENTS.GET_FINANCIAL_SUMMARY}: "Total sales today", "How much did I spend?"
-        - ${INTENTS.ADD_BANK_ACCOUNT}: "Add bank UBA", "New account access bank"
-        - ${INTENTS.LOG_CUSTOMER_PAYMENT}: "John paid 5000", "Receive payment from Sarah"
-        - ${INTENTS.GENERAL_CONVERSATION}: "Hello", "Thanks", "Who are you?", "Hi"
-        - ${INTENTS.SHOW_MAIN_MENU}: "Menu", "Show options", "Cancel"
-        - ${INTENTS.RECONCILE_TRANSACTION}: "Edit transaction", "Delete sale", "I made a mistake"
-        - ${INTENTS.GET_CUSTOMER_BALANCES}: "Who owes me?", "Debtors list"
-        - MANAGE_TEAM: "Add staff", "Invite employee", "Create login for my manager"
-        - EXPORT_DATA: "Export my data", "Download excel", "Send me all records", "Backup"
-        - CHECK_BANK_BALANCE: "Check my balance", "How much in Opay?", "Balance for GTB"
-
+        OUTPUT FORMAT:
+        Return ONLY a JSON object: { "products": [ { "productName": "...", "quantityAdded": 10, "costPrice": 5000, "sellingPrice": 6000 } ] }
+        
         RULES:
-        1. If Intent is ${INTENTS.GENERATE_REPORT}:
-           - Context MUST include "reportType": "SALES", "EXPENSES", "PNL", "INVENTORY", or "COGS".
-           - **CRITICAL:** If user text is exactly "Generate Report" or "generate report", "reportType" MUST be null. Do NOT guess PNL.
-           - Dates: Calculate "startDate" and "endDate" (YYYY-MM-DD). Default "this_month".
-        
-        2. Dates: Calculate "startDate" and "endDate" (YYYY-MM-DD) based on user input (e.g., "last month", "today"). Default to "this_month".
-
-        3. General Conversation:
-           - If the user says "Hello" or asks a question, set intent to ${INTENTS.GENERAL_CONVERSATION}.
-           - You MUST provide a "generatedReply" string in the context.
-        
-        4. CHECK_BANK_BALANCE: Any query about "balance" or "how much in [Bank]" must be this intent.
-
-        Return JSON format: {"intent": "...", "context": {...}}
+        1. If price is missing, set to 0.
+        2. If quantity is missing, set to 1.
+        3. Clean up product names (remove emoji, capitalize).
         `;
 
         const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: text }];
-        let result = await callDeepSeek(messages);
-        
-        // Post-processing to clean up extracted numbers
-        if (result.context) {
-            if (result.context.amount) result.context.amount = parsePrice(result.context.amount);
-            if (result.context.totalAmount) result.context.totalAmount = parsePrice(result.context.totalAmount);
-            if (result.context.amountPerUnit) result.context.amountPerUnit = parsePrice(result.context.amountPerUnit);
-            if (result.context.unitsSold) result.context.unitsSold = parseInt(result.context.unitsSold, 10) || 1;
-            if (result.context.openingBalance) result.context.openingBalance = parsePrice(result.context.openingBalance);
-        }
-        
-        return result;
-
-    } catch (error) {
-        logger.warn("AI Service Down/Slow. Using Fallback logic.", error.message);
-        return getFallbackIntent(text);
-    }
-}
-
-export async function getFinancialInsight(pnlData, currency) {
-    try {
-        const systemPrompt = `Analyze this P&L data and give one friendly, short business tip. Data: ${JSON.stringify(pnlData)}`;
-        const messages = [{ role: 'system', content: systemPrompt }];
-        return await callDeepSeek(messages, 0.7, false);
+        const response = await callDeepSeek(messages, 0.1, true);
+        return response.products || [];
     } catch (e) {
-        return "Great job tracking your finances! Regular records are the key to growth.";
+        logger.error("Error parsing bulk list:", e);
+        return [];
     }
 }
 
@@ -329,7 +311,6 @@ export async function gatherSaleDetails(conversationHistory, existingProduct = n
     }
 }
 
-// Supports Multiple Expenses
 export async function gatherExpenseDetails(conversationHistory) {
     try {
         const systemPrompt = `You are a smart bookkeeping assistant. Goal: Log expense(s).

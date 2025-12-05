@@ -153,7 +153,7 @@ export async function extractOnboardingDetails(text) {
 
 export async function extractCurrency(text) {
     const messages = [
-        { role: 'system', content: "Identify currency ISO code. JSON: {\"currency\": \"ISO_CODE\"}." },
+        { role: 'system', content: "Identify the currency and return ISO 4217 code. JSON: {\"currency\": \"ISO_CODE\"}. Example: 'Naira' -> 'NGN'." },
         { role: 'user', content: text }
     ];
     return await callDeepSeek(messages);
@@ -245,7 +245,7 @@ export async function gatherSaleDetails(conversationHistory, existingProduct = n
     return { ...response, memory: [...conversationHistory, { role: 'assistant', content: JSON.stringify(response) }] };
 }
 
-// [UPDATED] Supports Multiple Expenses
+// Supports Multiple Expenses
 export async function gatherExpenseDetails(conversationHistory) {
     const systemPrompt = `You are a smart bookkeeping assistant. Goal: Log expense(s).
     INPUT: "Paid 5000 for fuel and 10000 for rent"
@@ -268,6 +268,7 @@ export async function gatherExpenseDetails(conversationHistory) {
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     let response = await callDeepSeek(messages, 0.5);
 
+    // Normalize single objects to array for consistency
     if (response.status === 'complete' && response.data) {
         if (!response.data.expenses) {
             response.data.expenses = [{
@@ -287,7 +288,7 @@ export async function gatherExpenseDetails(conversationHistory) {
 
 export async function gatherProductDetails(conversationHistory, existingProduct = null) {
     const existingDataInfo = existingProduct 
-        ? `Existing product: Cost ${existingProduct.costPrice}, Sell ${existingProduct.sellingPrice}.`
+        ? `Existing: Cost ${existingProduct.costPrice}, Sell ${existingProduct.sellingPrice}.`
         : 'New product.';
 
     const systemPrompt = `Inventory Manager. Add/Update product.

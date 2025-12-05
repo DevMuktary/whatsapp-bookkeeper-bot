@@ -134,20 +134,9 @@ async function callDeepSeek(messages, temperature = 0.1, enforceJson = true) {
 export async function parseBulkProductList(text) {
     const systemPrompt = `You are a data extraction assistant.
     TASK: Convert the user's product list text into a JSON array.
-    
-    INPUT FORMAT EXAMPLES:
-    - "5 rice 2000 2500" (Qty, Name, Cost, Sell)
-    - "10 bags of cement, cost 5k, sell 6k"
-    - "Milk: 20 pcs, cp=500, sp=600"
-
-    OUTPUT FORMAT:
-    Return ONLY a JSON object: { "products": [ { "productName": "...", "quantityAdded": 10, "costPrice": 5000, "sellingPrice": 6000 } ] }
-    
-    RULES:
-    1. If price is missing, set to 0.
-    2. If quantity is missing, set to 1.
-    3. Clean up product names (remove emoji, capitalize).
-    `;
+    INPUT EXAMPLES: "5 rice 2000 2500", "10 bags of cement, cost 5k, sell 6k"
+    OUTPUT: { "products": [ { "productName": "...", "quantityAdded": 10, "costPrice": 5000, "sellingPrice": 6000 } ] }
+    RULES: If price is missing set to 0. If quantity missing set to 1. Clean product names.`;
 
     const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: text }];
     const response = await callDeepSeek(messages, 0.1, true);
@@ -156,10 +145,7 @@ export async function parseBulkProductList(text) {
 
 export async function extractOnboardingDetails(text) {
   const messages = [
-    {
-      role: 'system',
-      content: "You are an expert entity extractor. Respond ONLY with a JSON object: {\"businessName\": \"Name\", \"email\": \"user@example.com\"}. If not found, use null."
-    },
+    { role: 'system', content: "Extract entity. JSON: {\"businessName\": \"Name\", \"email\": \"user@example.com\"}. If not found, use null." },
     { role: 'user', content: text }
   ];
   return await callDeepSeek(messages);
@@ -167,10 +153,7 @@ export async function extractOnboardingDetails(text) {
 
 export async function extractCurrency(text) {
     const messages = [
-        {
-            role: 'system',
-            content: "Identify the currency and return ISO 4217 code. JSON: {\"currency\": \"ISO_CODE\"}. Example: 'Naira' -> 'NGN'."
-        },
+        { role: 'system', content: "Identify currency ISO code. JSON: {\"currency\": \"ISO_CODE\"}." },
         { role: 'user', content: text }
     ];
     return await callDeepSeek(messages);
@@ -233,8 +216,8 @@ export async function getFinancialInsight(pnlData, currency) {
 export async function gatherSaleDetails(conversationHistory, existingProduct = null, isService = false) { 
     const today = new Date().toISOString().split('T')[0];
     const productInfo = isService 
-        ? "Service sale." 
-        : (existingProduct ? `Product: "${existingProduct.productName}", Price: ${existingProduct.sellingPrice}.` : 'New product.');
+        ? "The user confirmed this is a service." 
+        : (existingProduct ? `Existing product: "${existingProduct.productName}", Price: ${existingProduct.sellingPrice}.` : 'New product/service.');
 
     const systemPrompt = `You are a bookkeeping assistant logging a sale. TODAY: ${today}.
     CONTEXT: ${productInfo}
@@ -270,7 +253,8 @@ export async function gatherExpenseDetails(conversationHistory) {
     RULES:
     1. Support MULTIPLE items.
     2. Auto-Categorize each.
-    3. Return JSON: {
+    3. Ask clarifying questions if description is vague.
+    4. Return JSON: {
         "status": "complete", 
         "data": { 
             "expenses": [ 
@@ -279,12 +263,11 @@ export async function gatherExpenseDetails(conversationHistory) {
             ] 
         }
     }
-    4. If incomplete, return {"status": "incomplete", "reply": "..."}`;
+    5. If incomplete, return {"status": "incomplete", "reply": "..."}`;
 
     const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
     let response = await callDeepSeek(messages, 0.5);
 
-    // Normalize single objects to array for consistency
     if (response.status === 'complete' && response.data) {
         if (!response.data.expenses) {
             response.data.expenses = [{
@@ -304,7 +287,7 @@ export async function gatherExpenseDetails(conversationHistory) {
 
 export async function gatherProductDetails(conversationHistory, existingProduct = null) {
     const existingDataInfo = existingProduct 
-        ? `Existing: Cost ${existingProduct.costPrice}, Sell ${existingProduct.sellingPrice}.`
+        ? `Existing product: Cost ${existingProduct.costPrice}, Sell ${existingProduct.sellingPrice}.`
         : 'New product.';
 
     const systemPrompt = `Inventory Manager. Add/Update product.

@@ -56,6 +56,8 @@ async function executeCheckStock(user, data) {
     } else {
         await sendTextMessage(user.whatsappId, `Product "${productName}" not found.`);
     }
+    // [FIX] Send Menu
+    await sendMainMenu(user.whatsappId);
 }
 
 async function executeGetFinancialSummary(user, data) {
@@ -66,6 +68,8 @@ async function executeGetFinancialSummary(user, data) {
     const total = await getSummaryByDateRange(user._id, type, startDate, endDate);
     
     await sendTextMessage(user.whatsappId, `Total ${metric} (${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}): ${user.currency} ${total.toLocaleString()}`);
+    // [FIX] Send Menu
+    await sendMainMenu(user.whatsappId);
 }
 
 async function executeCheckBankBalance(user, data) {
@@ -78,36 +82,42 @@ async function executeCheckBankBalance(user, data) {
         const banks = await getAllBankAccounts(user._id);
         if (banks.length === 0) {
             await sendTextMessage(user.whatsappId, "No bank accounts found.");
-            return;
+        } else {
+            const summary = banks.map(b => `*${b.bankName}*: ${user.currency} ${b.balance.toLocaleString()}`).join('\n');
+            await sendTextMessage(user.whatsappId, `Current Balances:\n${summary}`);
         }
-        const summary = banks.map(b => `*${b.bankName}*: ${user.currency} ${b.balance.toLocaleString()}`).join('\n');
-        await sendTextMessage(user.whatsappId, `Current Balances:\n${summary}`);
     }
+    // [FIX] Send Menu
+    await sendMainMenu(user.whatsappId);
 }
 
 async function executeGetFinancialInsight(user, data) {
     const { dateRange } = data;
-    const period = dateRange || { startDate: new Date(new Date().setDate(1)), endDate: new Date() }; // Default this month
+    const period = dateRange || { startDate: new Date(new Date().setDate(1)), endDate: new Date() }; 
     await sendTextMessage(user.whatsappId, "Crunching the numbers... 🧠");
     const pnlData = await getPnLData(user._id, period.startDate, period.endDate);
     const insight = await getFinancialInsight(pnlData, user.currency);
     await sendTextMessage(user.whatsappId, insight);
+    // [FIX] Send Menu
+    await sendMainMenu(user.whatsappId);
 }
 
 async function executeGetCustomerBalances(user) {
     const customers = await getCustomersWithBalance(user._id);
     if (customers.length === 0) {
         await sendTextMessage(user.whatsappId, "No customers owe you money right now. 🎉");
-        return;
+    } else {
+        const list = customers.map(c => `*${c.customerName}*: ${user.currency} ${c.balanceOwed.toLocaleString()}`).join('\n');
+        await sendTextMessage(user.whatsappId, `Outstanding Balances:\n${list}`);
     }
-    const list = customers.map(c => `*${c.customerName}*: ${user.currency} ${c.balanceOwed.toLocaleString()}`).join('\n');
-    await sendTextMessage(user.whatsappId, `Outstanding Balances:\n${list}`);
+    // [FIX] Send Menu
+    await sendMainMenu(user.whatsappId);
 }
 
-// --- RECONCILIATION LOGIC (Restored) ---
+// --- RECONCILIATION LOGIC ---
 
 async function executeListTransactionsForReconcile(user) {
-    const transactions = await getRecentTransactions(user._id, 8); // Fetch last 8
+    const transactions = await getRecentTransactions(user._id, 8);
     if (transactions.length === 0) {
         await sendTextMessage(user.whatsappId, "No recent transactions found.");
         await sendMainMenu(user.whatsappId);
@@ -134,12 +144,12 @@ async function executeDeleteTransaction(user, data) {
     const tx = await findTransactionById(transactionId);
     if (!tx) {
         await sendTextMessage(user.whatsappId, "Transaction not found.");
+        await sendMainMenu(user.whatsappId);
         return;
     }
 
     // 1. Reverse Financial Impact
     if (tx.type === 'SALE') {
-        // Reverse Stock
         if (tx.items) {
             for (const item of tx.items) {
                 if (item.productId && !item.isService) {
@@ -147,17 +157,16 @@ async function executeDeleteTransaction(user, data) {
                 }
             }
         }
-        // Reverse Money
         if (tx.paymentMethod === 'CREDIT' && tx.linkedCustomerId) {
             await updateBalanceOwed(tx.linkedCustomerId, -tx.amount);
         } else if (tx.linkedBankId) {
             await updateBankBalance(tx.linkedBankId, -tx.amount);
         }
     } else if (tx.type === 'EXPENSE' && tx.linkedBankId) {
-        await updateBankBalance(tx.linkedBankId, tx.amount); // Add money back
+        await updateBankBalance(tx.linkedBankId, tx.amount);
     } else if (tx.type === 'CUSTOMER_PAYMENT') {
-        if (tx.linkedCustomerId) await updateBalanceOwed(tx.linkedCustomerId, tx.amount); // Add debt back
-        if (tx.linkedBankId) await updateBankBalance(tx.linkedBankId, -tx.amount); // Remove money
+        if (tx.linkedCustomerId) await updateBalanceOwed(tx.linkedCustomerId, tx.amount); 
+        if (tx.linkedBankId) await updateBankBalance(tx.linkedBankId, -tx.amount);
     }
 
     // 2. Delete Record
@@ -171,11 +180,6 @@ async function executeUpdateTransaction(user, data) {
     const originalTx = await findTransactionById(transactionId);
     if (!originalTx) return;
 
-    // This is a simplified edit logic: 
-    // 1. Delete/Reverse original
-    // 2. Create new transaction with updated fields
-    // A robust system would calculate the delta, but reversal is safer for data integrity.
-
     // A. Rollback Original
     if (originalTx.type === 'SALE') {
         if (originalTx.items) {
@@ -186,12 +190,9 @@ async function executeUpdateTransaction(user, data) {
         if (originalTx.paymentMethod === 'CREDIT') await updateBalanceOwed(originalTx.linkedCustomerId, -originalTx.amount);
         else if (originalTx.linkedBankId) await updateBankBalance(originalTx.linkedBankId, -originalTx.amount);
     }
-    // ... (Add expense/payment rollback if needed)
 
     // B. Apply Updates
     let updatedTxData = { ...originalTx, ...changes };
-    
-    // If quantity/price changed, recalculate total
     if (changes.unitsSold || changes.amountPerUnit) {
         const qty = parseFloat(changes.unitsSold || originalTx.items[0].quantity);
         const price = parseFloat(changes.amountPerUnit || originalTx.items[0].pricePerUnit);

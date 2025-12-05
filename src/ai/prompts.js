@@ -37,6 +37,9 @@ function getFallbackIntent(text) {
     if (t.includes('report') || t.includes('pdf') || t.includes('p&l') || t.includes('statement')) return { intent: INTENTS.GENERATE_REPORT, context: {} };
     if (t.includes('join')) return { intent: INTENTS.GENERAL_CONVERSATION, context: { generatedReply: "To join a team, please type 'Join [Code]'." } };
     
+    // [NEW] Fallback for Subscription
+    if (t.includes('renew') || t.includes('subscription') || t.includes('upgrade plan')) return { intent: INTENTS.UPGRADE_SUBSCRIPTION, context: {} };
+
     return { 
         intent: INTENTS.GENERAL_CONVERSATION, 
         context: { generatedReply: "I'm having trouble connecting to my brain right now. 🧠\nPlease use the menu to select an option." } 
@@ -58,6 +61,9 @@ export async function getIntent(text) {
     if (t.includes('balance') && t.length < 20) {
         return { intent: INTENTS.CHECK_BANK_BALANCE, context: {} };
     }
+    if (t.includes('subscription') || t === 'my plan' || t === 'check status') {
+        return { intent: INTENTS.CHECK_SUBSCRIPTION, context: {} };
+    }
 
     // 2. AI PATH
     try {
@@ -70,17 +76,18 @@ export async function getIntent(text) {
         - ${INTENTS.LOG_EXPENSE}: "Bought fuel 500", "Paid shop rent"
         - ${INTENTS.ADD_PRODUCT}: "Restock rice", "New item indomie"
         - ${INTENTS.GENERATE_REPORT}: "Send me a PDF", "Sales report", "P&L", "Profit and Loss".
-        - ${INTENTS.GET_FINANCIAL_INSIGHT}: "Get financial insight", "Give me a business tip", "Analyze my profit", "How is my business doing?".
+        - ${INTENTS.GET_FINANCIAL_INSIGHT}: "Get financial insight", "Give me a business tip", "Analyze my profit".
         - ${INTENTS.GET_FINANCIAL_SUMMARY}: "Total sales today", "How much did I spend?"
         - ${INTENTS.CHECK_BANK_BALANCE}: "Check my balance", "How much in Opay?"
         - ${INTENTS.GENERAL_CONVERSATION}: "Hello", "Thanks", "Hi".
+        - ${INTENTS.CHECK_SUBSCRIPTION}: "My plan", "When do I expire?", "Subscription status".
+        - ${INTENTS.UPGRADE_SUBSCRIPTION}: "I want to pay", "Renew Fynax", "Upgrade to premium", "Extend plan".
 
         CRITICAL RULES:
-        1. If user says "Get Financial Insight" or "Financial Insight", the intent is ${INTENTS.GET_FINANCIAL_INSIGHT}. It is NOT a report. Do NOT set reportType.
-        2. If user says "Generate Report" or "P&L", the intent is ${INTENTS.GENERATE_REPORT}.
-        3. "Financial Insight" != "Financial Report". Insight = Text Advice. Report = PDF.
-        4. If user says "Financial insight and [something]", it is still ${INTENTS.GET_FINANCIAL_INSIGHT}.
-
+        1. If user says "Pay" or "Payment" WITHOUT context of a customer, ask for clarification unless they say "Subscription" or "Renew".
+        2. "Financial Insight" = ${INTENTS.GET_FINANCIAL_INSIGHT}.
+        3. "Generate Report" = ${INTENTS.GENERATE_REPORT}.
+        
         Return JSON format: {"intent": "...", "context": {...}}
         `;
 

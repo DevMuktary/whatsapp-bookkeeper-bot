@@ -1,9 +1,10 @@
 import { findOrCreateUser, updateUserState, createJoinCode, findOwnerByJoinCode, linkStaffToOwner } from '../db/userService.js';
 import { findProductByName } from '../db/productService.js';
 import { getAllBankAccounts } from '../db/bankService.js';
-import { 
-    getIntent, transcribeAudio, analyzeImage, parseBulkProductList 
-} from '../services/aiService.js';
+// [UPDATED IMPORTS]
+import { getIntent, parseBulkProductList } from '../ai/prompts.js';
+import { transcribeAudio, analyzeImage } from '../ai/media.js';
+
 import { 
     sendTextMessage, sendInteractiveButtons, sendInteractiveList, sendMainMenu, sendReportMenu, 
     setTypingIndicator, uploadMedia, sendDocument, sendOnboardingFlow, sendAddBankFlow 
@@ -156,7 +157,6 @@ export async function handleMessage(message) {
               await sendAddBankFlow(user.whatsappId);
           } else if (lowerCaseText.includes('check') || lowerCaseText.includes('balance')) {
               // Re-trigger check logic locally or via generic handler
-              // For simplicity, asking them to click is safer, or we re-implement check logic here
               const banks = await getAllBankAccounts(user._id);
               if (banks.length > 0) {
                  const sections = [{

@@ -19,12 +19,11 @@ async function createPaystackCustomer(user) {
         const customerRes = await paystackClient.post('/customer', {
             email: user.email,
             first_name: user.businessName || 'Fynax User',
-            last_name: user.whatsappId,
-            phone: user.whatsappId
+            last_name: String(user.whatsappId), // Ensure string
+            phone: String(user.whatsappId)
         });
         const newCode = customerRes.data.data.customer_code;
         
-        // Save the new code to DB immediately
         await updateUser(user.whatsappId, { paystackCustomerCode: newCode });
         return newCode;
     } catch (error) {
@@ -33,9 +32,24 @@ async function createPaystackCustomer(user) {
     }
 }
 
+// Helper to Update an existing Customer Profile
+async function updatePaystackCustomer(customerCode, user) {
+    try {
+        await paystackClient.put(`/customer/${customerCode}`, {
+            first_name: user.businessName || 'Fynax User',
+            last_name: String(user.whatsappId),
+            phone: String(user.whatsappId)
+        });
+        logger.info(`Updated Paystack profile for ${customerCode}`);
+    } catch (error) {
+        logger.warn(`Failed to update Paystack profile: ${error.message}`);
+        // Continue anyway, maybe the profile is fine
+    }
+}
+
 /**
- * Creates a Dedicated Virtual Account (NUBAN) for Nigerian users.
- * Includes "Self-Healing" logic for invalid customer codes.
+ * Creates a Dedicated Virtual Account (NUBAN).
+ * Includes Retry Logic for "Customer Not Found" and "Validation Error".
  */
 export async function createDedicatedAccount(user) {
     try {
@@ -48,51 +62,53 @@ export async function createDedicatedAccount(user) {
             customerCode = await createPaystackCustomer(user);
         }
 
-        // 2. Request Dedicated Account (with Retry Logic)
-        try {
-            const accountRes = await paystackClient.post('/dedicated_account', {
-                customer: customerCode,
+        // 2. Request Dedicated Account
+        const createAccountReq = async (code) => {
+            const res = await paystackClient.post('/dedicated_account', {
+                customer: code,
                 preferred_bank: "wema-bank"
             });
-
-            const accountData = {
-                bankName: accountRes.data.data.bank.name,
-                accountNumber: accountRes.data.data.account_number,
-                accountName: accountRes.data.data.account_name
+            return {
+                bankName: res.data.data.bank.name,
+                accountNumber: res.data.data.account_number,
+                accountName: res.data.data.account_name
             };
+        };
 
+        try {
+            const accountData = await createAccountReq(customerCode);
             await updateUser(user.whatsappId, { dedicatedAccount: accountData });
             return accountData;
 
         } catch (apiError) {
-            // [SELF-HEALING FIX]
-            // If Paystack says "Customer not found", it means our DB code is stale.
-            // We create a NEW customer and retry ONCE.
-            if (apiError.response?.data?.message?.includes('Customer not found') || 
-                apiError.response?.data?.code === 'customer_not_found') {
-                
-                logger.warn(`Stale Customer Code detected for ${user.whatsappId}. Regenerating...`);
-                
-                // Create New Customer
-                const newCode = await createPaystackCustomer(user);
-                
-                // Retry Account Creation
-                const retryRes = await paystackClient.post('/dedicated_account', {
-                    customer: newCode,
-                    preferred_bank: "wema-bank"
-                });
+            const msg = apiError.response?.data?.message || '';
+            const codeError = apiError.response?.data?.code || '';
 
-                const retryAccountData = {
-                    bankName: retryRes.data.data.bank.name,
-                    accountNumber: retryRes.data.data.account_number,
-                    accountName: retryRes.data.data.account_name
-                };
-
-                await updateUser(user.whatsappId, { dedicatedAccount: retryAccountData });
-                return retryAccountData;
+            // ERROR TYPE A: Validation Error (Missing Name/Phone)
+            // Fix: Update Customer Profile & Retry
+            if (codeError === 'validation_error' || msg.includes('required') || msg.includes('last_name')) {
+                logger.warn(`Incomplete Profile for ${user.whatsappId}. Updating and Retrying...`);
+                
+                await updatePaystackCustomer(customerCode, user);
+                
+                const retryData = await createAccountReq(customerCode);
+                await updateUser(user.whatsappId, { dedicatedAccount: retryData });
+                return retryData;
             }
 
-            throw apiError; // Throw other errors (like network issues)
+            // ERROR TYPE B: Customer Not Found (Stale Code)
+            // Fix: Create NEW Customer & Retry
+            if (msg.includes('Customer not found') || codeError === 'customer_not_found') {
+                logger.warn(`Stale Customer Code for ${user.whatsappId}. Regenerating...`);
+                
+                const newCode = await createPaystackCustomer(user);
+                
+                const retryData = await createAccountReq(newCode);
+                await updateUser(user.whatsappId, { dedicatedAccount: retryData });
+                return retryData;
+            }
+
+            throw apiError; // Unknown error, bubble up
         }
 
     } catch (error) {
@@ -103,18 +119,15 @@ export async function createDedicatedAccount(user) {
 
 /**
  * Generates a Payment Link.
- * [FIX] Defaults to NGN if USD fails, to prevent "Currency not supported" crashes.
  */
 export async function initializePayment(user, preferredCurrency = 'USD') {
     try {
-        // [FIX] Force NGN if your account is not yet approved for USD.
-        // Change 'false' to 'true' once you are approved for International Payments.
+        // [SAFETY] Force NGN until your account is USD-Approved to prevent crashes
         const IS_USD_ENABLED = false; 
 
         const currency = IS_USD_ENABLED ? preferredCurrency : 'NGN';
         
-        // Calculate amount (7500 NGN or equivalent USD conversion if needed)
-        // If IS_USD_ENABLED is false, we default International users to pay NGN equivalent (~8000 for $5)
+        // Calculate amount (7500 NGN or approx 8000 NGN for $5)
         const amount = currency === 'NGN' 
             ? config.paystack.prices.ngnMonthly * 100 
             : config.paystack.prices.usdMonthly * 100;

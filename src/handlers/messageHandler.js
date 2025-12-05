@@ -1,13 +1,13 @@
-import { findOrCreateUser, updateUserState, createJoinCode, findOwnerByJoinCode, linkStaffToOwner } from '../db/userService.js';
+// [UPDATED] Imports
+import { findOrCreateUser, updateUserState, createJoinCode, findOwnerByJoinCode, linkStaffToOwner, checkSubscriptionAccess } from '../db/userService.js';
 import { findProductByName } from '../db/productService.js';
 import { getAllBankAccounts } from '../db/bankService.js';
-// [UPDATED IMPORTS]
 import { getIntent, parseBulkProductList } from '../ai/prompts.js';
 import { transcribeAudio, analyzeImage } from '../ai/media.js';
 
 import { 
     sendTextMessage, sendInteractiveButtons, sendInteractiveList, sendMainMenu, sendReportMenu, 
-    setTypingIndicator, uploadMedia, sendDocument, sendOnboardingFlow, sendAddBankFlow 
+    setTypingIndicator, uploadMedia, sendDocument, sendOnboardingFlow, sendAddBankFlow, sendPaymentOptions 
 } from '../api/whatsappService.js';
 import { USER_STATES, INTENTS } from '../utils/constants.js';
 import { getDateRange } from '../utils/dateUtils.js';
@@ -16,7 +16,6 @@ import { generateDataExport } from '../services/exportService.js';
 import { executeTask } from './taskHandler.js';
 import logger from '../utils/logger.js';
 
-// [IMPORTED HANDLERS]
 import { handleFlowResponse, handleOtpVerification } from './flowHandler.js';
 import { 
     handleLoggingSale, handleLoggingExpense, handleAddingProduct, handleLoggingCustomerPayment, 
@@ -48,9 +47,7 @@ async function getEffectiveUser(user) {
     return user;
 }
 
-// --- EXPORTED HANDLERS FOR WEBHOOK ---
-
-export { handleFlowResponse }; // Re-export for webhook
+export { handleFlowResponse };
 
 export async function handleMessage(message) {
   const whatsappId = message.from;
@@ -152,11 +149,9 @@ export async function handleMessage(message) {
           await handleEditValue(user, userInputText);
           break;
       case USER_STATES.AWAITING_BANK_MENU_SELECTION:
-          // Handles text response if user types instead of clicking buttons
           if (lowerCaseText.includes('add')) {
               await sendAddBankFlow(user.whatsappId);
           } else if (lowerCaseText.includes('check') || lowerCaseText.includes('balance')) {
-              // Re-trigger check logic locally or via generic handler
               const banks = await getAllBankAccounts(user._id);
               if (banks.length > 0) {
                  const sections = [{
@@ -193,8 +188,30 @@ export async function handleMessage(message) {
 }
 
 async function handleIdleState(user, text) {
+    // [NEW] GATEKEEPER CHECK
+    // Only check gatekeeper for specific heavy tasks, not simple ones.
     const { intent, context } = await getIntent(text);
 
+    // RESTRICTED INTENTS (Must be Paid)
+    const PAID_INTENTS = [
+        INTENTS.LOG_SALE, 
+        INTENTS.LOG_EXPENSE, 
+        INTENTS.ADD_PRODUCT, 
+        INTENTS.ADD_PRODUCTS_FROM_LIST, 
+        INTENTS.GENERATE_REPORT, 
+        INTENTS.EXPORT_DATA
+    ];
+
+    if (PAID_INTENTS.includes(intent)) {
+        const access = checkSubscriptionAccess(user);
+        if (!access.allowed) {
+            await sendTextMessage(user.whatsappId, "⛔ **Service Suspended**\n\nYour free trial or subscription has expired. Please upgrade to continue using Fynax.");
+            await sendPaymentOptions(user.whatsappId);
+            return;
+        }
+    }
+
+    // [EXISTING STAFF CHECKS]
     if (user.isStaff) {
         const RESTRICTED = [INTENTS.RECONCILE_TRANSACTION, INTENTS.ADD_BANK_ACCOUNT, 'EXPORT_DATA'];
         if (RESTRICTED.includes(intent) || (intent === 'EXPORT_DATA')) {
@@ -205,6 +222,27 @@ async function handleIdleState(user, text) {
             await sendTextMessage(user.whatsappId, "⛔ Access Denied. Staff cannot view Profit & Loss.");
             return;
         }
+    }
+
+    // [NEW] SUBSCRIPTION INTENTS
+    if (intent === INTENTS.CHECK_SUBSCRIPTION) {
+        const access = checkSubscriptionAccess(user);
+        let msg = `📅 **Subscription Status**\n\nPlan: ${access.type}`;
+        if (access.daysLeft) msg += `\nExpires in: ${access.daysLeft} days`;
+        else msg += `\nStatus: Expired ❌`;
+        
+        await sendTextMessage(user.whatsappId, msg);
+        if (access.daysLeft < 5 || !access.allowed) {
+            await sendPaymentOptions(user.whatsappId);
+        } else {
+            await sendMainMenu(user.whatsappId);
+        }
+        return;
+    }
+
+    if (intent === INTENTS.UPGRADE_SUBSCRIPTION) {
+        await sendPaymentOptions(user.whatsappId);
+        return;
     }
 
     if (intent === 'MANAGE_TEAM') {

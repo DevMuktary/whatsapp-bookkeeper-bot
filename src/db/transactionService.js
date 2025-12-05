@@ -4,37 +4,72 @@ import { ObjectId } from 'mongodb';
 
 const transactionsCollection = () => getDB().collection('transactions');
 
+// --- [UPDATED] INPUT VALIDATION ---
+function validateTransactionData(data, type) {
+    const errors = [];
+    
+    // Common checks
+    if (!data.userId) errors.push("Missing User ID");
+    
+    if (type === 'SALE') {
+        if (!data.items || !Array.isArray(data.items) || data.items.length === 0) {
+            errors.push("Sale must have items");
+        } else {
+            data.items.forEach((item, idx) => {
+                if (!item.productName) errors.push(`Item ${idx} missing name`);
+                if (typeof item.quantity !== 'number' || item.quantity <= 0) errors.push(`Item ${idx} has invalid quantity`);
+                if (typeof item.pricePerUnit !== 'number' || item.pricePerUnit < 0) errors.push(`Item ${idx} has invalid price`);
+            });
+        }
+        if (typeof data.amount !== 'number' || data.amount < 0) errors.push("Invalid total amount");
+    }
+
+    if (type === 'EXPENSE') {
+        if (!data.amount || typeof data.amount !== 'number') errors.push("Expense amount invalid");
+        if (!data.description) errors.push("Expense description missing");
+        if (!data.category) errors.push("Expense category missing");
+    }
+
+    if (errors.length > 0) {
+        throw new Error(`Validation Failed: ${errors.join(', ')}`);
+    }
+}
+
 export async function createSaleTransaction(saleData) {
     try {
+        // [UPDATED] Sanitize First
         const sanitizedItems = saleData.items.map(item => ({
             productId: item.productId ? new ObjectId(item.productId) : null,
-            productName: item.productName,
-            quantity: item.quantity,
-            pricePerUnit: item.pricePerUnit,
-            costPrice: item.costPrice || 0,
+            productName: item.productName || 'Unknown',
+            quantity: Number(item.quantity) || 0,
+            pricePerUnit: Number(item.pricePerUnit) || 0,
+            costPrice: Number(item.costPrice) || 0,
             isService: item.isService || false
         }));
 
         const transactionDoc = {
             userId: saleData.userId,
             type: 'SALE',
-            amount: saleData.totalAmount,
-            date: saleData.date,
-            description: saleData.description,
+            amount: Number(saleData.totalAmount) || 0,
+            date: saleData.date || new Date(),
+            description: saleData.description || 'Sale',
             items: sanitizedItems,
             linkedCustomerId: saleData.linkedCustomerId,
             linkedBankId: saleData.linkedBankId || null,
-            paymentMethod: saleData.paymentMethod.toUpperCase(),
+            paymentMethod: saleData.paymentMethod ? saleData.paymentMethod.toUpperCase() : 'CASH',
             dueDate: saleData.dueDate ? new Date(saleData.dueDate) : null,
-            // [NEW] Audit Field
             loggedBy: saleData.loggedBy || 'Owner',
             createdAt: new Date()
         };
+
+        // Validate
+        validateTransactionData(transactionDoc, 'SALE');
+
         const result = await transactionsCollection().insertOne(transactionDoc);
         return await transactionsCollection().findOne({ _id: result.insertedId });
     } catch (error) {
         logger.error('Error creating sale transaction:', error);
-        throw new Error('Could not create sale transaction.');
+        throw error; // Let the handler catch the validation error
     }
 }
 
@@ -43,49 +78,50 @@ export async function createExpenseTransaction(expenseData) {
         const doc = {
             userId: expenseData.userId,
             type: 'EXPENSE',
-            amount: expenseData.amount,
-            date: expenseData.date,
+            amount: Number(expenseData.amount),
+            date: expenseData.date || new Date(),
             description: expenseData.description,
             category: expenseData.category,
             linkedBankId: expenseData.linkedBankId || null,
-            // [NEW] Audit Field
             loggedBy: expenseData.loggedBy || 'Owner',
             createdAt: new Date()
         };
+
+        // Validate
+        validateTransactionData(doc, 'EXPENSE');
+
         const result = await transactionsCollection().insertOne(doc);
         return await transactionsCollection().findOne({ _id: result.insertedId });
     } catch (error) {
         logger.error('Error creating expense transaction:', error);
-        throw new Error('Could not create expense transaction.');
+        throw error;
     }
 }
 
 export async function createCustomerPaymentTransaction(paymentData) {
     try {
+        if (!paymentData.amount || isNaN(paymentData.amount)) throw new Error("Invalid Payment Amount");
+
         const doc = {
             userId: paymentData.userId,
             type: 'CUSTOMER_PAYMENT',
-            amount: paymentData.amount,
-            date: paymentData.date,
+            amount: Number(paymentData.amount),
+            date: paymentData.date || new Date(),
             description: paymentData.description,
             linkedCustomerId: paymentData.linkedCustomerId,
             linkedBankId: paymentData.linkedBankId || null,
-            loggedBy: paymentData.loggedBy || 'Owner', // [NEW]
+            loggedBy: paymentData.loggedBy || 'Owner',
             createdAt: new Date()
         };
         const result = await transactionsCollection().insertOne(doc);
         return await transactionsCollection().findOne({ _id: result.insertedId });
     } catch (error) {
         logger.error('Error creating customer payment transaction:', error);
-        throw new Error('Could not create customer payment transaction.');
+        throw error;
     }
 }
 
-// ... (Rest of the file remains the same: getSummary, getRecent, getDue, update, delete) ...
-// You can copy the rest of the functions from the previous version of this file.
-// IMPORTANT: Ensure getDueTransactions, updateTransactionById etc. are kept.
-
-// --- READ / QUERY FUNCTIONS ---
+// --- READ / QUERY FUNCTIONS (Unchanged but included for completeness) ---
 
 export async function getSummaryByDateRange(userId, type, startDate, endDate) {
     try {

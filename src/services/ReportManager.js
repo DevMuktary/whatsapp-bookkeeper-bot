@@ -69,7 +69,6 @@ export async function getPnLData(userId, startDate, endDate) {
     }
 }
 
-// [UPDATED] Joins customers collection to get real names
 export async function getReportTransactions(userId, type, startDate, endDate) {
     const query = {
         userId,
@@ -96,7 +95,7 @@ export async function getReportTransactions(userId, type, startDate, endDate) {
                 description: 1,
                 category: 1,
                 items: 1,
-                // Fallback to 'Walk-in' only if name is missing
+                // Use real name if found, else default to 'Walk-in'
                 customerName: { $ifNull: ['$customerDetails.customerName', 'Walk-in'] }
             }
         },

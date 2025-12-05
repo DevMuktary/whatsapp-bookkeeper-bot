@@ -2,7 +2,9 @@ import { updateUserState } from '../db/userService.js';
 import { getAllBankAccounts } from '../db/bankService.js';
 import { sendTextMessage, sendInteractiveButtons, sendInteractiveList, sendMainMenu, sendAddBankFlow } from '../api/whatsappService.js';
 import { USER_STATES, INTENTS } from '../utils/constants.js';
-import { gatherSaleDetails, gatherExpenseDetails, gatherProductDetails, gatherPaymentDetails } from '../services/aiService.js';
+// [UPDATED IMPORTS]
+import { gatherSaleDetails, gatherExpenseDetails, gatherProductDetails, gatherPaymentDetails } from '../ai/prompts.js';
+
 import { parseExcelImport } from '../services/FileImportService.js';
 import * as TransactionManager from '../services/TransactionManager.js';
 import * as InventoryManager from '../services/InventoryManager.js';

@@ -4,7 +4,9 @@ import { getAllBankAccounts, findBankAccountByName, updateBankBalance } from '..
 import { getCustomersWithBalance, updateBalanceOwed, findCustomerById } from '../db/customerService.js';
 import { updateUserState } from '../db/userService.js';
 import { sendTextMessage, sendMainMenu, sendInteractiveList } from '../api/whatsappService.js';
-import { getFinancialInsight } from '../services/aiService.js';
+// [UPDATED IMPORT]
+import { getFinancialInsight } from '../ai/prompts.js';
+
 import { INTENTS, USER_STATES } from '../utils/constants.js';
 import { getDateRange } from '../utils/dateUtils.js';
 import { getPnLData } from '../services/ReportManager.js';
@@ -56,7 +58,6 @@ async function executeCheckStock(user, data) {
     } else {
         await sendTextMessage(user.whatsappId, `Product "${productName}" not found.`);
     }
-    // [FIX] Send Menu
     await sendMainMenu(user.whatsappId);
 }
 
@@ -68,7 +69,6 @@ async function executeGetFinancialSummary(user, data) {
     const total = await getSummaryByDateRange(user._id, type, startDate, endDate);
     
     await sendTextMessage(user.whatsappId, `Total ${metric} (${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}): ${user.currency} ${total.toLocaleString()}`);
-    // [FIX] Send Menu
     await sendMainMenu(user.whatsappId);
 }
 
@@ -87,7 +87,6 @@ async function executeCheckBankBalance(user, data) {
             await sendTextMessage(user.whatsappId, `Current Balances:\n${summary}`);
         }
     }
-    // [FIX] Send Menu
     await sendMainMenu(user.whatsappId);
 }
 
@@ -98,7 +97,6 @@ async function executeGetFinancialInsight(user, data) {
     const pnlData = await getPnLData(user._id, period.startDate, period.endDate);
     const insight = await getFinancialInsight(pnlData, user.currency);
     await sendTextMessage(user.whatsappId, insight);
-    // [FIX] Send Menu
     await sendMainMenu(user.whatsappId);
 }
 
@@ -110,11 +108,8 @@ async function executeGetCustomerBalances(user) {
         const list = customers.map(c => `*${c.customerName}*: ${user.currency} ${c.balanceOwed.toLocaleString()}`).join('\n');
         await sendTextMessage(user.whatsappId, `Outstanding Balances:\n${list}`);
     }
-    // [FIX] Send Menu
     await sendMainMenu(user.whatsappId);
 }
-
-// --- RECONCILIATION LOGIC ---
 
 async function executeListTransactionsForReconcile(user) {
     const transactions = await getRecentTransactions(user._id, 8);
@@ -148,7 +143,6 @@ async function executeDeleteTransaction(user, data) {
         return;
     }
 
-    // 1. Reverse Financial Impact
     if (tx.type === 'SALE') {
         if (tx.items) {
             for (const item of tx.items) {
@@ -169,7 +163,6 @@ async function executeDeleteTransaction(user, data) {
         if (tx.linkedBankId) await updateBankBalance(tx.linkedBankId, -tx.amount);
     }
 
-    // 2. Delete Record
     await deleteTransactionById(transactionId);
     await sendTextMessage(user.whatsappId, "✅ Transaction deleted and balances reversed.");
     await sendMainMenu(user.whatsappId);
@@ -180,7 +173,6 @@ async function executeUpdateTransaction(user, data) {
     const originalTx = await findTransactionById(transactionId);
     if (!originalTx) return;
 
-    // A. Rollback Original
     if (originalTx.type === 'SALE') {
         if (originalTx.items) {
             for (const item of originalTx.items) {
@@ -191,7 +183,6 @@ async function executeUpdateTransaction(user, data) {
         else if (originalTx.linkedBankId) await updateBankBalance(originalTx.linkedBankId, -originalTx.amount);
     }
 
-    // B. Apply Updates
     let updatedTxData = { ...originalTx, ...changes };
     if (changes.unitsSold || changes.amountPerUnit) {
         const qty = parseFloat(changes.unitsSold || originalTx.items[0].quantity);
@@ -201,7 +192,6 @@ async function executeUpdateTransaction(user, data) {
         updatedTxData.items[0].pricePerUnit = price;
     }
 
-    // C. Save & Apply New Impact
     await updateTransactionById(transactionId, updatedTxData);
     
     if (updatedTxData.type === 'SALE') {

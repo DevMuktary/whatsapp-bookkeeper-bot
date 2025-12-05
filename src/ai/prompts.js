@@ -26,6 +26,13 @@ const parsePrice = (priceInput) => {
 function getFallbackIntent(text) {
     const t = text.toLowerCase();
     
+    // [UPDATED ORDER] 1. Check UPGRADE first (Specific)
+    if (t.includes('pay') && t.includes('subscription')) return { intent: INTENTS.UPGRADE_SUBSCRIPTION, context: {} };
+    if (t.includes('renew') || t.includes('upgrade plan') || t.includes('buy premium')) return { intent: INTENTS.UPGRADE_SUBSCRIPTION, context: {} };
+
+    // 2. Check CHECK STATUS second (General)
+    if (t.includes('subscription') || t.includes('my plan') || t.includes('when do i expire')) return { intent: INTENTS.CHECK_SUBSCRIPTION, context: {} };
+
     // Strict Keywords
     if (t.includes('insight') || t.includes('tip') || t.includes('advice')) return { intent: INTENTS.GET_FINANCIAL_INSIGHT, context: {} };
     if (t.includes('sold') || t.includes('sale') || t.includes('sell')) return { intent: INTENTS.LOG_SALE, context: {} };
@@ -37,9 +44,6 @@ function getFallbackIntent(text) {
     if (t.includes('report') || t.includes('pdf') || t.includes('p&l') || t.includes('statement')) return { intent: INTENTS.GENERATE_REPORT, context: {} };
     if (t.includes('join')) return { intent: INTENTS.GENERAL_CONVERSATION, context: { generatedReply: "To join a team, please type 'Join [Code]'." } };
     
-    // [NEW] Fallback for Subscription
-    if (t.includes('renew') || t.includes('subscription') || t.includes('upgrade plan')) return { intent: INTENTS.UPGRADE_SUBSCRIPTION, context: {} };
-
     return { 
         intent: INTENTS.GENERAL_CONVERSATION, 
         context: { generatedReply: "I'm having trouble connecting to my brain right now. 🧠\nPlease use the menu to select an option." } 
@@ -51,12 +55,16 @@ function getFallbackIntent(text) {
 export async function getIntent(text) {
     const t = text.toLowerCase().trim();
 
-    // 1. FAST PATH
+    // 1. FAST PATH (Priority Over AI)
     if (['menu', 'options', 'home', 'start', 'cancel', 'stop', 'exit'].includes(t)) {
         return { intent: INTENTS.SHOW_MAIN_MENU, context: {} };
     }
     if (t === 'hi' || t === 'hello' || t === 'hey') {
          return { intent: INTENTS.GENERAL_CONVERSATION, context: { generatedReply: "Hello! How can I help you today?" } };
+    }
+    // "I want to pay" -> UPGRADE (Catch it before AI confuses it)
+    if ((t.includes('pay') || t.includes('renew')) && (t.includes('subscription') || t.includes('fynax'))) {
+        return { intent: INTENTS.UPGRADE_SUBSCRIPTION, context: {} };
     }
     if (t.includes('balance') && t.length < 20) {
         return { intent: INTENTS.CHECK_BANK_BALANCE, context: {} };
@@ -81,12 +89,13 @@ export async function getIntent(text) {
         - ${INTENTS.CHECK_BANK_BALANCE}: "Check my balance", "How much in Opay?"
         - ${INTENTS.GENERAL_CONVERSATION}: "Hello", "Thanks", "Hi".
         - ${INTENTS.CHECK_SUBSCRIPTION}: "My plan", "When do I expire?", "Subscription status".
-        - ${INTENTS.UPGRADE_SUBSCRIPTION}: "I want to pay", "Renew Fynax", "Upgrade to premium", "Extend plan".
+        - ${INTENTS.UPGRADE_SUBSCRIPTION}: "Renew Fynax", "Upgrade to premium", "Extend plan".
 
         CRITICAL RULES:
         1. If user says "Pay" or "Payment" WITHOUT context of a customer, ask for clarification unless they say "Subscription" or "Renew".
-        2. "Financial Insight" = ${INTENTS.GET_FINANCIAL_INSIGHT}.
-        3. "Generate Report" = ${INTENTS.GENERATE_REPORT}.
+        2. "Pay for Subscription" = ${INTENTS.UPGRADE_SUBSCRIPTION}.
+        3. "Financial Insight" = ${INTENTS.GET_FINANCIAL_INSIGHT}.
+        4. "Generate Report" = ${INTENTS.GENERATE_REPORT}.
         
         Return JSON format: {"intent": "...", "context": {...}}
         `;

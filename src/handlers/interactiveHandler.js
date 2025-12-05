@@ -9,6 +9,9 @@ import { handleMessage } from './messageHandler.js';
 import { getAllBankAccounts } from '../db/bankService.js'; 
 import { ObjectId } from 'mongodb';
 
+// [NEW] Import the helper from your new Action Handler
+import { askForBankSelection } from './actionHandler.js';
+
 import * as TransactionManager from '../services/TransactionManager.js';
 import * as InventoryManager from '../services/InventoryManager.js';
 import { executeTask } from './taskHandler.js'; 
@@ -36,6 +39,7 @@ export async function handleInteractiveMessage(message) {
 
 async function handleButtonReply(user, buttonId, originalMessage) {
     switch (user.state) {
+        // BANK MENU
         case USER_STATES.AWAITING_BANK_MENU_SELECTION:
             if (buttonId === 'bank_action:add') {
                 if (user.role === 'STAFF') {
@@ -111,6 +115,7 @@ async function handleButtonReply(user, buttonId, originalMessage) {
 }
 
 async function handleListReply(user, listId, originalMessage) {
+    // VIEW BALANCE
     if (listId.startsWith('view_balance:')) {
         const bankId = listId.split(':')[1];
         const banks = await getAllBankAccounts(user._id);
@@ -126,6 +131,7 @@ async function handleListReply(user, listId, originalMessage) {
         return;
     }
 
+    // BANK SELECTION FOR TRANSACTIONS
     if (listId.startsWith('select_bank:')) {
         let intent;
         if (user.state === USER_STATES.AWAITING_BANK_SELECTION_SALE) intent = INTENTS.LOG_SALE;
@@ -161,7 +167,7 @@ async function handleBankSelection(user, buttonId, intent) {
     const [action, bankIdStr] = buttonId.split(':');
     if (action !== 'select_bank') return;
 
-    // Retrieve the data stored by askForBankSelection
+    // [FIX] Ensure we pull from the right place. 'askForBankSelection' saves to 'transactionData'.
     let transactionData = user.stateContext.transactionData; 
     let linkedBankId = null;
     
@@ -172,12 +178,10 @@ async function handleBankSelection(user, buttonId, intent) {
     await sendTextMessage(user.whatsappId, "Great, noting that down... 📝");
 
     try {
-        // [FIX] BULK IMPORT LOGIC
         if (intent === INTENTS.ADD_PRODUCTS_FROM_LIST) {
-            // Data is inside transactionData.products
+            // [FIX] Correctly access the products array
             const productsToAdd = transactionData.products || []; 
             
-            // Map the bank ID to each item
             const enrichedProducts = productsToAdd.map(p => ({ 
                 ...p, 
                 linkedBankId: linkedBankId,
@@ -196,14 +200,15 @@ async function handleBankSelection(user, buttonId, intent) {
             }
         
         } else if (intent === INTENTS.LOG_EXPENSE) {
-            // Apply bank to all expenses in batch
             if (transactionData.expenses) {
+                // [FIX] Handle Multi-Expense array
                 const expenses = transactionData.expenses.map(e => ({ ...e, linkedBankId }));
                 for (const exp of expenses) {
                     await TransactionManager.logExpense(user, exp);
                 }
                 await sendTextMessage(user.whatsappId, `✅ ${expenses.length} expenses logged successfully.`);
             } else {
+                // Single Expense
                 transactionData.linkedBankId = linkedBankId;
                 await TransactionManager.logExpense(user, transactionData);
                 await sendTextMessage(user.whatsappId, "✅ Expense logged successfully.");
@@ -238,34 +243,23 @@ async function handleBankSelection(user, buttonId, intent) {
     }
 }
 
-// [UPDATED] Uses 'askForBankSelection' helper via messageHandler export? 
-// Actually, circular imports can be tricky. We can manually set the state here.
 async function handleBulkProductConfirmation(user, buttonId) {
     if (buttonId === 'confirm_bulk_add') {
         const productsToAdd = user.stateContext.products;
-        
         if (productsToAdd && productsToAdd.length > 0) {
-            const banks = await getAllBankAccounts(user._id);
             
+            const banks = await getAllBankAccounts(user._id);
             if (banks.length > 0) {
-                // Manually implement bank selection logic to avoid circular import issues
-                await updateUserState(user.whatsappId, USER_STATES.AWAITING_BANK_SELECTION_BULK, { 
-                    transactionData: { products: productsToAdd } // SAVE IN transactionData
-                });
-
-                const options = banks.map(b => ({ id: `select_bank:${b._id}`, title: b.bankName }));
-                options.push({ id: `select_bank:none`, title: 'No Bank / Cash' });
-
-                if (options.length <= 3) {
-                    await sendInteractiveButtons(user.whatsappId, 'Paid for stock from which account?', options);
-                } else {
-                    const sections = [{ title: "Select Account", rows: options.map(opt => ({ id: opt.id, title: opt.title })) }];
-                    await sendInteractiveList(user.whatsappId, "Payment Method", 'Paid for stock from which account?', "Choose Bank", sections);
-                }
+                // [UPDATED] Use the imported helper to ask for bank
+                await askForBankSelection(
+                    user, 
+                    { products: productsToAdd }, // Pass products as transactionData
+                    USER_STATES.AWAITING_BANK_SELECTION_BULK, 
+                    'Paid for stock from which account?'
+                );
                 return;
             }
 
-            // No banks? Proceed.
             await sendTextMessage(user.whatsappId, "Adding products... 📦");
             const result = await InventoryManager.addBulkProducts(user, productsToAdd);
             
@@ -283,8 +277,6 @@ async function handleBulkProductConfirmation(user, buttonId) {
     await updateUserState(user.whatsappId, USER_STATES.IDLE);
     await sendMainMenu(user.whatsappId);
 }
-
-// ... (Other handlers remain unchanged) ...
 
 async function handleInvoiceConfirmation(user, buttonId) {
     if (buttonId === 'invoice_yes') {
@@ -395,4 +387,4 @@ async function handleDeleteConfirmation(user, buttonId) {
         await updateUserState(user.whatsappId, USER_STATES.IDLE);
         await sendMainMenu(user.whatsappId);
     }
-}
+}v

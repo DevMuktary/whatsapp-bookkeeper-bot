@@ -230,7 +230,9 @@ export async function sendMainMenu(to) {
                 { id: 'generate report', title: '📊 Generate a Report', description: 'Get a PDF report for your business.' },
                 { id: 'get financial insight', title: '💡 Get Financial Insight', description: 'Receive an AI-powered tip.' },
                 { id: 'edit a transaction', title: '✏️ Edit/Delete a Record', description: 'Correct a previous entry.' },
-                // [NEW] Subscription Button
+                // [RESTORED] Bank Button
+                { id: 'manage bank accounts', title: '🏦 Manage Bank Accounts', description: 'Add or check bank balances.' },
+                // Subscription Button
                 { id: 'check subscription', title: '💳 My Subscription', description: 'Check status or renew.' },
             ]
         }
@@ -266,10 +268,10 @@ export async function sendReportMenu(to) {
     );
 }
 
-// [NEW] Payment Options
+// Payment Options
 export async function sendPaymentOptions(to) {
     await sendInteractiveButtons(to, 
-        "💳 **Upgrade to Premium**\n\nChoose your location to see payment options:", 
+        "💳 *Upgrade to Premium*\n\nChoose your location to see payment options:", 
         [
             { id: 'payment_method:ngn', title: '🇳🇬 Nigeria (₦7,500)' },
             { id: 'payment_method:usd', title: '🌍 International ($5)' }

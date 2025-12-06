@@ -2,13 +2,13 @@ import { getSystemStats, getAllUsers, findUserByPhone, updateUser } from '../db/
 import { sendTextMessage } from '../api/whatsappService.js';
 import logger from '../utils/logger.js';
 
-// Helper to pause execution (avoid spamming WhatsApp API)
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 export async function handleAdminCommand(adminUser, text) {
     const parts = text.split(' ');
-    const command = parts[0].toLowerCase(); // e.g., !admin
-    const action = parts[1]?.toLowerCase(); // e.g., stats, gift
+    // parts[0] is "!admin"
+    // parts[1] is the action (stats, gift)
+    const action = parts[1] ? parts[1].toLowerCase() : null; 
 
     try {
         // 1. STATS COMMAND
@@ -31,7 +31,7 @@ export async function handleAdminCommand(adminUser, text) {
         // 2. GIFT COMMAND (!admin gift 23480... 30)
         if (action === 'gift') {
             const targetPhone = parts[2];
-            const days = parseInt(parts[3]);
+            const days = parts[3] ? parseInt(parts[3]) : 0;
 
             if (!targetPhone || !days || isNaN(days)) {
                 await sendTextMessage(adminUser.whatsappId, "❌ Usage: !admin gift [phone] [days]");
@@ -46,10 +46,12 @@ export async function handleAdminCommand(adminUser, text) {
 
             const now = new Date();
             let newExpiry = new Date();
-            // Extend existing or start new
+            
+            // Check if they already have an active date
             if (targetUser.subscriptionExpiresAt && new Date(targetUser.subscriptionExpiresAt) > now) {
                 newExpiry = new Date(targetUser.subscriptionExpiresAt);
             }
+            
             newExpiry.setDate(newExpiry.getDate() + days);
 
             await updateUser(targetUser.whatsappId, {
@@ -63,7 +65,8 @@ export async function handleAdminCommand(adminUser, text) {
             return;
         }
 
-        await sendTextMessage(adminUser.whatsappId, "⚠️ Unknown Admin Command.\nTry: stats, gift");
+        // Default if unknown command
+        await sendTextMessage(adminUser.whatsappId, "⚠️ Unknown Admin Command.\n\nTry:\n!admin stats\n!admin gift [phone] [days]");
 
     } catch (error) {
         logger.error("Admin Command Failed:", error);
@@ -72,7 +75,6 @@ export async function handleAdminCommand(adminUser, text) {
 }
 
 export async function handleBroadcast(adminUser, text) {
-    // Text format: "!broadcast Hello everyone..."
     const messageContent = text.replace('!broadcast', '').trim();
     
     if (messageContent.length < 5) {
@@ -89,7 +91,7 @@ export async function handleBroadcast(adminUser, text) {
         try {
             await sendTextMessage(user.whatsappId, `📢 *Announcement*\n\n${messageContent}`);
             count++;
-            await sleep(100); // 100ms delay to be safe
+            await sleep(100); 
         } catch (e) {
             logger.warn(`Failed to broadcast to ${user.whatsappId}`);
         }

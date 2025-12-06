@@ -1,4 +1,3 @@
-// [UPDATED] Imports
 import { findOrCreateUser, updateUserState, createJoinCode, findOwnerByJoinCode, linkStaffToOwner, checkSubscriptionAccess } from '../db/userService.js';
 import { findProductByName } from '../db/productService.js';
 import { getAllBankAccounts } from '../db/bankService.js';
@@ -92,8 +91,8 @@ export async function handleMessage(message) {
             const owner = await findOwnerByJoinCode(code);
             if (owner) {
                 await linkStaffToOwner(whatsappId, owner._id);
-                await sendTextMessage(whatsappId, `✅ Success! You have joined **${owner.businessName}**. You can now log sales for them.`);
-                await sendTextMessage(owner.whatsappId, `🔔 **New Staff:** ${user.businessName || whatsappId} just joined your team.`);
+                await sendTextMessage(whatsappId, `✅ Success! You have joined *${owner.businessName}*. You can now log sales for them.`);
+                await sendTextMessage(owner.whatsappId, `🔔 *New Staff:* ${user.businessName || whatsappId} just joined your team.`);
             } else {
                 await sendTextMessage(whatsappId, "❌ Invalid invite code.");
             }
@@ -188,11 +187,9 @@ export async function handleMessage(message) {
 }
 
 async function handleIdleState(user, text) {
-    // [NEW] GATEKEEPER CHECK
-    // Only check gatekeeper for specific heavy tasks, not simple ones.
     const { intent, context } = await getIntent(text);
 
-    // RESTRICTED INTENTS (Must be Paid)
+    // GATEKEEPER CHECK
     const PAID_INTENTS = [
         INTENTS.LOG_SALE, 
         INTENTS.LOG_EXPENSE, 
@@ -205,13 +202,12 @@ async function handleIdleState(user, text) {
     if (PAID_INTENTS.includes(intent)) {
         const access = checkSubscriptionAccess(user);
         if (!access.allowed) {
-            await sendTextMessage(user.whatsappId, "⛔ **Service Suspended**\n\nYour free trial or subscription has expired. Please upgrade to continue using Fynax.");
+            await sendTextMessage(user.whatsappId, "⛔ *Service Suspended*\n\nYour free trial or subscription has expired. Please upgrade to continue using Fynax.");
             await sendPaymentOptions(user.whatsappId);
             return;
         }
     }
 
-    // [EXISTING STAFF CHECKS]
     if (user.isStaff) {
         const RESTRICTED = [INTENTS.RECONCILE_TRANSACTION, INTENTS.ADD_BANK_ACCOUNT, 'EXPORT_DATA'];
         if (RESTRICTED.includes(intent) || (intent === 'EXPORT_DATA')) {
@@ -224,10 +220,9 @@ async function handleIdleState(user, text) {
         }
     }
 
-    // [NEW] SUBSCRIPTION INTENTS
     if (intent === INTENTS.CHECK_SUBSCRIPTION) {
         const access = checkSubscriptionAccess(user);
-        let msg = `📅 **Subscription Status**\n\nPlan: ${access.type}`;
+        let msg = `📅 *Subscription Status*\n\nPlan: ${access.type}`;
         if (access.daysLeft) msg += `\nExpires in: ${access.daysLeft} days`;
         else msg += `\nStatus: Expired ❌`;
         
@@ -251,7 +246,7 @@ async function handleIdleState(user, text) {
             return;
         }
         const code = await createJoinCode(user._id);
-        await sendTextMessage(user.whatsappId, `👥 **Team Invite**\n\nShare this code with your staff:\n\n**${code}**\n\nAsk them to send the message: *"Join ${code}"* to this bot.`);
+        await sendTextMessage(user.whatsappId, `👥 *Team Invite*\n\nShare this code with your staff:\n\n*${code}*\n\nAsk them to send the message: *"Join ${code}"* to this bot.`);
         return;
     }
 

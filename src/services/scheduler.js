@@ -1,7 +1,7 @@
 import cron from 'node-cron';
 import { getAllUsers, checkSubscriptionAccess } from '../db/userService.js';
 import { queueDailyTask } from './QueueService.js'; 
-import { sendTextMessage, sendPaymentOptions } from '../api/whatsappService.js'; // [NEW IMPORT]
+import { sendTextMessage, sendPaymentOptions } from '../api/whatsappService.js';
 import logger from '../utils/logger.js';
 
 // Run at 8 PM WAT (Lagos)
@@ -18,7 +18,7 @@ export function startDailyScheduler() {
             logger.info(`Found ${users.length} active users.`);
 
             for (const user of users) {
-                // [NEW] SUBSCRIPTION CHECKS (Run instantly before queueing heavy tasks)
+                // SUBSCRIPTION CHECKS (Run instantly before queueing heavy tasks)
                 await processSubscriptionReminder(user);
 
                 // Queue heavy report tasks
@@ -37,13 +37,13 @@ async function processSubscriptionReminder(user) {
     // Only remind on specific days to avoid being annoying
     if (access.daysLeft === 4) {
         await sendTextMessage(user.whatsappId, 
-            `🔔 **Reminder:** Your Fynax plan expires in 4 days.\n\nRenew now to avoid service interruption.`
+            `🔔 *Reminder:* Your Fynax plan expires in 4 days.\n\nRenew now to avoid service interruption.`
         );
         await sendPaymentOptions(user.whatsappId);
     } 
     else if (access.daysLeft === 1) {
         await sendTextMessage(user.whatsappId, 
-            `⚠️ **Urgent:** Your service expires TOMORROW.\n\nOnce expired, you will lose access to logging sales and reports. Renew now.`
+            `⚠️ *Urgent:* Your service expires TOMORROW.\n\nOnce expired, you will lose access to logging sales and reports. Renew now.`
         );
         await sendPaymentOptions(user.whatsappId);
     }

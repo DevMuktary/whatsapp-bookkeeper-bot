@@ -3,7 +3,7 @@ import { findProductByName } from '../db/productService.js';
 import { getAllBankAccounts } from '../db/bankService.js';
 import { getIntent, parseBulkProductList } from '../ai/prompts.js';
 import { transcribeAudio, analyzeImage } from '../ai/media.js';
-import config from '../config/index.js'; // [NEW] Needed for Admin Phone check
+import config from '../config/index.js'; 
 
 import { 
     sendTextMessage, sendInteractiveButtons, sendInteractiveList, sendMainMenu, sendReportMenu, 
@@ -61,7 +61,6 @@ export async function handleMessage(message) {
     if (message.type === 'text') userInputText = message.text.body;
     else if (message.type === 'audio') userInputText = await transcribeAudio(message.audio.id) || "";
     else if (message.type === 'image') userInputText = await analyzeImage(message.image.id, message.image.caption) || "";
-    
     else if (message.type === 'document') {
         const mime = message.document.mime_type;
         const rawUser = await findOrCreateUser(whatsappId);
@@ -86,7 +85,7 @@ export async function handleMessage(message) {
     const user = await getEffectiveUser(rawUser);
     const lowerCaseText = userInputText.trim().toLowerCase();
 
-    // 0. [UPDATED] ADMIN COMMANDS CHECK (Supports Multiple Admins)
+    // 0. ADMIN COMMANDS CHECK
     if (config.adminPhones && config.adminPhones.includes(whatsappId)) {
         if (lowerCaseText.startsWith('!admin')) {
             await handleAdminCommand(user, lowerCaseText);
@@ -98,20 +97,20 @@ export async function handleMessage(message) {
         }
     }
 
-    // 1. SYSTEM COMMANDS
+    // 1. SYSTEM COMMANDS (JOIN TEAM)
     if (lowerCaseText.startsWith('join ')) {
-        const code = lowerCaseText.split(' ')[1]?.toUpperCase();
-        if (code) {
+        const parts = lowerCaseText.split(' ');
+        // [FIX] Strict check to prevent 'undefined' error
+        if (parts.length > 1 && parts[1]) {
+            const code = parts[1].toUpperCase(); // Safe now
             const owner = await findOwnerByJoinCode(code);
             if (owner) {
                 await linkStaffToOwner(whatsappId, owner._id);
-                await sendTextMessage(whatsappId, `✅ Success! You have joined *${owner.businessName}*. You can now log sales for them.`);
+                await sendTextMessage(whatsappId, `✅ Success! You have joined *${owner.businessName}*.`);
                 await sendTextMessage(owner.whatsappId, `🔔 *New Staff:* ${user.businessName || whatsappId} just joined your team.`);
             } else {
                 await sendTextMessage(whatsappId, "❌ Invalid invite code.");
             }
-        } else {
-            await sendTextMessage(whatsappId, "Please type 'Join [Code]', e.g., 'Join X7K9P2'.");
         }
         return;
     }

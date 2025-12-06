@@ -61,6 +61,7 @@ export async function handleMessage(message) {
     if (message.type === 'text') userInputText = message.text.body;
     else if (message.type === 'audio') userInputText = await transcribeAudio(message.audio.id) || "";
     else if (message.type === 'image') userInputText = await analyzeImage(message.image.id, message.image.caption) || "";
+    
     else if (message.type === 'document') {
         const mime = message.document.mime_type;
         const rawUser = await findOrCreateUser(whatsappId);
@@ -87,6 +88,11 @@ export async function handleMessage(message) {
 
     // 0. ADMIN COMMANDS CHECK
     if (config.adminPhones && config.adminPhones.includes(whatsappId)) {
+        // [FIX] Allow "!stats" as a shortcut for "!admin stats"
+        if (lowerCaseText === '!stats') {
+            await handleAdminCommand(user, '!admin stats');
+            return;
+        }
         if (lowerCaseText.startsWith('!admin')) {
             await handleAdminCommand(user, lowerCaseText);
             return;
@@ -100,9 +106,9 @@ export async function handleMessage(message) {
     // 1. SYSTEM COMMANDS (JOIN TEAM)
     if (lowerCaseText.startsWith('join ')) {
         const parts = lowerCaseText.split(' ');
-        // [FIX] Strict check to prevent 'undefined' error
+        // [FIX] Safety check to prevent crash if user just types "join"
         if (parts.length > 1 && parts[1]) {
-            const code = parts[1].toUpperCase(); // Safe now
+            const code = parts[1].toUpperCase(); 
             const owner = await findOwnerByJoinCode(code);
             if (owner) {
                 await linkStaffToOwner(whatsappId, owner._id);
@@ -111,6 +117,8 @@ export async function handleMessage(message) {
             } else {
                 await sendTextMessage(whatsappId, "❌ Invalid invite code.");
             }
+        } else {
+            await sendTextMessage(whatsappId, "To join a team, please type 'Join' followed by the code. Example: 'Join ABC123'.");
         }
         return;
     }

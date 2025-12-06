@@ -2,6 +2,8 @@
 const config = {
   port: process.env.PORT || 3000,
   mongoURI: process.env.MONGO_URI,
+  // [UPDATED] Support Multiple Admins (Split by comma)
+  adminPhones: process.env.ADMIN_PHONE ? process.env.ADMIN_PHONE.split(',').map(p => p.trim()) : [],
   whatsapp: {
     token: process.env.WHATSAPP_TOKEN,
     phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID,
@@ -18,14 +20,13 @@ const config = {
   brevo: {
     apiKey: process.env.BREVO_API_KEY
   },
-  // [NEW] Paystack Configuration
   paystack: {
     publicKey: process.env.PAYSTACK_PUBLIC_KEY,
     secretKey: process.env.PAYSTACK_SECRET_KEY,
-    webhookSecret: process.env.PAYSTACK_WEBHOOK_SECRET, // Critical for security
+    webhookSecret: process.env.PAYSTACK_WEBHOOK_SECRET,
     prices: {
         ngnMonthly: 7500,
-        usdMonthly: 5 // $5.00
+        usdMonthly: 5 
     }
   },
   redis: {

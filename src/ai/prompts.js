@@ -26,14 +26,14 @@ const parsePrice = (priceInput) => {
 function getFallbackIntent(text) {
     const t = text.toLowerCase();
     
-    // [UPDATED ORDER] 1. Check UPGRADE first (Specific)
+    // [UPDATED] Strict Keywords to prevent Hallucinations
+    if (t.includes('add bank') || t.includes('new bank')) return { intent: INTENTS.ADD_BANK_ACCOUNT, context: {} };
+    
     if (t.includes('pay') && t.includes('subscription')) return { intent: INTENTS.UPGRADE_SUBSCRIPTION, context: {} };
     if (t.includes('renew') || t.includes('upgrade plan') || t.includes('buy premium')) return { intent: INTENTS.UPGRADE_SUBSCRIPTION, context: {} };
 
-    // 2. Check CHECK STATUS second (General)
-    if (t.includes('subscription') || t.includes('my plan') || t.includes('when do i expire')) return { intent: INTENTS.CHECK_SUBSCRIPTION, context: {} };
+    if (t.includes('subscription') || t.includes('my plan')) return { intent: INTENTS.CHECK_SUBSCRIPTION, context: {} };
 
-    // Strict Keywords
     if (t.includes('insight') || t.includes('tip') || t.includes('advice')) return { intent: INTENTS.GET_FINANCIAL_INSIGHT, context: {} };
     if (t.includes('sold') || t.includes('sale') || t.includes('sell')) return { intent: INTENTS.LOG_SALE, context: {} };
     if (t.includes('bought') || t.includes('expense') || t.includes('spent') || t.includes('paid')) return { intent: INTENTS.LOG_EXPENSE, context: {} };
@@ -56,13 +56,25 @@ export async function getIntent(text) {
     const t = text.toLowerCase().trim();
 
     // 1. FAST PATH (Priority Over AI)
+    // Fix for "Add Bank" confusing the AI
+    if (t.includes('add bank') || t.includes('add new bank') || t === 'add account') {
+        return { intent: INTENTS.ADD_BANK_ACCOUNT, context: {} };
+    }
+
+    // Fix for "!stats" or other admin commands confusing the AI
+    // If it starts with "!", treat it as conversation (or let handler catch it) 
+    // but DO NOT let it trigger a Report.
+    if (t.startsWith('!') || t.startsWith('/')) {
+        return { intent: INTENTS.GENERAL_CONVERSATION, context: { generatedReply: "If that was a command, I didn't recognize it. Try checking the menu." } };
+    }
+
     if (['menu', 'options', 'home', 'start', 'cancel', 'stop', 'exit'].includes(t)) {
         return { intent: INTENTS.SHOW_MAIN_MENU, context: {} };
     }
     if (t === 'hi' || t === 'hello' || t === 'hey') {
          return { intent: INTENTS.GENERAL_CONVERSATION, context: { generatedReply: "Hello! How can I help you today?" } };
     }
-    // "I want to pay" -> UPGRADE (Catch it before AI confuses it)
+    // "I want to pay" -> UPGRADE
     if ((t.includes('pay') || t.includes('renew')) && (t.includes('subscription') || t.includes('fynax'))) {
         return { intent: INTENTS.UPGRADE_SUBSCRIPTION, context: {} };
     }
@@ -83,6 +95,7 @@ export async function getIntent(text) {
         - ${INTENTS.LOG_SALE}: "Sold 5 rice", "Credit sale to John"
         - ${INTENTS.LOG_EXPENSE}: "Bought fuel 500", "Paid shop rent"
         - ${INTENTS.ADD_PRODUCT}: "Restock rice", "New item indomie"
+        - ${INTENTS.ADD_BANK_ACCOUNT}: "Add bank", "Add new bank", "New account".
         - ${INTENTS.GENERATE_REPORT}: "Send me a PDF", "Sales report", "P&L", "Profit and Loss".
         - ${INTENTS.GET_FINANCIAL_INSIGHT}: "Get financial insight", "Give me a business tip", "Analyze my profit".
         - ${INTENTS.GET_FINANCIAL_SUMMARY}: "Total sales today", "How much did I spend?"
@@ -92,7 +105,7 @@ export async function getIntent(text) {
         - ${INTENTS.UPGRADE_SUBSCRIPTION}: "Renew Fynax", "Upgrade to premium", "Extend plan".
 
         CRITICAL RULES:
-        1. If user says "Pay" or "Payment" WITHOUT context of a customer, ask for clarification unless they say "Subscription" or "Renew".
+        1. "Add Bank" or "Add New Bank" = ${INTENTS.ADD_BANK_ACCOUNT}. NEVER map this to ADD_PRODUCT.
         2. "Pay for Subscription" = ${INTENTS.UPGRADE_SUBSCRIPTION}.
         3. "Financial Insight" = ${INTENTS.GET_FINANCIAL_INSIGHT}.
         4. "Generate Report" = ${INTENTS.GENERATE_REPORT}.

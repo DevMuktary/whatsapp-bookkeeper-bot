@@ -8,7 +8,7 @@ import logger from '../utils/logger.js';
 import { handleMessage } from './messageHandler.js';
 import { askForBankSelection } from './actionHandler.js'; 
 import { getAllBankAccounts } from '../db/bankService.js'; 
-import { createDedicatedAccount, initializePayment } from '../services/paymentService.js'; // [NEW IMPORT]
+import { createDedicatedAccount, initializePayment } from '../services/paymentService.js'; 
 import { ObjectId } from 'mongodb';
 
 import * as TransactionManager from '../services/TransactionManager.js';
@@ -37,7 +37,6 @@ export async function handleInteractiveMessage(message) {
 }
 
 async function handleButtonReply(user, buttonId, originalMessage) {
-    // [NEW] Payment Handling
     if (buttonId.startsWith('payment_method:')) {
         const type = buttonId.split(':')[1];
         if (type === 'ngn') {
@@ -45,7 +44,7 @@ async function handleButtonReply(user, buttonId, originalMessage) {
             try {
                 const account = await createDedicatedAccount(user);
                 await sendTextMessage(user.whatsappId, 
-                    `🏦 **Bank Transfer Details**\n\nPlease transfer **₦7,500** to:\n\nBank: **${account.bankName}**\nAccount: **${account.accountNumber}**\nName: **${account.accountName}**\n\nOnce you transfer, your subscription will activate automatically within minutes!`
+                    `🏦 *Bank Transfer Details*\n\nPlease transfer *₦7,500* to:\n\nBank: *${account.bankName}*\nAccount: *${account.accountNumber}*\nName: *${account.accountName}*\n\nOnce you transfer, your subscription will activate automatically within minutes!`
                 );
             } catch (e) {
                 await sendTextMessage(user.whatsappId, "Error creating account. Please try again later.");
@@ -54,7 +53,7 @@ async function handleButtonReply(user, buttonId, originalMessage) {
             await sendTextMessage(user.whatsappId, "Generating secure payment link... ⏳");
             try {
                 const link = await initializePayment(user, 'USD');
-                await sendTextMessage(user.whatsappId, `🌍 **Pay securely via Card**\n\nClick here to pay $5.00: ${link}`);
+                await sendTextMessage(user.whatsappId, `🌍 *Pay securely via Card*\n\nClick here to pay $5.00: ${link}`);
             } catch (e) {
                 await sendTextMessage(user.whatsappId, "Error creating link.");
             }
@@ -155,7 +154,7 @@ async function handleListReply(user, listId, originalMessage) {
         const bank = banks.find(b => b._id.toString() === bankId);
         
         if (bank) {
-            await sendTextMessage(user.whatsappId, `🏦 **${bank.bankName}**\n\nBalance: **${user.currency} ${bank.balance.toLocaleString()}**`);
+            await sendTextMessage(user.whatsappId, `🏦 *${bank.bankName}*\n\nBalance: *${user.currency} ${bank.balance.toLocaleString()}*`);
         } else {
             await sendTextMessage(user.whatsappId, "Bank not found.");
         }
@@ -192,13 +191,6 @@ async function handleListReply(user, listId, originalMessage) {
         });
     }
 }
-
-// ... (Rest of functions: handleBankSelection, etc. remain unchanged. Copy from previous ActionHandler) ...
-// For brevity, assuming the rest of the file is the same as the previous version provided.
-// If you need the full file again, I can provide it, but it's very long. 
-// Just ensure `handleButtonReply` and `handleListReply` logic above is pasted in.
-
-// --- RE-INSERTING THE REST FOR COMPLETENESS ---
 
 async function handleBankSelection(user, buttonId, intent) {
     const [action, bankIdStr] = buttonId.split(':');

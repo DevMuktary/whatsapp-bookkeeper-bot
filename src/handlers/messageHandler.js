@@ -3,6 +3,7 @@ import { findProductByName } from '../db/productService.js';
 import { getAllBankAccounts } from '../db/bankService.js';
 import { getIntent, parseBulkProductList } from '../ai/prompts.js';
 import { transcribeAudio, analyzeImage } from '../ai/media.js';
+import config from '../config/index.js'; // [NEW] Needed for Admin Phone check
 
 import { 
     sendTextMessage, sendInteractiveButtons, sendInteractiveList, sendMainMenu, sendReportMenu, 
@@ -20,6 +21,7 @@ import {
     handleLoggingSale, handleLoggingExpense, handleAddingProduct, handleLoggingCustomerPayment, 
     handleEditValue, handleDocumentImport, handleManageBanks 
 } from './actionHandler.js';
+import { handleAdminCommand, handleBroadcast } from './adminHandler.js'; 
 
 const CANCEL_KEYWORDS = ['cancel', 'stop', 'exit', 'abort', 'quit'];
 
@@ -83,6 +85,18 @@ export async function handleMessage(message) {
     const rawUser = await findOrCreateUser(whatsappId);
     const user = await getEffectiveUser(rawUser);
     const lowerCaseText = userInputText.trim().toLowerCase();
+
+    // 0. [UPDATED] ADMIN COMMANDS CHECK (Supports Multiple Admins)
+    if (config.adminPhones && config.adminPhones.includes(whatsappId)) {
+        if (lowerCaseText.startsWith('!admin')) {
+            await handleAdminCommand(user, lowerCaseText);
+            return;
+        }
+        if (lowerCaseText.startsWith('!broadcast')) {
+            await handleBroadcast(user, userInputText); 
+            return;
+        }
+    }
 
     // 1. SYSTEM COMMANDS
     if (lowerCaseText.startsWith('join ')) {

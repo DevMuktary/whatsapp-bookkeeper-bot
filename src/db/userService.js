@@ -9,19 +9,17 @@ const usersCollection = () => getDB().collection('users');
 
 // --- REDIS SETUP ---
 const redis = new IORedis(config.redis.url, config.redis.options);
-const CACHE_TTL = 600; // 10 minutes
+const CACHE_TTL = 600; 
 
 redis.on('error', (err) => {
-    // Suppress connection errors here to avoid spamming logs
+    // Suppress connection errors here
 });
 
 const getKey = (type, id) => `user:${type}:${id.toString()}`;
 
-// [UPDATED] GATEKEEPER FUNCTION (Fixes the NaN bug)
 export function checkSubscriptionAccess(user) {
     const now = new Date();
     
-    // Helper to ensure we have a valid Date object (fixes Redis string issue)
     const getValidDate = (dateVal) => dateVal ? new Date(dateVal) : null;
 
     const trialEnd = getValidDate(user.trialEndsAt);
@@ -29,7 +27,6 @@ export function checkSubscriptionAccess(user) {
 
     // 1. Check Trial
     if (trialEnd && trialEnd > now) {
-        // Force new Date() on trialEnd before subtraction
         const diffTime = trialEnd.getTime() - now.getTime();
         const daysLeft = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
         return { allowed: true, type: 'TRIAL', daysLeft: daysLeft };
@@ -56,7 +53,6 @@ export async function findOrCreateUser(whatsappId) {
     if (!user) {
       logger.info(`New user detected: ${whatsappId}. Creating new user record.`);
       
-      // Initialize Trial (7 Days)
       const trialEnd = new Date();
       trialEnd.setDate(trialEnd.getDate() + 7);
 
@@ -73,7 +69,6 @@ export async function findOrCreateUser(whatsappId) {
         stateContext: {},
         otp: null,
         otpExpires: null,
-        // Subscription Fields
         subscriptionStatus: 'TRIAL',
         trialEndsAt: trialEnd,
         subscriptionExpiresAt: null,
@@ -114,6 +109,30 @@ export async function findUserById(userId) {
     } catch (error) {
         logger.error(`Error finding user by ID ${userId}:`, error);
         return null;
+    }
+}
+
+// [NEW] Helper for Admin Commands
+export async function findUserByPhone(phone) {
+    // Strip '+' if present
+    const cleanPhone = phone.replace('+', '').trim();
+    return await usersCollection().findOne({ whatsappId: cleanPhone });
+}
+
+// [NEW] Admin Stats Aggregation
+export async function getSystemStats() {
+    try {
+        const totalUsers = await usersCollection().countDocuments({});
+        const activeSubs = await usersCollection().countDocuments({ subscriptionStatus: 'ACTIVE' });
+        const trials = await usersCollection().countDocuments({ subscriptionStatus: 'TRIAL' });
+        
+        // Simple MRR Estimate (Active * Price)
+        const estimatedRevenue = activeSubs * 7500; 
+
+        return { totalUsers, activeSubs, trials, estimatedRevenue };
+    } catch (error) {
+        logger.error('Error fetching system stats:', error);
+        return { totalUsers: 0, activeSubs: 0, trials: 0, estimatedRevenue: 0 };
     }
 }
 

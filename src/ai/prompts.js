@@ -62,8 +62,6 @@ export async function getIntent(text) {
     }
 
     // Fix for "!stats" or other admin commands confusing the AI
-    // If it starts with "!", treat it as conversation (or let handler catch it) 
-    // but DO NOT let it trigger a Report.
     if (t.startsWith('!') || t.startsWith('/')) {
         return { intent: INTENTS.GENERAL_CONVERSATION, context: { generatedReply: "If that was a command, I didn't recognize it. Try checking the menu." } };
     }
@@ -85,17 +83,20 @@ export async function getIntent(text) {
         return { intent: INTENTS.CHECK_SUBSCRIPTION, context: {} };
     }
 
-    // --- [FIX] Handle Report Menu Selections Explicitly ---
+    // --- [NEW] OPTIMIZATION: Explicit Report Routing ---
+    // This catches report requests immediately without relying on AI inference
     if (t.includes('sales report')) return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'SALES' } };
     if (t.includes('expense report')) return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'EXPENSES' } };
     if (t.includes('p&l') || t.includes('profit') || t.includes('loss')) return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'PNL' } };
     if (t.includes('inventory report')) return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'INVENTORY' } };
-    if (t.includes('cogs') || t.includes('cost of sales')) return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'PNL' } }; // Map COGS to PnL or specific logic
-    // -----------------------------------------------------
+    if (t.includes('cogs') || t.includes('cost of sales')) return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'PNL' } };
+    // ----------------------------------------------------
 
     // 2. AI PATH
     try {
         const today = new Date().toISOString().split('T')[0];
+        
+        // [UPDATED] System Prompt with Stricter Rules for Reports
         const systemPrompt = `You are an intent classifier. Respond ONLY with JSON.
         TODAY: ${today}
 
@@ -104,7 +105,7 @@ export async function getIntent(text) {
         - ${INTENTS.LOG_EXPENSE}: "Bought fuel 500", "Paid shop rent"
         - ${INTENTS.ADD_PRODUCT}: "Restock rice", "New item indomie"
         - ${INTENTS.ADD_BANK_ACCOUNT}: "Add bank", "Add new bank", "New account".
-        - ${INTENTS.GENERATE_REPORT}: "Send me a PDF", "Sales report", "P&L", "Profit and Loss".
+        - ${INTENTS.GENERATE_REPORT}: "Sales report", "P&L", "Inventory Report". MUST extract "reportType" (SALES, EXPENSES, PNL, INVENTORY) context.
         - ${INTENTS.GET_FINANCIAL_INSIGHT}: "Get financial insight", "Give me a business tip", "Analyze my profit".
         - ${INTENTS.GET_FINANCIAL_SUMMARY}: "Total sales today", "How much did I spend?"
         - ${INTENTS.CHECK_BANK_BALANCE}: "Check my balance", "How much in Opay?"
@@ -115,8 +116,7 @@ export async function getIntent(text) {
         CRITICAL RULES:
         1. "Add Bank" or "Add New Bank" = ${INTENTS.ADD_BANK_ACCOUNT}. NEVER map this to ADD_PRODUCT.
         2. "Pay for Subscription" = ${INTENTS.UPGRADE_SUBSCRIPTION}.
-        3. "Financial Insight" = ${INTENTS.GET_FINANCIAL_INSIGHT}.
-        4. "Generate Report" = ${INTENTS.GENERATE_REPORT}.
+        3. "Generate Report" = ${INTENTS.GENERATE_REPORT}. Context MUST include "reportType" if specified.
         
         Return JSON format: {"intent": "...", "context": {...}}
         `;

@@ -4,22 +4,14 @@ import { ObjectId } from 'mongodb';
 
 const transactionsCollection = () => getDB().collection('transactions');
 
-// --- [UPDATED] INPUT VALIDATION ---
+// Helper to validate Data
 function validateTransactionData(data, type) {
     const errors = [];
-    
-    // Common checks
     if (!data.userId) errors.push("Missing User ID");
     
     if (type === 'SALE') {
         if (!data.items || !Array.isArray(data.items) || data.items.length === 0) {
             errors.push("Sale must have items");
-        } else {
-            data.items.forEach((item, idx) => {
-                if (!item.productName) errors.push(`Item ${idx} missing name`);
-                if (typeof item.quantity !== 'number' || item.quantity <= 0) errors.push(`Item ${idx} has invalid quantity`);
-                if (typeof item.pricePerUnit !== 'number' || item.pricePerUnit < 0) errors.push(`Item ${idx} has invalid price`);
-            });
         }
         if (typeof data.amount !== 'number' || data.amount < 0) errors.push("Invalid total amount");
     }
@@ -30,14 +22,11 @@ function validateTransactionData(data, type) {
         if (!data.category) errors.push("Expense category missing");
     }
 
-    if (errors.length > 0) {
-        throw new Error(`Validation Failed: ${errors.join(', ')}`);
-    }
+    if (errors.length > 0) throw new Error(`Validation Failed: ${errors.join(', ')}`);
 }
 
 export async function createSaleTransaction(saleData) {
     try {
-        // [UPDATED] Sanitize First
         const sanitizedItems = saleData.items.map(item => ({
             productId: item.productId ? new ObjectId(item.productId) : null,
             productName: item.productName || 'Unknown',
@@ -48,46 +37,44 @@ export async function createSaleTransaction(saleData) {
         }));
 
         const transactionDoc = {
-            userId: saleData.userId,
+            userId: new ObjectId(saleData.userId), // [FIX]
             type: 'SALE',
             amount: Number(saleData.totalAmount) || 0,
             date: saleData.date || new Date(),
             description: saleData.description || 'Sale',
             items: sanitizedItems,
-            linkedCustomerId: saleData.linkedCustomerId,
-            linkedBankId: saleData.linkedBankId || null,
+            linkedCustomerId: saleData.linkedCustomerId ? new ObjectId(saleData.linkedCustomerId) : null, // [FIX]
+            linkedBankId: saleData.linkedBankId ? new ObjectId(saleData.linkedBankId) : null, // [FIX]
             paymentMethod: saleData.paymentMethod ? saleData.paymentMethod.toUpperCase() : 'CASH',
             dueDate: saleData.dueDate ? new Date(saleData.dueDate) : null,
             loggedBy: saleData.loggedBy || 'Owner',
             createdAt: new Date()
         };
 
-        // Validate
         validateTransactionData(transactionDoc, 'SALE');
 
         const result = await transactionsCollection().insertOne(transactionDoc);
         return await transactionsCollection().findOne({ _id: result.insertedId });
     } catch (error) {
         logger.error('Error creating sale transaction:', error);
-        throw error; // Let the handler catch the validation error
+        throw error;
     }
 }
 
 export async function createExpenseTransaction(expenseData) {
     try {
         const doc = {
-            userId: expenseData.userId,
+            userId: new ObjectId(expenseData.userId),
             type: 'EXPENSE',
             amount: Number(expenseData.amount),
             date: expenseData.date || new Date(),
             description: expenseData.description,
             category: expenseData.category,
-            linkedBankId: expenseData.linkedBankId || null,
+            linkedBankId: expenseData.linkedBankId ? new ObjectId(expenseData.linkedBankId) : null,
             loggedBy: expenseData.loggedBy || 'Owner',
             createdAt: new Date()
         };
 
-        // Validate
         validateTransactionData(doc, 'EXPENSE');
 
         const result = await transactionsCollection().insertOne(doc);
@@ -103,13 +90,13 @@ export async function createCustomerPaymentTransaction(paymentData) {
         if (!paymentData.amount || isNaN(paymentData.amount)) throw new Error("Invalid Payment Amount");
 
         const doc = {
-            userId: paymentData.userId,
+            userId: new ObjectId(paymentData.userId),
             type: 'CUSTOMER_PAYMENT',
             amount: Number(paymentData.amount),
             date: paymentData.date || new Date(),
             description: paymentData.description,
-            linkedCustomerId: paymentData.linkedCustomerId,
-            linkedBankId: paymentData.linkedBankId || null,
+            linkedCustomerId: paymentData.linkedCustomerId ? new ObjectId(paymentData.linkedCustomerId) : null,
+            linkedBankId: paymentData.linkedBankId ? new ObjectId(paymentData.linkedBankId) : null,
             loggedBy: paymentData.loggedBy || 'Owner',
             createdAt: new Date()
         };
@@ -121,12 +108,13 @@ export async function createCustomerPaymentTransaction(paymentData) {
     }
 }
 
-// --- READ / QUERY FUNCTIONS (Unchanged but included for completeness) ---
+// --- READ / QUERY FUNCTIONS ---
 
 export async function getSummaryByDateRange(userId, type, startDate, endDate) {
     try {
+        const validUserId = typeof userId === 'string' ? new ObjectId(userId) : userId;
         const pipeline = [
-            { $match: { userId, type, date: { $gte: startDate, $lte: endDate } } },
+            { $match: { userId: validUserId, type, date: { $gte: startDate, $lte: endDate } } },
             { $group: { _id: null, total: { $sum: "$amount" } } }
         ];
         const result = await transactionsCollection().aggregate(pipeline).toArray();
@@ -139,8 +127,9 @@ export async function getSummaryByDateRange(userId, type, startDate, endDate) {
 
 export async function getRecentTransactions(userId, limit = 5) {
     try {
+        const validUserId = typeof userId === 'string' ? new ObjectId(userId) : userId;
         return await transactionsCollection()
-            .find({ userId })
+            .find({ userId: validUserId })
             .sort({ date: -1 })
             .limit(limit)
             .toArray();
@@ -152,8 +141,9 @@ export async function getRecentTransactions(userId, limit = 5) {
 
 export async function getTransactionsByDateRange(userId, type, startDate, endDate) {
     try {
+        const validUserId = typeof userId === 'string' ? new ObjectId(userId) : userId;
         return await transactionsCollection().find({
-            userId,
+            userId: validUserId,
             type,
             date: { $gte: startDate, $lte: endDate }
         }).sort({ date: 1 }).toArray();
@@ -165,8 +155,9 @@ export async function getTransactionsByDateRange(userId, type, startDate, endDat
 
 export async function getDueTransactions(userId, startDate, endDate) {
     try {
+        const validUserId = typeof userId === 'string' ? new ObjectId(userId) : userId;
         return await transactionsCollection().find({
-            userId,
+            userId: validUserId,
             type: 'SALE',
             paymentMethod: 'CREDIT',
             dueDate: { $gte: startDate, $lte: endDate }
@@ -179,6 +170,7 @@ export async function getDueTransactions(userId, startDate, endDate) {
 
 export async function findTransactionById(transactionId) {
     try {
+        // [FIX] Handle string IDs from Buttons
         const id = typeof transactionId === 'string' ? new ObjectId(transactionId) : transactionId;
         return await transactionsCollection().findOne({ _id: id });
     } catch (error) {

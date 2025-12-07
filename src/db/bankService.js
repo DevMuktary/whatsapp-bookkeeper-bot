@@ -4,18 +4,9 @@ import { ObjectId } from 'mongodb';
 
 const banksCollection = () => getDB().collection('banks');
 
-/**
- * Creates a new bank account for a user.
- * @param {ObjectId} userId The user's _id.
- * @param {string} bankName The name of the bank account.
- * @param {number} openingBalance The initial balance of the account.
- * @returns {Promise<object>} The newly created bank account document.
- */
 export async function createBankAccount(userId, bankName, openingBalance) {
     try {
-        // [FIX] Ensure userId is ObjectId
         const validUserId = typeof userId === 'string' ? new ObjectId(userId) : userId;
-
         const existingBank = await banksCollection().findOne({ userId: validUserId, bankName: { $regex: new RegExp(`^${bankName}$`, 'i') } });
         if (existingBank) {
             throw new Error(`A bank account named "${bankName}" already exists.`);
@@ -38,11 +29,6 @@ export async function createBankAccount(userId, bankName, openingBalance) {
     }
 }
 
-/**
- * Fetches all bank accounts for a specific user.
- * @param {ObjectId} userId The user's _id.
- * @returns {Promise<Array<object>>} An array of bank account documents.
- */
 export async function getAllBankAccounts(userId) {
     try {
         const validUserId = typeof userId === 'string' ? new ObjectId(userId) : userId;
@@ -54,12 +40,6 @@ export async function getAllBankAccounts(userId) {
     }
 }
 
-/**
- * Finds a single bank account by name for a specific user.
- * @param {ObjectId} userId The user's _id.
- * @param {string} bankName The name of the bank to find.
- * @returns {Promise<object|null>} The bank account document or null if not found.
- */
 export async function findBankAccountByName(userId, bankName) {
     try {
         const validUserId = typeof userId === 'string' ? new ObjectId(userId) : userId;
@@ -71,17 +51,9 @@ export async function findBankAccountByName(userId, bankName) {
     }
 }
 
-/**
- * Updates the balance of a specific bank account.
- * @param {ObjectId} bankId The _id of the bank account.
- * @param {number} amountChange The amount to add (positive for income) or subtract (negative for expense).
- * @returns {Promise<object>} The updated bank account document.
- */
 export async function updateBankBalance(bankId, amountChange) {
     try {
-        // [FIX] Ensure bankId is ObjectId
         const validBankId = typeof bankId === 'string' ? new ObjectId(bankId) : bankId;
-
         const result = await banksCollection().findOneAndUpdate(
             { _id: validBankId },
             { 

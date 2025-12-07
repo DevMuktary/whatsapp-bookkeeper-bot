@@ -6,13 +6,16 @@ const customersCollection = () => getDB().collection('customers');
 
 export async function findOrCreateCustomer(userId, customerName) {
     try {
-        const query = { userId, customerName: { $regex: new RegExp(`^${customerName}$`, 'i') } };
+        // [FIX] Ensure userId is an ObjectId
+        const validUserId = typeof userId === 'string' ? new ObjectId(userId) : userId;
+        
+        const query = { userId: validUserId, customerName: { $regex: new RegExp(`^${customerName}$`, 'i') } };
         let customer = await customersCollection().findOne(query);
 
         if (!customer) {
-            logger.info(`Customer "${customerName}" not found for user ${userId}. Creating them.`);
+            logger.info(`Customer "${customerName}" not found for user ${validUserId}. Creating them.`);
             const newCustomer = {
-                userId,
+                userId: validUserId,
                 customerName,
                 contactInfo: null,
                 balanceOwed: 0,
@@ -31,15 +34,18 @@ export async function findOrCreateCustomer(userId, customerName) {
 
 export async function updateBalanceOwed(customerId, amountChange) {
     try {
+        // [FIX] Ensure customerId is an ObjectId
+        const validCustId = typeof customerId === 'string' ? new ObjectId(customerId) : customerId;
+
         const result = await customersCollection().findOneAndUpdate(
-            { _id: customerId },
+            { _id: validCustId },
             { 
                 $inc: { balanceOwed: amountChange },
                 $set: { updatedAt: new Date() }
             },
             { returnDocument: 'after' }
         );
-        logger.info(`Balance updated for customer ${customerId}. Change: ${amountChange}. New balance: ${result.balanceOwed}`);
+        logger.info(`Balance updated for customer ${validCustId}. Change: ${amountChange}.`);
         return result;
     } catch (error) {
         logger.error(`Error updating balance for customer ${customerId}:`, error);
@@ -49,7 +55,10 @@ export async function updateBalanceOwed(customerId, amountChange) {
 
 export async function findCustomerById(customerId) {
     try {
-        const customer = await customersCollection().findOne({ _id: customerId });
+        // [FIX] Critical for Invoice Generation
+        const validCustId = typeof customerId === 'string' ? new ObjectId(customerId) : customerId;
+        
+        const customer = await customersCollection().findOne({ _id: validCustId });
         return customer;
     } catch (error) {
         logger.error(`Error finding customer by ID ${customerId}:`, error);
@@ -57,15 +66,12 @@ export async function findCustomerById(customerId) {
     }
 }
 
-/**
- * Fetches all customers who have an outstanding balance.
- * @param {ObjectId} userId The user's _id.
- * @returns {Promise<Array<object>>} An array of customer documents with balanceOwed > 0.
- */
 export async function getCustomersWithBalance(userId) {
     try {
+        const validUserId = typeof userId === 'string' ? new ObjectId(userId) : userId;
+        
         const customers = await customersCollection().find({ 
-            userId, 
+            userId: validUserId, 
             balanceOwed: { $gt: 0 } 
         }).sort({ balanceOwed: -1 }).toArray();
         return customers;

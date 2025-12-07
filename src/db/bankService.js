@@ -13,13 +13,16 @@ const banksCollection = () => getDB().collection('banks');
  */
 export async function createBankAccount(userId, bankName, openingBalance) {
     try {
-        const existingBank = await banksCollection().findOne({ userId, bankName: { $regex: new RegExp(`^${bankName}$`, 'i') } });
+        // [FIX] Ensure userId is ObjectId
+        const validUserId = typeof userId === 'string' ? new ObjectId(userId) : userId;
+
+        const existingBank = await banksCollection().findOne({ userId: validUserId, bankName: { $regex: new RegExp(`^${bankName}$`, 'i') } });
         if (existingBank) {
             throw new Error(`A bank account named "${bankName}" already exists.`);
         }
 
         const newBank = {
-            userId,
+            userId: validUserId,
             bankName,
             balance: openingBalance,
             createdAt: new Date(),
@@ -27,7 +30,7 @@ export async function createBankAccount(userId, bankName, openingBalance) {
         };
 
         const result = await banksCollection().insertOne(newBank);
-        logger.info(`Bank account "${bankName}" created for user ${userId} with ID: ${result.insertedId}`);
+        logger.info(`Bank account "${bankName}" created for user ${validUserId} with ID: ${result.insertedId}`);
         return await banksCollection().findOne({ _id: result.insertedId });
     } catch (error) {
         logger.error(`Error creating bank account for user ${userId}:`, error);
@@ -42,7 +45,8 @@ export async function createBankAccount(userId, bankName, openingBalance) {
  */
 export async function getAllBankAccounts(userId) {
     try {
-        const banks = await banksCollection().find({ userId }).toArray();
+        const validUserId = typeof userId === 'string' ? new ObjectId(userId) : userId;
+        const banks = await banksCollection().find({ userId: validUserId }).toArray();
         return banks;
     } catch (error) {
         logger.error(`Error fetching bank accounts for user ${userId}:`, error);
@@ -58,7 +62,8 @@ export async function getAllBankAccounts(userId) {
  */
 export async function findBankAccountByName(userId, bankName) {
     try {
-        const bank = await banksCollection().findOne({ userId, bankName: { $regex: new RegExp(`^${bankName}$`, 'i') } });
+        const validUserId = typeof userId === 'string' ? new ObjectId(userId) : userId;
+        const bank = await banksCollection().findOne({ userId: validUserId, bankName: { $regex: new RegExp(`^${bankName}$`, 'i') } });
         return bank;
     } catch (error) {
         logger.error(`Error finding bank account by name for user ${userId}:`, error);
@@ -74,15 +79,18 @@ export async function findBankAccountByName(userId, bankName) {
  */
 export async function updateBankBalance(bankId, amountChange) {
     try {
+        // [FIX] Ensure bankId is ObjectId
+        const validBankId = typeof bankId === 'string' ? new ObjectId(bankId) : bankId;
+
         const result = await banksCollection().findOneAndUpdate(
-            { _id: bankId },
+            { _id: validBankId },
             { 
                 $inc: { balance: amountChange },
                 $set: { updatedAt: new Date() }
             },
             { returnDocument: 'after' }
         );
-        logger.info(`Balance updated for bank ${bankId}. Change: ${amountChange}. New balance: ${result.balance}`);
+        logger.info(`Balance updated for bank ${validBankId}. Change: ${amountChange}. New balance: ${result.balance}`);
         return result;
     } catch (error) {
         logger.error(`Error updating balance for bank ${bankId}:`, error);

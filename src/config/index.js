@@ -8,6 +8,7 @@ const config = {
     token: process.env.WHATSAPP_TOKEN,
     phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID,
     verifyToken: process.env.WHATSAPP_VERIFY_TOKEN,
+    appSecret: process.env.WHATSAPP_APP_SECRET, // [NEW] Required for Webhook Security
     onboardingFlowId: process.env.WHATSAPP_ONBOARDING_FLOW_ID || process.env.WHATSAPP_FLOW_ID, 
     bankFlowId: process.env.WHATSAPP_BANK_FLOW_ID 
   },

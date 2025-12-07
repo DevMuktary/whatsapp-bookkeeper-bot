@@ -34,6 +34,7 @@ const formatDate = (dateInput) => {
     }).format(date);
 };
 
+// [FIX] Added Timeout to prevent hanging
 async function fetchChartImage(chartConfig) {
     try {
         const response = await axios.post('https://quickchart.io/chart', {
@@ -43,12 +44,13 @@ async function fetchChartImage(chartConfig) {
             format: 'png',
             chart: chartConfig
         }, {
-            responseType: 'arraybuffer'
+            responseType: 'arraybuffer',
+            timeout: 5000 // 5 Second Timeout
         });
         return response.data;
     } catch (error) {
-        logger.error('Error fetching chart:', error.message);
-        return null; 
+        logger.warn('Chart generation skipped (Service slow or down):', error.message);
+        return null; // Return null so report continues without chart
     }
 }
 

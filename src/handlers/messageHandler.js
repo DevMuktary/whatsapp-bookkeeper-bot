@@ -2,7 +2,7 @@ import { findOrCreateUser, updateUserState, createJoinCode, findOwnerByJoinCode,
 import { findProductByName } from '../db/productService.js';
 import { getAllBankAccounts } from '../db/bankService.js';
 import { getIntent, parseBulkProductList } from '../ai/prompts.js';
-import { transcribeAudio, analyzeImage } from '../ai/media.js';
+import { transcribeAudio, analyzeImage } from '../ai/media.js'; //
 import config from '../config/index.js'; 
 
 import { 
@@ -20,7 +20,7 @@ import { handleFlowResponse, handleOtpVerification } from './flowHandler.js';
 import { 
     handleLoggingSale, handleLoggingExpense, handleAddingProduct, handleLoggingCustomerPayment, 
     handleEditValue, handleDocumentImport, handleManageBanks 
-} from './actionHandler.js';
+} from './actionHandler.js'; //
 import { handleAdminCommand, handleBroadcast } from './adminHandler.js'; 
 
 const CANCEL_KEYWORDS = ['cancel', 'stop', 'exit', 'abort', 'quit'];
@@ -35,6 +35,7 @@ const extractDateRange = (context, defaultPeriod = 'this_month') => {
     return getDateRange(dateInput);
 };
 
+// Helper: If user is Staff, switch context to Owner's account
 async function getEffectiveUser(user) {
     if (user.role === 'STAFF' && user.linkedAccountId) {
         return {
@@ -58,25 +59,53 @@ export async function handleMessage(message) {
     await setTypingIndicator(whatsappId, 'on', messageId);
     
     let userInputText = "";
-    if (message.type === 'text') userInputText = message.text.body;
-    else if (message.type === 'audio') userInputText = await transcribeAudio(message.audio.id) || "";
-    else if (message.type === 'image') userInputText = await analyzeImage(message.image.id, message.image.caption) || "";
-    
+
+    // --- [1] MEDIA HANDLING (Images, Audio, Documents) ---
+
+    // A. Handle Text
+    if (message.type === 'text') {
+        userInputText = message.text.body;
+    }
+    // B. Handle Audio (Voice Notes)
+    else if (message.type === 'audio') {
+        userInputText = await transcribeAudio(message.audio.id) || ""; //
+    }
+    // C. Handle Images (Receipts/Invoices)
+    else if (message.type === 'image') {
+        // AI analyzes image and returns text description (e.g. "Receipt for 5k fuel")
+        userInputText = await analyzeImage(message.image.id, message.image.caption) || ""; //
+    }
+    // D. Handle Documents (CSV, Excel) - "CSV and Co"
     else if (message.type === 'document') {
-        const mime = message.document.mime_type;
         const rawUser = await findOrCreateUser(whatsappId);
         const user = await getEffectiveUser(rawUser); 
         
-        if (mime.includes('spreadsheet') || mime.includes('excel') || mime.includes('csv')) {
-            await handleDocumentImport(user, message.document);
+        const mime = (message.document.mime_type || '').toLowerCase();
+        const filename = (message.document.filename || '').toLowerCase();
+
+        // Robust Check: Look at both MIME type AND File Extension
+        const isSpreadsheet = mime.includes('spreadsheet') || 
+                              mime.includes('excel') || 
+                              mime.includes('csv') ||
+                              filename.endsWith('.csv') || 
+                              filename.endsWith('.xlsx') || 
+                              filename.endsWith('.xls');
+        
+        if (isSpreadsheet) {
+            // Route to ActionHandler for Bulk Import
+            await handleDocumentImport(user, message.document); //
             return;
         } else {
-            await sendTextMessage(whatsappId, "I can only read Excel (.xlsx) or CSV files for inventory.");
+            await sendTextMessage(whatsappId, "I can only read Excel (.xlsx) or CSV files for inventory imports. 📁");
             return;
         }
     }
-    else return; 
+    else {
+        // Unsupported message type
+        return; 
+    }
 
+    // If AI (or user) didn't provide text, stop here.
     if (!userInputText) {
         await sendTextMessage(whatsappId, "I couldn't understand that content. Please try again.");
         return;
@@ -86,9 +115,10 @@ export async function handleMessage(message) {
     const user = await getEffectiveUser(rawUser);
     const lowerCaseText = userInputText.trim().toLowerCase();
 
+    // --- [2] ADMIN & SYSTEM COMMANDS ---
+
     // 0. ADMIN COMMANDS CHECK
     if (config.adminPhones && config.adminPhones.includes(whatsappId)) {
-        // [FIX] Allow "!stats" as a shortcut for "!admin stats"
         if (lowerCaseText === '!stats') {
             await handleAdminCommand(user, '!admin stats');
             return;
@@ -103,10 +133,9 @@ export async function handleMessage(message) {
         }
     }
 
-    // 1. SYSTEM COMMANDS (JOIN TEAM)
+    // 1. JOIN TEAM COMMAND
     if (lowerCaseText.startsWith('join ')) {
         const parts = lowerCaseText.split(' ');
-        // [FIX] Safety check to prevent crash if user just types "join"
         if (parts.length > 1 && parts[1]) {
             const code = parts[1].toUpperCase(); 
             const owner = await findOwnerByJoinCode(code);
@@ -148,7 +177,7 @@ export async function handleMessage(message) {
         }
     }
 
-    // 4. STATE ROUTING
+    // --- [3] STATE ROUTING ---
     switch (user.state) {
       case USER_STATES.IDLE: 
           await handleIdleState(user, userInputText); 
@@ -188,8 +217,10 @@ export async function handleMessage(message) {
           break;
 
       default:
+        // Handle unexpected text input during interactive states
         if (user.state.startsWith('AWAITING_')) {
             if (userInputText.length > 2) { 
+                // Treat as a new command if user types something substantive
                 await updateUserState(whatsappId, USER_STATES.IDLE);
                 await handleIdleState(user, userInputText);
             } else {
@@ -210,7 +241,7 @@ export async function handleMessage(message) {
 async function handleIdleState(user, text) {
     const { intent, context } = await getIntent(text);
 
-    // GATEKEEPER CHECK
+    // GATEKEEPER CHECK (Subscriptions)
     const PAID_INTENTS = [
         INTENTS.LOG_SALE, 
         INTENTS.LOG_EXPENSE, 
@@ -241,6 +272,7 @@ async function handleIdleState(user, text) {
         }
     }
 
+    // --- Intent Handling ---
     if (intent === INTENTS.CHECK_SUBSCRIPTION) {
         const access = checkSubscriptionAccess(user);
         let msg = `📅 *Subscription Status*\n\nPlan: ${access.type}`;
@@ -340,7 +372,7 @@ async function handleIdleState(user, text) {
 
     } else if (intent === INTENTS.GENERATE_REPORT) {
         if (context.reportType) {
-            await sendTextMessage(user.whatsappId, "I've added your report to the queue. You'll receive it shortly! ⏳");
+            await sendTextMessage(user.whatsappId, "I've added your report to the generation queue. You'll receive it shortly! ⏳");
             const { startDate, endDate } = extractDateRange(context, 'this_month');
             await queueReportGeneration(
                 user._id, 

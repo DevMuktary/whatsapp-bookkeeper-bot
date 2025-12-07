@@ -6,10 +6,9 @@ const customersCollection = () => getDB().collection('customers');
 
 export async function findOrCreateCustomer(userId, customerName) {
     try {
-        // [FIX] Ensure userId is an ObjectId
         const validUserId = typeof userId === 'string' ? new ObjectId(userId) : userId;
-        
         const query = { userId: validUserId, customerName: { $regex: new RegExp(`^${customerName}$`, 'i') } };
+        
         let customer = await customersCollection().findOne(query);
 
         if (!customer) {
@@ -34,9 +33,7 @@ export async function findOrCreateCustomer(userId, customerName) {
 
 export async function updateBalanceOwed(customerId, amountChange) {
     try {
-        // [FIX] Ensure customerId is an ObjectId
         const validCustId = typeof customerId === 'string' ? new ObjectId(customerId) : customerId;
-
         const result = await customersCollection().findOneAndUpdate(
             { _id: validCustId },
             { 
@@ -55,9 +52,7 @@ export async function updateBalanceOwed(customerId, amountChange) {
 
 export async function findCustomerById(customerId) {
     try {
-        // [FIX] Critical for Invoice Generation
         const validCustId = typeof customerId === 'string' ? new ObjectId(customerId) : customerId;
-        
         const customer = await customersCollection().findOne({ _id: validCustId });
         return customer;
     } catch (error) {
@@ -69,7 +64,6 @@ export async function findCustomerById(customerId) {
 export async function getCustomersWithBalance(userId) {
     try {
         const validUserId = typeof userId === 'string' ? new ObjectId(userId) : userId;
-        
         const customers = await customersCollection().find({ 
             userId: validUserId, 
             balanceOwed: { $gt: 0 } 

@@ -13,17 +13,15 @@ const paystackClient = axios.create({
     }
 });
 
-// Helper to create a customer on Paystack
 async function createPaystackCustomer(user) {
     try {
         const customerRes = await paystackClient.post('/customer', {
             email: user.email,
             first_name: user.businessName || 'Fynax User',
-            last_name: String(user.whatsappId), // Ensure string
+            last_name: String(user.whatsappId), 
             phone: String(user.whatsappId)
         });
         const newCode = customerRes.data.data.customer_code;
-        
         await updateUser(user.whatsappId, { paystackCustomerCode: newCode });
         return newCode;
     } catch (error) {
@@ -32,7 +30,6 @@ async function createPaystackCustomer(user) {
     }
 }
 
-// Helper to Update an existing Customer Profile
 async function updatePaystackCustomer(customerCode, user) {
     try {
         await paystackClient.put(`/customer/${customerCode}`, {
@@ -43,30 +40,23 @@ async function updatePaystackCustomer(customerCode, user) {
         logger.info(`Updated Paystack profile for ${customerCode}`);
     } catch (error) {
         logger.warn(`Failed to update Paystack profile: ${error.message}`);
-        // Continue anyway, maybe the profile is fine
     }
 }
 
-/**
- * Creates a Dedicated Virtual Account (NUBAN).
- * Includes Retry Logic for "Customer Not Found" and "Validation Error".
- */
 export async function createDedicatedAccount(user) {
     try {
         if (user.dedicatedAccount) return user.dedicatedAccount;
 
         let customerCode = user.paystackCustomerCode;
 
-        // 1. If no code exists, create one
         if (!customerCode) {
             customerCode = await createPaystackCustomer(user);
         }
 
-        // 2. Request Dedicated Account
         const createAccountReq = async (code) => {
             const res = await paystackClient.post('/dedicated_account', {
                 customer: code,
-                preferred_bank: "wema-bank"
+                // [FIX] Removed 'preferred_bank' so Paystack chooses the best one
             });
             return {
                 bankName: res.data.data.bank.name,
@@ -84,31 +74,23 @@ export async function createDedicatedAccount(user) {
             const msg = apiError.response?.data?.message || '';
             const codeError = apiError.response?.data?.code || '';
 
-            // ERROR TYPE A: Validation Error (Missing Name/Phone)
-            // Fix: Update Customer Profile & Retry
             if (codeError === 'validation_error' || msg.includes('required') || msg.includes('last_name')) {
                 logger.warn(`Incomplete Profile for ${user.whatsappId}. Updating and Retrying...`);
-                
                 await updatePaystackCustomer(customerCode, user);
-                
                 const retryData = await createAccountReq(customerCode);
                 await updateUser(user.whatsappId, { dedicatedAccount: retryData });
                 return retryData;
             }
 
-            // ERROR TYPE B: Customer Not Found (Stale Code)
-            // Fix: Create NEW Customer & Retry
             if (msg.includes('Customer not found') || codeError === 'customer_not_found') {
                 logger.warn(`Stale Customer Code for ${user.whatsappId}. Regenerating...`);
-                
                 const newCode = await createPaystackCustomer(user);
-                
                 const retryData = await createAccountReq(newCode);
                 await updateUser(user.whatsappId, { dedicatedAccount: retryData });
                 return retryData;
             }
 
-            throw apiError; // Unknown error, bubble up
+            throw apiError; 
         }
 
     } catch (error) {
@@ -117,17 +99,11 @@ export async function createDedicatedAccount(user) {
     }
 }
 
-/**
- * Generates a Payment Link.
- */
 export async function initializePayment(user, preferredCurrency = 'USD') {
     try {
-        // [SAFETY] Force NGN until your account is USD-Approved to prevent crashes
         const IS_USD_ENABLED = false; 
-
         const currency = IS_USD_ENABLED ? preferredCurrency : 'NGN';
         
-        // Calculate amount (7500 NGN or approx 8000 NGN for $5)
         const amount = currency === 'NGN' 
             ? config.paystack.prices.ngnMonthly * 100 
             : config.paystack.prices.usdMonthly * 100;

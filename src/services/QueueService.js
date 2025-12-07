@@ -1,5 +1,4 @@
 import { Queue, Worker } from 'bullmq';
-import IORedis from 'ioredis';
 import config from '../config/index.js';
 import logger from '../utils/logger.js';
 import { 
@@ -12,23 +11,12 @@ import { sendDocument, sendTextMessage, uploadMedia } from '../api/whatsappServi
 import { getPnLData, getReportTransactions } from './ReportManager.js';
 import { findUserById } from '../db/userService.js';
 import { getAllProducts } from '../db/productService.js';
-
-// [NEW IMPORTS FOR DAILY TASKS]
 import { getTransactionsByDateRange, getDueTransactions } from '../db/transactionService.js';
 import { findCustomerById } from '../db/customerService.js';
+import redis from '../db/redisClient.js'; // [FIX] Use Singleton
 
-// 1. Setup Redis Connection
-const connection = new IORedis(config.redis.url, config.redis.options);
+const connection = redis; 
 
-connection.on('error', (err) => {
-    logger.error('Redis Connection Error:', err);
-});
-
-connection.on('connect', () => {
-    logger.info('Successfully connected to Redis Queue.');
-});
-
-// --- QUEUE 1: REPORT GENERATION ---
 const reportQueue = new Queue('report-generation', { connection });
 
 const reportWorker = new Worker('report-generation', async (job) => {
@@ -61,7 +49,6 @@ export async function queueReportGeneration(userId, userCurrency, reportType, da
     }
 }
 
-// --- [NEW] QUEUE 2: DAILY TASKS (Scheduler) ---
 const dailyTaskQueue = new Queue('daily-tasks', { connection });
 
 const dailyTaskWorker = new Worker('daily-tasks', async (job) => {
@@ -72,17 +59,13 @@ const dailyTaskWorker = new Worker('daily-tasks', async (job) => {
         const user = await findUserById(userId);
         if (!user || !user.whatsappId) return;
 
-        // 1. Send Daily Summary
         await processDailyUserSummary(user);
-
-        // 2. Check Debts
         await processDueDebts(user);
 
     } catch (error) {
         logger.error(`Daily task failed for user ${userId}:`, error);
-        // We don't throw here to avoid retrying stale daily updates endlessly
     }
-}, { connection, concurrency: 10 }); // Can process 10 users at once
+}, { connection, concurrency: 10 }); 
 
 export async function queueDailyTask(userId) {
     await dailyTaskQueue.add('daily-summary', { userId }, {
@@ -134,7 +117,6 @@ async function generateAndSend(user, reportType, dateRange, whatsappId) {
     }
 }
 
-// [MOVED FROM SCHEDULER.JS]
 async function processDailyUserSummary(user) {
     const today = new Date();
     const startOfDay = new Date(today); startOfDay.setHours(0, 0, 0, 0);
@@ -149,8 +131,6 @@ async function processDailyUserSummary(user) {
 
     if (totalSales === 0 && totalExpenses === 0) {
         const businessName = user.businessName || 'there';
-        // Only send "Did you forget?" if they are a relatively new or active user to avoid spamming inactive ones
-        // For now, we keep logic simple.
         await sendTextMessage(
             user.whatsappId, 
             `👋 Hey ${businessName}, did you make any sales today that you forgot to log?\n\nReply with something like 'Sold 5 rice' now to keep your books balanced!`

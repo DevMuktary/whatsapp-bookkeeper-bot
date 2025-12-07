@@ -11,17 +11,14 @@ export async function findProductByName(userId, productName) {
     return await productsCollection().findOne(query);
 }
 
-// [UPDATED] Implements Weighted Average Cost (AVCO)
 export async function upsertProduct(userId, productName, quantityAdded, newCostPrice, sellingPrice, reorderLevel = 5) {
     const validUserId = typeof userId === 'string' ? new ObjectId(userId) : userId;
     const query = { userId: validUserId, productName: { $regex: new RegExp(`^${productName}$`, 'i') } };
     
-    // 1. Fetch existing product to calculate Average Cost
     const existingProduct = await productsCollection().findOne(query);
     
     let finalCostPrice = newCostPrice;
 
-    // Calculate Weighted Average Cost
     if (existingProduct) {
         const oldQty = existingProduct.quantity || 0;
         const oldCost = existingProduct.costPrice || 0;
@@ -30,8 +27,6 @@ export async function upsertProduct(userId, productName, quantityAdded, newCostP
         if (totalQty > 0 && quantityAdded > 0) {
             const totalValue = (oldQty * oldCost) + (quantityAdded * newCostPrice);
             finalCostPrice = totalValue / totalQty;
-            
-            // Round to 2 decimal places for cleanliness
             finalCostPrice = Math.round(finalCostPrice * 100) / 100;
         } else if (quantityAdded === 0) {
              finalCostPrice = newCostPrice;
@@ -57,7 +52,6 @@ export async function upsertProduct(userId, productName, quantityAdded, newCostP
         { upsert: true, returnDocument: 'after' }
     );
     
-    // Log the movement
     if (quantityAdded !== 0) {
         await inventoryLogsCollection().insertOne({
             userId: validUserId,
@@ -73,7 +67,6 @@ export async function upsertProduct(userId, productName, quantityAdded, newCostP
 }
 
 export async function updateStock(productId, quantityChange, reason, linkedTransactionId) {
-    // [FIX] Ensure productId is ObjectId
     const validProdId = typeof productId === 'string' ? new ObjectId(productId) : productId;
     
     const filter = { _id: validProdId };

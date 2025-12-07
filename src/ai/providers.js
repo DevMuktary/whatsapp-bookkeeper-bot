@@ -7,7 +7,7 @@ const DEEPSEEK_API_URL = 'https://api.deepseek.com/chat/completions';
 
 export const openai = new OpenAI({ apiKey: config.openai.apiKey });
 
-// [NEW] Helper to safely parse JSON response
+// Helper to safely parse JSON response
 function parseContent(content, enforceJson) {
     if (enforceJson && typeof content === 'string' && content.trim().startsWith('{')) {
          try {
@@ -38,30 +38,38 @@ export async function callDeepSeek(messages, temperature = 0.1, enforceJson = tr
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${config.deepseek.apiKey}`
       },
-      timeout: 5000 // Short timeout (5s) so we can switch quickly
+      // [FIX] Increased to 45 seconds. DeepSeek can be slow but is reliable.
+      timeout: 45000 
     });
 
     const content = response.data.choices[0].message.content;
     return parseContent(content, enforceJson);
 
   } catch (error) {
-    logger.warn(`⚠️ DeepSeek Failed (${error.message}). Switching to OpenAI Fallback...`);
+    logger.warn(`⚠️ DeepSeek Failed (${error.message}). Checking for Fallback...`);
     
-    // 2. Fallback to OpenAI
-    try {
-        const completion = await openai.chat.completions.create({
-            model: "gpt-3.5-turbo-0125", // Cheaper, fast fallback
-            messages: messages,
-            temperature: temperature,
-            response_format: enforceJson ? { type: "json_object" } : undefined
-        });
-        
-        const content = completion.choices[0].message.content;
-        return parseContent(content, enforceJson);
+    // 2. Fallback to OpenAI (Only if Key exists)
+    if (config.openai.apiKey && config.openai.apiKey.length > 10) {
+        try {
+            logger.info("Switching to OpenAI (GPT-3.5) Fallback...");
+            const completion = await openai.chat.completions.create({
+                model: "gpt-3.5-turbo-0125", // Cheaper, fast fallback
+                messages: messages,
+                temperature: temperature,
+                response_format: enforceJson ? { type: "json_object" } : undefined
+            });
+            
+            const content = completion.choices[0].message.content;
+            return parseContent(content, enforceJson);
 
-    } catch (openAiError) {
-        logger.error('❌ All AI Providers Failed:', openAiError.message);
-        throw openAiError; 
+        } catch (openAiError) {
+            logger.error('❌ OpenAI Fallback also failed:', openAiError.message);
+            throw openAiError; 
+        }
+    } else {
+        // If no OpenAI key, throw the original DeepSeek error so we know why it failed
+        logger.error('❌ DeepSeek failed and no OpenAI Key provided.');
+        throw error;
     }
   }
 }

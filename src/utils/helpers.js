@@ -1,8 +1,5 @@
-/**
- * Parses a price string (e.g., "10k", "2.5m", "₦5,000") into a number.
- * @param {string|number} priceInput 
- * @returns {number} The parsed amount or NaN
- */
+import { ObjectId } from 'mongodb';
+
 export const parsePrice = (priceInput) => {
     if (typeof priceInput === 'number') return priceInput;
     if (typeof priceInput !== 'string') return NaN;
@@ -24,3 +21,10 @@ export const parsePrice = (priceInput) => {
 };
 
 export const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+export const toObjectId = (id) => {
+    if (!id) return null;
+    if (id instanceof ObjectId) return id;
+    if (typeof id === 'string' && ObjectId.isValid(id)) return new ObjectId(id);
+    return id; 
+};

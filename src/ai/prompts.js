@@ -56,12 +56,10 @@ export async function getIntent(text) {
     const t = text.toLowerCase().trim();
 
     // 1. FAST PATH (Priority Over AI)
-    // Fix for "Add Bank" confusing the AI
     if (t.includes('add bank') || t.includes('add new bank') || t === 'add account') {
         return { intent: INTENTS.ADD_BANK_ACCOUNT, context: {} };
     }
 
-    // Fix for "!stats" or other admin commands confusing the AI
     if (t.startsWith('!') || t.startsWith('/')) {
         return { intent: INTENTS.GENERAL_CONVERSATION, context: { generatedReply: "If that was a command, I didn't recognize it. Try checking the menu." } };
     }
@@ -72,7 +70,6 @@ export async function getIntent(text) {
     if (t === 'hi' || t === 'hello' || t === 'hey') {
          return { intent: INTENTS.GENERAL_CONVERSATION, context: { generatedReply: "Hello! How can I help you today?" } };
     }
-    // "I want to pay" -> UPGRADE
     if ((t.includes('pay') || t.includes('renew')) && (t.includes('subscription') || t.includes('fynax'))) {
         return { intent: INTENTS.UPGRADE_SUBSCRIPTION, context: {} };
     }
@@ -83,20 +80,16 @@ export async function getIntent(text) {
         return { intent: INTENTS.CHECK_SUBSCRIPTION, context: {} };
     }
 
-    // --- [NEW] OPTIMIZATION: Explicit Report Routing ---
-    // This catches report requests immediately without relying on AI inference
+    // Explicit Report Routing
     if (t.includes('sales report')) return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'SALES' } };
     if (t.includes('expense report')) return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'EXPENSES' } };
     if (t.includes('p&l') || t.includes('profit') || t.includes('loss')) return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'PNL' } };
     if (t.includes('inventory report')) return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'INVENTORY' } };
     if (t.includes('cogs') || t.includes('cost of sales')) return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'PNL' } };
-    // ----------------------------------------------------
 
     // 2. AI PATH
     try {
         const today = new Date().toISOString().split('T')[0];
-        
-        // [UPDATED] System Prompt with Stricter Rules for Reports
         const systemPrompt = `You are an intent classifier. Respond ONLY with JSON.
         TODAY: ${today}
 
@@ -105,7 +98,7 @@ export async function getIntent(text) {
         - ${INTENTS.LOG_EXPENSE}: "Bought fuel 500", "Paid shop rent"
         - ${INTENTS.ADD_PRODUCT}: "Restock rice", "New item indomie"
         - ${INTENTS.ADD_BANK_ACCOUNT}: "Add bank", "Add new bank", "New account".
-        - ${INTENTS.GENERATE_REPORT}: "Sales report", "P&L", "Inventory Report". MUST extract "reportType" (SALES, EXPENSES, PNL, INVENTORY) context.
+        - ${INTENTS.GENERATE_REPORT}: "Send me a PDF", "Sales report", "P&L", "Profit and Loss".
         - ${INTENTS.GET_FINANCIAL_INSIGHT}: "Get financial insight", "Give me a business tip", "Analyze my profit".
         - ${INTENTS.GET_FINANCIAL_SUMMARY}: "Total sales today", "How much did I spend?"
         - ${INTENTS.CHECK_BANK_BALANCE}: "Check my balance", "How much in Opay?"
@@ -116,7 +109,8 @@ export async function getIntent(text) {
         CRITICAL RULES:
         1. "Add Bank" or "Add New Bank" = ${INTENTS.ADD_BANK_ACCOUNT}. NEVER map this to ADD_PRODUCT.
         2. "Pay for Subscription" = ${INTENTS.UPGRADE_SUBSCRIPTION}.
-        3. "Generate Report" = ${INTENTS.GENERATE_REPORT}. Context MUST include "reportType" if specified.
+        3. "Financial Insight" = ${INTENTS.GET_FINANCIAL_INSIGHT}.
+        4. "Generate Report" = ${INTENTS.GENERATE_REPORT}. Context MUST include "reportType" (SALES, EXPENSES, PNL, INVENTORY) if specified.
         
         Return JSON format: {"intent": "...", "context": {...}}
         `;
@@ -204,23 +198,22 @@ export async function gatherSaleDetails(conversationHistory, existingProduct = n
             ? "The user confirmed this is a service." 
             : (existingProduct ? `Existing product: "${existingProduct.productName}", Price: ${existingProduct.sellingPrice}.` : 'New product/service.');
 
+        // [FIX] STRICT RULES ADDED
         const systemPrompt = `You are a bookkeeping assistant logging a sale. TODAY: ${today}.
         CONTEXT: ${productInfo}
         GOAL: Collect 'items' (array of {productName, quantity, pricePerUnit}), 'customerName', and 'saleType' (Cash/Credit/Bank).
         
-        RULES:
+        CRITICAL RULES (NO GUESSING):
         1. Extract details. Default quantity is 1.
-        2. If product exists, use its price if user doesn't specify.
-        3. Once you have an item, add it to 'items'.
-        4. If 'saleType' is CREDIT, listen for a due date (e.g., "pay next friday", "due 25th").
-        5. If mentioned, calculate 'dueDate' as YYYY-MM-DD.
-        6. Return JSON format:
-        {"status": "complete"/"incomplete", "data": {"items": [], "customerName": "...", "saleType": "...", "dueDate": "YYYY-MM-DD"}, "reply": "..."}`;
+        2. If product exists, use its price. If NOT, and user didn't specify price, return status 'incomplete' and ask for price.
+        3. If 'saleType' (Cash/Credit/Bank) is missing, return status 'incomplete' and ask "Was this Cash, Bank Transfer, or Credit?".
+        4. If 'customerName' is missing for a credit sale, ask for it.
+        5. Return JSON format:
+        {"status": "complete"/"incomplete", "data": {"items": [], "customerName": "...", "saleType": "...", "dueDate": "YYYY-MM-DD"}, "reply": "Question to user..."}`;
 
         const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
         let response = await callDeepSeek(messages, 0.5);
         
-        // Ensure numeric values
         if (response.status === 'complete' && response.data && response.data.items) {
             response.data.items = response.data.items.map(item => ({
                 ...item,
@@ -236,23 +229,15 @@ export async function gatherSaleDetails(conversationHistory, existingProduct = n
 
 export async function gatherExpenseDetails(conversationHistory) {
     try {
+        // [FIX] STRICT RULES ADDED
         const systemPrompt = `You are a smart bookkeeping assistant. Goal: Log expense(s).
         INPUT: "Paid 5000 for fuel and 10000 for rent"
         
-        RULES:
-        1. Support MULTIPLE items.
-        2. Auto-Categorize each.
-        3. Ask clarifying questions if description is vague.
-        4. Return JSON: {
-            "status": "complete", 
-            "data": { 
-                "expenses": [ 
-                    {"category": "Transportation", "amount": 5000, "description": "fuel"},
-                    {"category": "Rent & Office", "amount": 10000, "description": "rent"}
-                ] 
-            }
-        }
-        5. If incomplete, return {"status": "incomplete", "reply": "..."}`;
+        CRITICAL RULES (NO GUESSING):
+        1. If 'amount' is missing, return status 'incomplete' and ask "How much was the expense?".
+        2. If 'description' is too vague (e.g., "I spent money"), ask "What was the money for?".
+        3. Auto-Categorize if details are sufficient.
+        4. Return JSON: { "status": "complete", "data": { "expenses": [...] } } OR { "status": "incomplete", "reply": "..." }`;
 
         const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
         let response = await callDeepSeek(messages, 0.5);
@@ -283,12 +268,17 @@ export async function gatherProductDetails(conversationHistory, existingProduct 
             ? `Existing product: Cost ${existingProduct.costPrice}, Sell ${existingProduct.sellingPrice}.`
             : 'New product.';
 
+        // [FIX] STRICT RULES ADDED
         const systemPrompt = `Inventory Manager. Add/Update product.
         FIELDS: productName, quantityAdded, costPrice, sellingPrice, reorderLevel.
         CONTEXT: ${existingDataInfo}
-        RULES:
-        1. If user says "alert me at 10", set "reorderLevel": 10.
-        2. Return JSON: {"status": "complete"/"incomplete", "data": {...}, "reply": "..."}`;
+        
+        CRITICAL RULES (NO GUESSING):
+        1. For a NEW product, you MUST have: 'productName', 'costPrice', and 'sellingPrice'. 
+        2. If 'costPrice' is missing, return status 'incomplete' and ask "What is the Cost Price?".
+        3. If 'sellingPrice' is missing, return status 'incomplete' and ask "What is the Selling Price?".
+        4. If 'quantity' is missing, ask "How many are you adding?".
+        5. Return JSON: {"status": "complete"/"incomplete", "data": {...}, "reply": "..."}`;
 
         const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
         let response = await callDeepSeek(messages, 0.5);
@@ -307,7 +297,11 @@ export async function gatherProductDetails(conversationHistory, existingProduct 
 
 export async function gatherPaymentDetails(conversationHistory, userCurrency) {
     try {
+        // [FIX] STRICT RULES ADDED
         const systemPrompt = `Log Customer Payment. Need: "customerName", "amount". Currency: ${userCurrency}.
+        CRITICAL RULES:
+        1. If 'customerName' is missing, ask "Who made the payment?".
+        2. If 'amount' is missing, ask "How much did they pay?".
         Return JSON: {"status": "complete"/"incomplete", "data": {"customerName": "...", "amount": "..."}, "reply": "Question to ask user..."}`;
 
         const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
@@ -324,7 +318,11 @@ export async function gatherPaymentDetails(conversationHistory, userCurrency) {
 
 export async function gatherBankAccountDetails(conversationHistory, userCurrency) {
     try {
+        // [FIX] STRICT RULES ADDED
         const systemPrompt = `Add Bank Account. Need: "bankName", "openingBalance". Currency: ${userCurrency}.
+        CRITICAL RULES:
+        1. If 'bankName' is missing, ask "What is the bank name?".
+        2. If 'openingBalance' is missing, ask "What is the current balance?".
         Return JSON: {"status": "complete"/"incomplete", "data": {"bankName": "...", "openingBalance": "..."}, "reply": "Question to ask user..."}`;
 
         const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];

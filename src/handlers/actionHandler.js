@@ -2,12 +2,12 @@ import { updateUserState } from '../db/userService.js';
 import { getAllBankAccounts } from '../db/bankService.js';
 import { sendTextMessage, sendInteractiveButtons, sendInteractiveList, sendMainMenu, sendAddBankFlow } from '../api/whatsappService.js';
 import { USER_STATES, INTENTS } from '../utils/constants.js';
-// [UPDATED IMPORTS]
 import { gatherSaleDetails, gatherExpenseDetails, gatherProductDetails, gatherPaymentDetails } from '../ai/prompts.js';
 
 import { parseExcelImport } from '../services/FileImportService.js';
 import * as TransactionManager from '../services/TransactionManager.js';
 import * as InventoryManager from '../services/InventoryManager.js';
+import { findProductByName, findProductFuzzy } from '../db/productService.js'; // [NEW]
 import { executeTask } from './taskHandler.js';
 import logger from '../utils/logger.js';
 import { ObjectId } from 'mongodb';
@@ -18,7 +18,7 @@ const limitMemory = (memory, maxDepth = 12) => {
     return memory;
 };
 
-// --- SHARED HELPERS (Exported for Interactive Handler) ---
+// --- SHARED HELPERS ---
 
 export async function askForBankSelection(user, transactionData, nextState, promptText) {
     const banks = await getAllBankAccounts(user._id);
@@ -40,7 +40,7 @@ export async function askForBankSelection(user, transactionData, nextState, prom
 }
 
 export async function handleManageBanks(user) {
-    if (user.role === 'STAFF') { // Use role check directly
+    if (user.role === 'STAFF') { 
         await sendTextMessage(user.whatsappId, "⛔ Access Denied. Only the Business Owner can manage bank accounts.");
         return;
     }
@@ -73,6 +73,88 @@ export async function handleDocumentImport(user, document) {
     }
 }
 
+// --- SMART SALE PROCESSING ---
+
+// This function checks items one by one for ambiguity or missing inventory
+export async function processSaleItems(user, saleData, startIndex = 0) {
+    const items = saleData.items;
+
+    for (let i = startIndex; i < items.length; i++) {
+        const item = items[i];
+
+        // 1. Skip if already marked as service or resolved
+        if (item.isService || item.productId) continue;
+
+        // 2. Exact Match Check
+        const exactProduct = await findProductByName(user._id, item.productName);
+        if (exactProduct) {
+            item.productId = exactProduct._id;
+            item.productName = exactProduct.productName; // Normalize name casing
+            continue; // Move to next item
+        }
+
+        // 3. Fuzzy Match Check ("Did you mean X?")
+        const fuzzyMatches = await findProductFuzzy(user._id, item.productName);
+        if (fuzzyMatches.length > 0) {
+            // STOP! Ask User.
+            await updateUserState(user.whatsappId, USER_STATES.AWAITING_PRODUCT_CONFIRMATION, {
+                saleData,
+                currentItemIndex: i,
+                potentialMatches: fuzzyMatches
+            });
+
+            // Create buttons for top 3 matches
+            const buttons = fuzzyMatches.slice(0, 3).map(p => ({
+                id: `confirm_prod:${p._id}`,
+                title: p.productName.substring(0, 20) // Button title limit
+            }));
+            buttons.push({ id: 'confirm_prod:none', title: 'None of these' });
+
+            await sendInteractiveButtons(user.whatsappId, 
+                `🤔 I couldn't find exactly "${item.productName}". Did you mean one of these?`, 
+                buttons
+            );
+            return; // Exit loop, wait for user
+        }
+
+        // 4. No Match - Ask "Product or Service?"
+        await updateUserState(user.whatsappId, USER_STATES.AWAITING_ITEM_TYPE_CONFIRMATION, {
+            saleData,
+            currentItemIndex: i
+        });
+        
+        await sendInteractiveButtons(user.whatsappId, 
+            `❓ I don't see "${item.productName}" in your inventory.\n\nIs this a **Service** (like labor/design) or a **Product**?`,
+            [
+                { id: 'type_choice:service', title: 'It is a Service 🛠️' },
+                { id: 'type_choice:product', title: 'It is a Product 📦' }
+            ]
+        );
+        return; // Exit loop, wait for user
+    }
+
+    // --- ALL ITEMS CHECKED & RESOLVED ---
+    
+    // Check if staff, add name
+    if (user.isStaff) saleData.loggedBy = user.staffName;
+
+    const banks = await getAllBankAccounts(user._id);
+    if (banks.length > 0 && !saleData.linkedBankId && saleData.saleType !== 'credit') {
+         await askForBankSelection(user, saleData, USER_STATES.AWAITING_BANK_SELECTION_SALE, 'Received payment into which account?');
+         return;
+    }
+
+    try {
+        const txn = await TransactionManager.logSale(user, saleData);
+        await sendTextMessage(user.whatsappId, `✅ Sale logged! Amount: ${user.currency} ${txn.amount.toLocaleString()}`);
+        await updateUserState(user.whatsappId, USER_STATES.AWAITING_INVOICE_CONFIRMATION, { transaction: txn });
+        await sendInteractiveButtons(user.whatsappId, 'Generate Invoice?', [{ id: 'invoice_yes', title: 'Yes' }, { id: 'invoice_no', title: 'No' }]);
+    } catch (e) {
+        await sendTextMessage(user.whatsappId, `Error: ${e.message}`);
+        await updateUserState(user.whatsappId, USER_STATES.IDLE);
+    }
+}
+
 // --- TRANSACTION HANDLERS ---
 
 export async function handleLoggingSale(user, text) {
@@ -86,24 +168,9 @@ export async function handleLoggingSale(user, text) {
         await updateUserState(user.whatsappId, USER_STATES.LOGGING_SALE, { ...user.stateContext, memory: limitMemory(aiResponse.memory) });
         await sendTextMessage(user.whatsappId, aiResponse.reply);
     } else {
-        try {
-            const finalData = { ...saleData, ...aiResponse.data };
-            if (user.isStaff) finalData.loggedBy = user.staffName;
-
-            const banks = await getAllBankAccounts(user._id);
-            if (banks.length > 0 && !finalData.linkedBankId && finalData.saleType !== 'credit') {
-                 await askForBankSelection(user, finalData, USER_STATES.AWAITING_BANK_SELECTION_SALE, 'Received payment into which account?');
-                 return;
-            }
-            const txn = await TransactionManager.logSale(user, finalData);
-            await sendTextMessage(user.whatsappId, `✅ Sale logged! Amount: ${user.currency} ${txn.amount.toLocaleString()}`);
-            // Ask for Invoice
-            await updateUserState(user.whatsappId, USER_STATES.AWAITING_INVOICE_CONFIRMATION, { transaction: txn });
-            await sendInteractiveButtons(user.whatsappId, 'Generate Invoice?', [{ id: 'invoice_yes', title: 'Yes' }, { id: 'invoice_no', title: 'No' }]);
-        } catch (e) {
-            await sendTextMessage(user.whatsappId, `Error: ${e.message}`);
-            await updateUserState(user.whatsappId, USER_STATES.IDLE);
-        }
+        // [FIX] Instead of logging immediately, start the checking process
+        const finalData = { ...saleData, ...aiResponse.data };
+        await processSaleItems(user, finalData);
     }
 }
 

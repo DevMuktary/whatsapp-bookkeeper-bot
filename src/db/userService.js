@@ -95,7 +95,9 @@ export async function findOrCreateUser(whatsappId) {
 
 export async function findUserById(userId) {
     try {
+        // [FIX] Ensure userId is ObjectId (Critical for Queues/Jobs)
         const id = typeof userId === 'string' ? new ObjectId(userId) : userId;
+        
         const cacheKey = getKey('id', id);
         const cachedUser = await redis.get(cacheKey);
         if (cachedUser) return JSON.parse(cachedUser);
@@ -112,21 +114,17 @@ export async function findUserById(userId) {
     }
 }
 
-// [NEW] Helper for Admin Commands
 export async function findUserByPhone(phone) {
-    // Strip '+' if present
     const cleanPhone = phone.replace('+', '').trim();
     return await usersCollection().findOne({ whatsappId: cleanPhone });
 }
 
-// [NEW] Admin Stats Aggregation
 export async function getSystemStats() {
     try {
         const totalUsers = await usersCollection().countDocuments({});
         const activeSubs = await usersCollection().countDocuments({ subscriptionStatus: 'ACTIVE' });
         const trials = await usersCollection().countDocuments({ subscriptionStatus: 'TRIAL' });
         
-        // Simple MRR Estimate (Active * Price)
         const estimatedRevenue = activeSubs * 7500; 
 
         return { totalUsers, activeSubs, trials, estimatedRevenue };
@@ -173,9 +171,12 @@ export async function getAllUsers() {
 }
 
 export async function createJoinCode(userId) {
+    // [FIX] Ensure userId is ObjectId
+    const id = typeof userId === 'string' ? new ObjectId(userId) : userId;
+    
     const code = Math.random().toString(36).substring(2, 8).toUpperCase();
-    await usersCollection().updateOne({ _id: userId }, { $set: { joinCode: code } });
-    const idKey = getKey('id', userId);
+    await usersCollection().updateOne({ _id: id }, { $set: { joinCode: code } });
+    const idKey = getKey('id', id);
     await redis.del(idKey);
     return code;
 }
@@ -185,12 +186,15 @@ export async function findOwnerByJoinCode(code) {
 }
 
 export async function linkStaffToOwner(staffWhatsappId, ownerId) {
+    // [FIX] Ensure ownerId is ObjectId
+    const validOwnerId = typeof ownerId === 'string' ? new ObjectId(ownerId) : ownerId;
+
     const result = await usersCollection().findOneAndUpdate(
         { whatsappId: staffWhatsappId },
         { 
             $set: { 
                 role: 'STAFF', 
-                linkedAccountId: ownerId,
+                linkedAccountId: validOwnerId,
                 state: USER_STATES.IDLE,
                 currency: null 
             } 

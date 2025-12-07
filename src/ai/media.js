@@ -2,7 +2,7 @@ import axios from 'axios';
 import OpenAI from 'openai';
 import config from '../config/index.js';
 import logger from '../utils/logger.js';
-import { openai } from './providers.js'; // Import shared openai instance
+import { openai } from './providers.js'; // Uses the shared instance
 
 async function downloadWhatsAppMedia(mediaId) {
     try {
@@ -25,6 +25,7 @@ async function downloadWhatsAppMedia(mediaId) {
 export async function transcribeAudio(mediaId) {
     try {
         const audioBuffer = await downloadWhatsAppMedia(mediaId);
+        // OpenAI requires a File object or similar. We convert buffer to file.
         const file = await OpenAI.toFile(audioBuffer, 'voice_note.ogg', { type: 'audio/ogg' });
         
         const transcription = await openai.audio.transcriptions.create({
@@ -33,8 +34,8 @@ export async function transcribeAudio(mediaId) {
         });
         return transcription.text;
     } catch (error) {
-        logger.error('Audio transcription failed:', error);
-        return null;
+        logger.error('Audio transcription failed:', error.message);
+        return null; // Return null so the handler knows it failed
     }
 }
 
@@ -45,7 +46,7 @@ export async function analyzeImage(mediaId, caption = "") {
         const dataUrl = `data:image/jpeg;base64,${base64Image}`;
 
         const response = await openai.chat.completions.create({
-            model: "gpt-4o",
+            model: "gpt-4o", // Use GPT-4o for vision
             messages: [
                 {
                     role: "user",
@@ -59,7 +60,7 @@ export async function analyzeImage(mediaId, caption = "") {
         });
         return response.choices[0].message.content;
     } catch (error) {
-        logger.error('Image analysis failed:', error);
+        logger.error('Image analysis failed:', error.message);
         return null;
     }
 }

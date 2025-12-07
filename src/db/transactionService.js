@@ -4,7 +4,6 @@ import { ObjectId } from 'mongodb';
 
 const transactionsCollection = () => getDB().collection('transactions');
 
-// Helper to validate Data
 function validateTransactionData(data, type) {
     const errors = [];
     if (!data.userId) errors.push("Missing User ID");
@@ -37,14 +36,14 @@ export async function createSaleTransaction(saleData) {
         }));
 
         const transactionDoc = {
-            userId: new ObjectId(saleData.userId), // [FIX]
+            userId: new ObjectId(saleData.userId),
             type: 'SALE',
             amount: Number(saleData.totalAmount) || 0,
             date: saleData.date || new Date(),
             description: saleData.description || 'Sale',
             items: sanitizedItems,
-            linkedCustomerId: saleData.linkedCustomerId ? new ObjectId(saleData.linkedCustomerId) : null, // [FIX]
-            linkedBankId: saleData.linkedBankId ? new ObjectId(saleData.linkedBankId) : null, // [FIX]
+            linkedCustomerId: saleData.linkedCustomerId ? new ObjectId(saleData.linkedCustomerId) : null,
+            linkedBankId: saleData.linkedBankId ? new ObjectId(saleData.linkedBankId) : null,
             paymentMethod: saleData.paymentMethod ? saleData.paymentMethod.toUpperCase() : 'CASH',
             dueDate: saleData.dueDate ? new Date(saleData.dueDate) : null,
             loggedBy: saleData.loggedBy || 'Owner',
@@ -108,8 +107,6 @@ export async function createCustomerPaymentTransaction(paymentData) {
     }
 }
 
-// --- READ / QUERY FUNCTIONS ---
-
 export async function getSummaryByDateRange(userId, type, startDate, endDate) {
     try {
         const validUserId = typeof userId === 'string' ? new ObjectId(userId) : userId;
@@ -170,7 +167,6 @@ export async function getDueTransactions(userId, startDate, endDate) {
 
 export async function findTransactionById(transactionId) {
     try {
-        // [FIX] Handle string IDs from Buttons
         const id = typeof transactionId === 'string' ? new ObjectId(transactionId) : transactionId;
         return await transactionsCollection().findOne({ _id: id });
     } catch (error) {

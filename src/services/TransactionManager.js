@@ -10,6 +10,9 @@ export async function logSale(user, saleData) {
     const { items, customerName, saleType, linkedBankId, loggedBy } = saleData;
     if (!items || items.length === 0) throw new Error("No items found in the sale data.");
 
+    // [FIX] Handle missing saleType safely. Default to CASH if undefined to prevent crash.
+    const finalSaleType = saleType ? saleType : 'CASH';
+
     const customer = await findOrCreateCustomer(user._id, customerName);
     let totalAmount = 0;
     let descriptionParts = [];
@@ -61,9 +64,9 @@ export async function logSale(user, saleData) {
         description, 
         linkedCustomerId: customer._id, 
         linkedBankId: linkedBankId ? new ObjectId(linkedBankId) : null, 
-        paymentMethod: saleType,
+        paymentMethod: finalSaleType.toUpperCase(), // [FIX] Use the safe variable
         dueDate: saleData.dueDate ? new Date(saleData.dueDate) : null,
-        loggedBy: loggedBy || 'Owner' // [TEAM MODE SUPPORT]
+        loggedBy: loggedBy || 'Owner' 
     };
 
     const transaction = await createSaleTransaction(transactionData);
@@ -84,7 +87,8 @@ export async function logSale(user, saleData) {
     }
    
     // --- STEP 4: Financial Updates ---
-    if (saleType.toLowerCase() === 'credit') {
+    // [FIX] Safe check using finalSaleType
+    if (finalSaleType.toLowerCase() === 'credit') {
         await updateBalanceOwed(customer._id, totalAmount);
     } else if (linkedBankId) {
         await updateBankBalance(new ObjectId(linkedBankId), totalAmount);

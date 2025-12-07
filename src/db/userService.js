@@ -2,24 +2,15 @@ import { getDB } from './connection.js';
 import logger from '../utils/logger.js';
 import { USER_STATES } from '../utils/constants.js';
 import { ObjectId } from 'mongodb';
-import IORedis from 'ioredis';
-import config from '../config/index.js';
+import redis from './redisClient.js'; // [FIX] Use Singleton
 
 const usersCollection = () => getDB().collection('users');
-
-// --- REDIS SETUP ---
-const redis = new IORedis(config.redis.url, config.redis.options);
 const CACHE_TTL = 600; 
-
-redis.on('error', (err) => {
-    // Suppress connection errors here
-});
 
 const getKey = (type, id) => `user:${type}:${id.toString()}`;
 
 export function checkSubscriptionAccess(user) {
     const now = new Date();
-    
     const getValidDate = (dateVal) => dateVal ? new Date(dateVal) : null;
 
     const trialEnd = getValidDate(user.trialEndsAt);
@@ -95,7 +86,7 @@ export async function findOrCreateUser(whatsappId) {
 
 export async function findUserById(userId) {
     try {
-        // [FIX] Ensure userId is ObjectId (Critical for Queues/Jobs)
+        // [FIX] Safe ID Casting
         const id = typeof userId === 'string' ? new ObjectId(userId) : userId;
         
         const cacheKey = getKey('id', id);
@@ -124,9 +115,7 @@ export async function getSystemStats() {
         const totalUsers = await usersCollection().countDocuments({});
         const activeSubs = await usersCollection().countDocuments({ subscriptionStatus: 'ACTIVE' });
         const trials = await usersCollection().countDocuments({ subscriptionStatus: 'TRIAL' });
-        
         const estimatedRevenue = activeSubs * 7500; 
-
         return { totalUsers, activeSubs, trials, estimatedRevenue };
     } catch (error) {
         logger.error('Error fetching system stats:', error);
@@ -171,13 +160,15 @@ export async function getAllUsers() {
 }
 
 export async function createJoinCode(userId) {
-    // [FIX] Ensure userId is ObjectId
     const id = typeof userId === 'string' ? new ObjectId(userId) : userId;
-    
     const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+    
     await usersCollection().updateOne({ _id: id }, { $set: { joinCode: code } });
+    
+    // Clear cache to force refresh
     const idKey = getKey('id', id);
     await redis.del(idKey);
+    
     return code;
 }
 
@@ -186,7 +177,6 @@ export async function findOwnerByJoinCode(code) {
 }
 
 export async function linkStaffToOwner(staffWhatsappId, ownerId) {
-    // [FIX] Ensure ownerId is ObjectId
     const validOwnerId = typeof ownerId === 'string' ? new ObjectId(ownerId) : ownerId;
 
     const result = await usersCollection().findOneAndUpdate(

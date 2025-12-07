@@ -1,4 +1,3 @@
-
 import { findOrCreateUser, updateUserState } from '../db/userService.js';
 import { findTransactionById } from '../db/transactionService.js';
 import { findCustomerById } from '../db/customerService.js';
@@ -7,7 +6,7 @@ import { uploadMedia, sendDocument, sendTextMessage, sendInteractiveButtons, sen
 import { USER_STATES, INTENTS } from '../utils/constants.js';
 import logger from '../utils/logger.js';
 import { handleMessage } from './messageHandler.js';
-import { askForBankSelection } from './actionHandler.js'; 
+import { askForBankSelection, processSaleItems } from './actionHandler.js'; // [FIX] Import processSaleItems
 import { getAllBankAccounts } from '../db/bankService.js'; 
 import { createDedicatedAccount, initializePayment } from '../services/paymentService.js'; 
 import { ObjectId } from 'mongodb';
@@ -83,6 +82,58 @@ async function handleButtonReply(user, buttonId, originalMessage) {
                         rows: banks.map(b => ({ id: `view_balance:${b._id}`, title: b.bankName }))
                     }];
                     await sendInteractiveList(user.whatsappId, "Check Balance", "Select a bank to view its balance.", "Show List", sections);
+                }
+            }
+            break;
+
+        // [NEW] HANDLE PRODUCT CLARIFICATION (Fuzzy Match)
+        case USER_STATES.AWAITING_PRODUCT_CONFIRMATION:
+            const { saleData, currentItemIndex, potentialMatches } = user.stateContext;
+            const [action, prodId] = buttonId.split(':');
+
+            if (action === 'confirm_prod') {
+                if (prodId === 'none') {
+                    // User said "None of these" -> Move to Type Confirmation (Service vs Product)
+                    await updateUserState(user.whatsappId, USER_STATES.AWAITING_ITEM_TYPE_CONFIRMATION, { saleData, currentItemIndex });
+                    await sendInteractiveButtons(user.whatsappId, 
+                        `Okay. Since I don't know this item, is it a **Service** or a **Product**?`,
+                        [
+                            { id: 'type_choice:service', title: 'Service 🛠️' },
+                            { id: 'type_choice:product', title: 'Product 📦' }
+                        ]
+                    );
+                } else {
+                    // User confirmed a fuzzy match
+                    const matched = potentialMatches.find(p => p._id === prodId);
+                    if (matched) {
+                        saleData.items[currentItemIndex].productId = matched._id;
+                        saleData.items[currentItemIndex].productName = matched.productName;
+                        await sendTextMessage(user.whatsappId, `Got it! Using "${matched.productName}".`);
+                        // Resume processing next items
+                        await processSaleItems(user, saleData, currentItemIndex + 1);
+                    }
+                }
+            }
+            break;
+
+        // [NEW] HANDLE ITEM TYPE (Service vs Product)
+        case USER_STATES.AWAITING_ITEM_TYPE_CONFIRMATION:
+            const ctx = user.stateContext;
+            const [tAction, typeChoice] = buttonId.split(':');
+
+            if (tAction === 'type_choice') {
+                if (typeChoice === 'service') {
+                    // Mark as Service and continue
+                    ctx.saleData.items[ctx.currentItemIndex].isService = true;
+                    await sendTextMessage(user.whatsappId, "Noted as a Service.");
+                    await processSaleItems(user, ctx.saleData, ctx.currentItemIndex + 1);
+                } else {
+                    // It's a Product, but not in DB -> STOP and ask to add
+                    const itemName = ctx.saleData.items[ctx.currentItemIndex].productName;
+                    await sendTextMessage(user.whatsappId, 
+                        `⛔ **Unlisted Product**\n\nYou are trying to sell "${itemName}", but it is not in your inventory.\n\nPlease add it first by typing:\n*"Restock ${itemName}..."*`
+                    );
+                    await updateUserState(user.whatsappId, USER_STATES.IDLE);
                 }
             }
             break;

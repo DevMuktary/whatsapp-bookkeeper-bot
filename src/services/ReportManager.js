@@ -1,14 +1,18 @@
 import { getDB } from '../db/connection.js';
 import logger from '../utils/logger.js';
+import { ObjectId } from 'mongodb'; // [FIX] Import ObjectId
 
 const transactionsCollection = () => getDB().collection('transactions');
 
 export async function getPnLData(userId, startDate, endDate) {
     try {
+        // [FIX] Ensure userId is ObjectId (Critical for Aggregations)
+        const validUserId = typeof userId === 'string' ? new ObjectId(userId) : userId;
+
         const pipeline = [
             { 
                 $match: { 
-                    userId: userId, 
+                    userId: validUserId, 
                     date: { $gte: startDate, $lte: endDate } 
                 } 
             },
@@ -70,8 +74,11 @@ export async function getPnLData(userId, startDate, endDate) {
 }
 
 export async function getReportTransactions(userId, type, startDate, endDate) {
+    // [FIX] Ensure userId is ObjectId
+    const validUserId = typeof userId === 'string' ? new ObjectId(userId) : userId;
+
     const query = {
-        userId,
+        userId: validUserId,
         type,
         date: { $gte: startDate, $lte: endDate }
     };

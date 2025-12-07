@@ -11,40 +11,46 @@ export async function findProductByName(userId, productName) {
     return await productsCollection().findOne(query);
 }
 
+// [FIX] Atomic Upsert to prevent Race Conditions
 export async function upsertProduct(userId, productName, quantityAdded, newCostPrice, sellingPrice, reorderLevel = 5) {
     const validUserId = typeof userId === 'string' ? new ObjectId(userId) : userId;
     const query = { userId: validUserId, productName: { $regex: new RegExp(`^${productName}$`, 'i') } };
     
-    const existingProduct = await productsCollection().findOne(query);
-    
-    let finalCostPrice = newCostPrice;
-
-    if (existingProduct) {
-        const oldQty = existingProduct.quantity || 0;
-        const oldCost = existingProduct.costPrice || 0;
-        const totalQty = oldQty + quantityAdded;
-
-        if (totalQty > 0 && quantityAdded > 0) {
-            const totalValue = (oldQty * oldCost) + (quantityAdded * newCostPrice);
-            finalCostPrice = totalValue / totalQty;
-            finalCostPrice = Math.round(finalCostPrice * 100) / 100;
-        } else if (quantityAdded === 0) {
-             finalCostPrice = newCostPrice;
+    // We use a pipeline update to access existing document fields for AVCO calculation atomically
+    const update = [
+        {
+            $set: {
+                userId: validUserId,
+                productName: productName, // Update name casing
+                sellingPrice: sellingPrice,
+                reorderLevel: reorderLevel,
+                updatedAt: new Date(),
+                // Atomic AVCO Calculation:
+                // If product exists: ((qty * cost) + (addQty * addCost)) / (qty + addQty)
+                // If new: addCost
+                costPrice: {
+                    $cond: {
+                        if: { $eq: [{ $type: "$costPrice" }, "missing"] }, // Is new doc?
+                        then: newCostPrice,
+                        else: {
+                            $cond: {
+                                if: { $eq: [quantityAdded, 0] },
+                                then: newCostPrice, // If no stock added, just update cost manually
+                                else: {
+                                    $divide: [
+                                        { $add: [ { $multiply: [{ $ifNull: ["$quantity", 0] }, { $ifNull: ["$costPrice", 0] }] }, { $multiply: [quantityAdded, newCostPrice] } ] },
+                                        { $add: [{ $ifNull: ["$quantity", 0] }, quantityAdded] }
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                },
+                quantity: { $add: [{ $ifNull: ["$quantity", 0] }, quantityAdded] },
+                createdAt: { $ifNull: ["$createdAt", new Date()] } // Only set if missing
+            }
         }
-    }
-
-    const update = {
-        $set: { 
-            userId: validUserId, 
-            productName, 
-            costPrice: finalCostPrice, 
-            sellingPrice, 
-            reorderLevel, 
-            updatedAt: new Date() 
-        },
-        $inc: { quantity: quantityAdded },
-        $setOnInsert: { createdAt: new Date() }
-    };
+    ];
 
     const result = await productsCollection().findOneAndUpdate(
         query, 
@@ -52,13 +58,14 @@ export async function upsertProduct(userId, productName, quantityAdded, newCostP
         { upsert: true, returnDocument: 'after' }
     );
     
+    // Log the movement
     if (quantityAdded !== 0) {
         await inventoryLogsCollection().insertOne({
             userId: validUserId,
             productId: result._id,
             quantityChange: quantityAdded,
             reason: 'STOCK_ADJUSTMENT',
-            costAtTime: finalCostPrice, 
+            costAtTime: result.costPrice, // The atomic result
             createdAt: new Date()
         });
     }

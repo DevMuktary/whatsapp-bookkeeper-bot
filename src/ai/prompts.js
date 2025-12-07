@@ -85,6 +85,14 @@ export async function getIntent(text) {
         return { intent: INTENTS.CHECK_SUBSCRIPTION, context: {} };
     }
 
+    // --- [FIX] Handle Report Menu Selections Explicitly ---
+    if (t.includes('sales report')) return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'SALES' } };
+    if (t.includes('expense report')) return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'EXPENSES' } };
+    if (t.includes('p&l') || t.includes('profit') || t.includes('loss')) return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'PNL' } };
+    if (t.includes('inventory report')) return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'INVENTORY' } };
+    if (t.includes('cogs') || t.includes('cost of sales')) return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'PNL' } }; // Map COGS to PnL or specific logic
+    // -----------------------------------------------------
+
     // 2. AI PATH
     try {
         const today = new Date().toISOString().split('T')[0];

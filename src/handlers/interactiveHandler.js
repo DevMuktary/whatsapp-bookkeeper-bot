@@ -1,3 +1,4 @@
+
 import { findOrCreateUser, updateUserState } from '../db/userService.js';
 import { findTransactionById } from '../db/transactionService.js';
 import { findCustomerById } from '../db/customerService.js';
@@ -316,7 +317,10 @@ async function handleInvoiceConfirmation(user, buttonId) {
         } else {
             await sendTextMessage(user.whatsappId, "Generating invoice... 🧾");
             try {
-                const customer = await findCustomerById(transaction.linkedCustomerId);
+                // [FIX] Convert string ID from Redis to ObjectId
+                const customerId = new ObjectId(transaction.linkedCustomerId);
+                const customer = await findCustomerById(customerId);
+
                 const pdfBuffer = await generateInvoice(user, transaction, customer);
                 const mediaId = await uploadMedia(pdfBuffer, 'application/pdf');
                 if (mediaId) {

@@ -1,12 +1,11 @@
 import { getDB } from '../db/connection.js';
 import logger from '../utils/logger.js';
-import { ObjectId } from 'mongodb'; // [FIX] Import ObjectId
+import { ObjectId } from 'mongodb'; 
 
 const transactionsCollection = () => getDB().collection('transactions');
 
 export async function getPnLData(userId, startDate, endDate) {
     try {
-        // [FIX] Ensure userId is ObjectId (Critical for Aggregations)
         const validUserId = typeof userId === 'string' ? new ObjectId(userId) : userId;
 
         const pipeline = [
@@ -74,7 +73,6 @@ export async function getPnLData(userId, startDate, endDate) {
 }
 
 export async function getReportTransactions(userId, type, startDate, endDate) {
-    // [FIX] Ensure userId is ObjectId
     const validUserId = typeof userId === 'string' ? new ObjectId(userId) : userId;
 
     const query = {
@@ -102,7 +100,6 @@ export async function getReportTransactions(userId, type, startDate, endDate) {
                 description: 1,
                 category: 1,
                 items: 1,
-                // Use real name if found, else default to 'Walk-in'
                 customerName: { $ifNull: ['$customerDetails.customerName', 'Walk-in'] }
             }
         },

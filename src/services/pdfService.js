@@ -1,5 +1,4 @@
 import PDFDocument from 'pdfkit';
-import axios from 'axios';
 import logger from '../utils/logger.js';
 
 const COLORS = {
@@ -34,25 +33,19 @@ const formatDate = (dateInput) => {
     }).format(date);
 };
 
-// [FIX] Added Timeout to prevent hanging
-async function fetchChartImage(chartConfig) {
-    try {
-        const response = await axios.post('https://quickchart.io/chart', {
-            backgroundColor: 'white',
-            width: 500,
-            height: 300,
-            format: 'png',
-            chart: chartConfig
-        }, {
-            responseType: 'arraybuffer',
-            timeout: 5000 // 5 Second Timeout
-        });
-        return response.data;
-    } catch (error) {
-        logger.warn('Chart generation skipped (Service slow or down):', error.message);
-        return null; // Return null so report continues without chart
-    }
-}
+// [NEW] Helper for Date & Time
+const formatDateTime = (dateInput) => {
+    if (!dateInput) return '';
+    const date = new Date(dateInput);
+    return new Intl.DateTimeFormat('en-GB', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true // e.g. 2:30 PM
+    }).format(date);
+};
 
 const drawFooter = (doc) => {
     const range = doc.bufferedPageRange(); 
@@ -78,18 +71,23 @@ const drawHeader = (doc, user, title, period) => {
        .text(user.businessName, 50, 45, { align: 'left' });
        
     const pageWidth = doc.page.width;
-    doc.rect(pageWidth - 250, 35, 200, 25).fill(COLORS.grayLight);
+    doc.rect(pageWidth - 250, 35, 200, 40).fill(COLORS.grayLight); // Increased height for timestamp
     
     doc.fillColor(COLORS.text)
        .fontSize(12)
        .font(FONTS.bold)
-       .text(title.toUpperCase(), pageWidth - 250, 42, { width: 200, align: 'center' });
+       .text(title.toUpperCase(), pageWidth - 250, 40, { width: 200, align: 'center' });
 
     if (period) {
         doc.fontSize(10)
            .font(FONTS.regular)
-           .text(period, pageWidth - 250, 65, { width: 200, align: 'center' });
+           .text(period, pageWidth - 250, 55, { width: 200, align: 'center' });
     }
+
+    // [NEW] Added Generation Time
+    doc.fontSize(8)
+       .font(FONTS.italic)
+       .text(`Generated: ${formatDateTime(new Date())}`, pageWidth - 250, 68, { width: 200, align: 'center' });
 
     doc.strokeColor(COLORS.accent)
        .lineWidth(2)
@@ -127,37 +125,7 @@ export function generateSalesReport(user, transactions, periodTitle) {
 
             let currentY = drawHeader(doc, user, 'Sales Report', periodTitle);
 
-            const salesByDate = {};
-            transactions.forEach(tx => {
-                const dateKey = new Date(tx.date).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' }); 
-                salesByDate[dateKey] = (salesByDate[dateKey] || 0) + tx.amount;
-            });
-            const sortedDates = Object.keys(salesByDate).sort((a,b) => {
-                 const [d1, m1] = a.split('/');
-                 const [d2, m2] = b.split('/');
-                 return new Date(2024, m1-1, d1) - new Date(2024, m2-1, d2);
-            });
-
-            if (sortedDates.length > 1) {
-                const chartBuffer = await fetchChartImage({
-                    type: 'line',
-                    data: {
-                        labels: sortedDates,
-                        datasets: [{
-                            label: 'Daily Sales Trend',
-                            data: sortedDates.map(d => salesByDate[d]),
-                            fill: false,
-                            borderColor: '#3498db',
-                            tension: 0.3
-                        }]
-                    }
-                });
-
-                if (chartBuffer) {
-                    doc.image(chartBuffer, 50, currentY, { width: 500, height: 250, align: 'center' });
-                    currentY += 270; 
-                }
-            }
+            // [REMOVED] Chart generation logic here
 
             const colDate = { x: 50, width: 65, align: 'left' };
             const colCust = { x: 120, width: 90, align: 'left' };
@@ -288,7 +256,7 @@ export function generateInventoryReport(user, products) {
             doc.on('data', buffers.push.bind(buffers));
             doc.on('end', () => resolve(Buffer.concat(buffers)));
 
-            let currentY = drawHeader(doc, user, 'Inventory Report', `As of ${formatDate(new Date())}`);
+            let currentY = drawHeader(doc, user, 'Inventory Report', `As of ${formatDateTime(new Date())}`);
 
             const colName = { x: 50, width: 160 };
             const colQty = { x: 220, width: 40, align: 'center' };
@@ -408,31 +376,7 @@ export function generatePnLReport(user, pnlData, periodTitle) {
             doc.fillColor(isLoss ? 'red' : 'green')
                .text(formatCurrency(pnlData.netProfit, user.currency), rightX, y, { align: 'right', width: widthAmt });
 
-            if (pnlData.topExpenses && pnlData.topExpenses.length > 0) {
-                if (y + 320 > 750) { doc.addPage(); y = 50; }
-                else { y += 50; } 
-
-                const chartBuffer = await fetchChartImage({
-                    type: 'doughnut',
-                    data: {
-                        labels: pnlData.topExpenses.map(e => e.category || e._id),
-                        datasets: [{
-                            data: pnlData.topExpenses.map(e => e.amount),
-                            backgroundColor: ['#e74c3c', '#3498db', '#f1c40f', '#2ecc71', '#9b59b6', '#34495e']
-                        }]
-                    },
-                    options: {
-                        plugins: {
-                            title: { display: true, text: 'Expense Breakdown' },
-                            legend: { position: 'right' }
-                        }
-                    }
-                });
-
-                if (chartBuffer) {
-                    doc.image(chartBuffer, 50, y, { width: 500, height: 280, align: 'center' });
-                }
-            }
+            // [REMOVED] Chart generation logic here
 
             drawFooter(doc);
             doc.end();

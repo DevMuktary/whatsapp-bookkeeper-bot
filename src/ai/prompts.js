@@ -87,6 +87,10 @@ export async function getIntent(text) {
     if (t.includes('inventory report')) return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'INVENTORY' } };
     if (t.includes('cogs') || t.includes('cost of sales')) return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'PNL' } };
 
+    // [FIX] Fast path for "Edit/Delete" and "Add Product"
+    if (t.includes('edit') && t.includes('transaction')) return { intent: INTENTS.RECONCILE_TRANSACTION, context: {} };
+    if (t.includes('add product') || t.includes('restock')) return { intent: INTENTS.ADD_PRODUCT, context: {} };
+
     // 2. AI PATH
     try {
         const today = new Date().toISOString().split('T')[0];
@@ -105,7 +109,7 @@ export async function getIntent(text) {
         - ${INTENTS.GENERAL_CONVERSATION}: "Hello", "Thanks", "Hi".
         - ${INTENTS.CHECK_SUBSCRIPTION}: "My plan", "When do I expire?", "Subscription status".
         - ${INTENTS.UPGRADE_SUBSCRIPTION}: "Renew Fynax", "Upgrade to premium", "Extend plan".
-
+        
         CRITICAL RULES:
         1. "Add Bank" or "Add New Bank" = ${INTENTS.ADD_BANK_ACCOUNT}. NEVER map this to ADD_PRODUCT.
         2. "Pay for Subscription" = ${INTENTS.UPGRADE_SUBSCRIPTION}.

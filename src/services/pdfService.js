@@ -23,17 +23,7 @@ const formatCurrency = (amount, currency) => {
     return `${currency} ${num}`;
 };
 
-const formatDate = (dateInput) => {
-    if (!dateInput) return '';
-    const date = new Date(dateInput);
-    return new Intl.DateTimeFormat('en-GB', {
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric'
-    }).format(date);
-};
-
-// [NEW] Helper for Date & Time
+// [NEW] Helper for Date & Time (DD/MM/YYYY, HH:MM AM/PM)
 const formatDateTime = (dateInput) => {
     if (!dateInput) return '';
     const date = new Date(dateInput);
@@ -43,7 +33,17 @@ const formatDateTime = (dateInput) => {
         year: 'numeric',
         hour: '2-digit',
         minute: '2-digit',
-        hour12: true // e.g. 2:30 PM
+        hour12: true 
+    }).format(date);
+};
+
+const formatDate = (dateInput) => {
+    if (!dateInput) return '';
+    const date = new Date(dateInput);
+    return new Intl.DateTimeFormat('en-GB', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric'
     }).format(date);
 };
 
@@ -71,7 +71,7 @@ const drawHeader = (doc, user, title, period) => {
        .text(user.businessName, 50, 45, { align: 'left' });
        
     const pageWidth = doc.page.width;
-    doc.rect(pageWidth - 250, 35, 200, 40).fill(COLORS.grayLight); // Increased height for timestamp
+    doc.rect(pageWidth - 250, 35, 200, 40).fill(COLORS.grayLight); 
     
     doc.fillColor(COLORS.text)
        .fontSize(12)
@@ -84,7 +84,6 @@ const drawHeader = (doc, user, title, period) => {
            .text(period, pageWidth - 250, 55, { width: 200, align: 'center' });
     }
 
-    // [NEW] Added Generation Time
     doc.fontSize(8)
        .font(FONTS.italic)
        .text(`Generated: ${formatDateTime(new Date())}`, pageWidth - 250, 68, { width: 200, align: 'center' });
@@ -125,14 +124,10 @@ export function generateSalesReport(user, transactions, periodTitle) {
 
             let currentY = drawHeader(doc, user, 'Sales Report', periodTitle);
 
-            // [REMOVED] Chart generation logic here
-
             const colDate = { x: 50, width: 65, align: 'left' };
             const colCust = { x: 120, width: 90, align: 'left' };
             const colDesc = { x: 220, width: 190, align: 'left' };
             const colAmt = { x: 420, width: 100, align: 'right' };
-
-            if (currentY + 50 > 750) { doc.addPage(); currentY = 50; }
 
             drawTableRow(doc, currentY, [
                 { text: 'DATE', ...colDate },
@@ -307,6 +302,65 @@ export function generateInventoryReport(user, products) {
     });
 }
 
+// [NEW] Separate COGS Report Logic
+export function generateCOGSReport(user, items, periodTitle) {
+    return new Promise((resolve, reject) => {
+        try {
+            const doc = new PDFDocument({ margin: 50, size: 'A4', bufferPages: true });
+            const buffers = [];
+            doc.on('data', buffers.push.bind(buffers));
+            doc.on('end', () => resolve(Buffer.concat(buffers)));
+
+            let currentY = drawHeader(doc, user, 'Cost of Sales Report', periodTitle);
+
+            const colDate = { x: 50, width: 70, align: 'left' };
+            const colProd = { x: 130, width: 170, align: 'left' };
+            const colQty = { x: 310, width: 50, align: 'center' };
+            const colCost = { x: 370, width: 80, align: 'right' };
+            const colTotal = { x: 460, width: 80, align: 'right' };
+
+            drawTableRow(doc, currentY, [
+                { text: 'DATE', ...colDate },
+                { text: 'PRODUCT', ...colProd },
+                { text: 'QTY', ...colQty },
+                { text: 'UNIT COST', ...colCost },
+                { text: 'TOTAL COST', ...colTotal },
+            ], true);
+            currentY += 25;
+
+            let totalCOGS = 0;
+
+            items.forEach((item, i) => {
+                if (currentY > 750) { doc.addPage(); currentY = 50; }
+                
+                totalCOGS += item.totalCost;
+                
+                drawTableRow(doc, currentY, [
+                    { text: formatDate(item.date), ...colDate },
+                    { text: item.productName, ...colProd },
+                    { text: item.quantity.toString(), ...colQty },
+                    { text: formatCurrency(item.costPerUnit, user.currency), ...colCost },
+                    { text: formatCurrency(item.totalCost, user.currency), ...colTotal },
+                ], false, i % 2 === 0);
+                currentY += 20;
+            });
+
+            currentY += 15;
+            doc.rect(300, currentY - 5, 250, 30).fill(COLORS.grayLight);
+            doc.fillColor(COLORS.primary).font(FONTS.bold).fontSize(12)
+               .text('Total Cost of Sales:', 310, currentY, { width: 140, align: 'right' });
+            doc.fillColor('red').text(formatCurrency(totalCOGS, user.currency), 460, currentY, { width: 90, align: 'right' });
+
+            drawFooter(doc);
+            doc.end();
+
+        } catch (error) {
+            logger.error('Error generating COGS PDF report:', error);
+            reject(error);
+        }
+    });
+}
+
 export function generatePnLReport(user, pnlData, periodTitle) {
     return new Promise(async (resolve, reject) => {
         try {
@@ -375,8 +429,6 @@ export function generatePnLReport(user, pnlData, periodTitle) {
             doc.fillColor(COLORS.primary).fontSize(16).font(FONTS.bold).text('Net Profit / (Loss)', 60, y);
             doc.fillColor(isLoss ? 'red' : 'green')
                .text(formatCurrency(pnlData.netProfit, user.currency), rightX, y, { align: 'right', width: widthAmt });
-
-            // [REMOVED] Chart generation logic here
 
             drawFooter(doc);
             doc.end();

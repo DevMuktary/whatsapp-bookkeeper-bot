@@ -5,10 +5,11 @@ import {
     generateSalesReport, 
     generateExpenseReport, 
     generatePnLReport, 
-    generateInventoryReport 
+    generateInventoryReport,
+    generateCOGSReport // [NEW] Import
 } from './pdfService.js';
 import { sendDocument, sendTextMessage, uploadMedia } from '../api/whatsappService.js';
-import { getPnLData, getReportTransactions } from './ReportManager.js';
+import { getPnLData, getReportTransactions, getCOGSBreakdown } from './ReportManager.js'; // [NEW] Import
 import { findUserById } from '../db/userService.js';
 import { getAllProducts } from '../db/productService.js';
 import { getTransactionsByDateRange, getDueTransactions } from '../db/transactionService.js';
@@ -31,13 +32,12 @@ const reportWorker = new Worker('report-generation', async (job) => {
         await generateAndSend(user, reportType, dateRange, whatsappId);
         logger.info(`Report Job ${job.id} completed.`);
     } catch (error) {
-        // [CRITICAL FIX] Handle Large Report Error Gracefully
         if (error.message === 'REPORT_TOO_LARGE') {
              logger.warn(`Report too large for ${whatsappId}. Redirecting to dashboard.`);
              await sendTextMessage(whatsappId, 
-                 `⚠️ *Report Too Large*\n\nThis report contains over 3,000 transactions! Generating it here would be too slow.\n\n🚀 Please visit *dashboard.fynaxtech.com* to download it instantly.`
+                 `⚠️ *Report Too Large*\n\nThis report contains over 3,000 transactions! Generating it here would be too slow.\n\n🚀 Please visit **dashboard.fynaxtech.com** to download it instantly.`
              );
-             return; // Stop here, don't throw error to retry
+             return; 
         }
 
         logger.error(`Report Job ${job.id} failed:`, error);
@@ -112,12 +112,17 @@ async function generateAndSend(user, reportType, dateRange, whatsappId) {
         const products = await getAllProducts(user._id);
         filename = 'Inventory_Report.pdf';
         pdfBuffer = await generateInventoryReport(user, products);
+        
+    } else if (reportType === 'COGS') { // [NEW] Handle COGS
+        const items = await getCOGSBreakdown(user._id, startDate, endDate);
+        filename = 'Cost_of_Sales_Report.pdf';
+        pdfBuffer = await generateCOGSReport(user, items, periodString);
     }
 
     if (pdfBuffer) {
         const mediaId = await uploadMedia(pdfBuffer, 'application/pdf');
         if (mediaId) {
-            await sendDocument(whatsappId, mediaId, filename, `Here is your ${filename.replace('_', ' ')}.`);
+            await sendDocument(whatsappId, mediaId, filename, `Here is your ${filename.replace(/_/g, ' ')}.`);
         } else {
             await sendTextMessage(whatsappId, "Report generated, but I couldn't upload the file to WhatsApp.");
         }
@@ -173,7 +178,7 @@ async function processDueDebts(user) {
             
             await sendTextMessage(user.whatsappId, 
                 `🔔 *Payment Due Today:*\n\n` +
-                `*${customer.customerName}* owes you *${currency} ${amount}* from a sale on ${new Date(tx.date).toLocaleDateString()}.\n\n` +
+                `**${customer.customerName}** owes you **${currency} ${amount}** from a sale on ${new Date(tx.date).toLocaleDateString()}.\n\n` +
                 `Their total outstanding balance is ${currency} ${customer.balanceOwed.toLocaleString()}.`
             );
         }

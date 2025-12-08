@@ -80,6 +80,13 @@ export async function getReportTransactions(userId, type, startDate, endDate) {
         type,
         date: { $gte: startDate, $lte: endDate }
     };
+
+    // [CRITICAL FIX] Check Limits before fetching
+    // Limit set to 3,000 to prevent PDF generation timeouts/crashes
+    const count = await transactionsCollection().countDocuments(query);
+    if (count > 3000) {
+        throw new Error('REPORT_TOO_LARGE');
+    }
     
     return await transactionsCollection().aggregate([
         { $match: query },

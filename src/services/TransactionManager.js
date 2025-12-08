@@ -5,12 +5,13 @@ import { updateBankBalance } from '../db/bankService.js';
 import { sendTextMessage } from '../api/whatsappService.js'; 
 import logger from '../utils/logger.js';
 import { ObjectId } from 'mongodb';
+import { getDB } from '../db/connection.js'; // Need direct DB access for ID lookup
 
 export async function logSale(user, saleData) {
     const { items, customerName, saleType, linkedBankId, loggedBy } = saleData;
     if (!items || items.length === 0) throw new Error("No items found in the sale data.");
 
-    // [FIX] Handle missing saleType safely. Default to CASH if undefined to prevent crash.
+    // [CRASH FIX] Handle missing saleType safely. Default to CASH.
     const finalSaleType = saleType ? saleType : 'CASH';
 
     const customer = await findOrCreateCustomer(user._id, customerName);
@@ -18,7 +19,7 @@ export async function logSale(user, saleData) {
     let descriptionParts = [];
     const processedItems = [];
 
-    // --- STEP 1: Process Items ---
+    // --- STEP 1: Process Items & Calculate Totals ---
     for (let i = 0; i < items.length; i++) {
         const item = items[i];
         
@@ -33,8 +34,20 @@ export async function logSale(user, saleData) {
         let costPriceSnapshot = 0;
         let productId = null;
 
-        if (!item.isService) {
-            const product = await findProductByName(user._id, item.productName);
+        // [INVENTORY FIX] Priority 1: Use the ID if the Smart Handler passed it
+        if (item.productId) {
+            productId = new ObjectId(item.productId);
+            
+            // We need to fetch the Cost Price for accurate Profit Reports
+            const product = await getDB().collection('products').findOne({ _id: productId });
+            if (product) {
+                costPriceSnapshot = product.costPrice || 0;
+            }
+        } 
+        // Priority 2: Lookup by Name (Legacy/Fallback)
+        else if (!item.isService) {
+            const cleanName = item.productName.trim(); // Trim spaces!
+            const product = await findProductByName(user._id, cleanName);
             if (product) {
                 productId = product._id;
                 costPriceSnapshot = product.costPrice || 0;
@@ -64,7 +77,7 @@ export async function logSale(user, saleData) {
         description, 
         linkedCustomerId: customer._id, 
         linkedBankId: linkedBankId ? new ObjectId(linkedBankId) : null, 
-        paymentMethod: finalSaleType.toUpperCase(), // [FIX] Use the safe variable
+        paymentMethod: finalSaleType.toUpperCase(), 
         dueDate: saleData.dueDate ? new Date(saleData.dueDate) : null,
         loggedBy: loggedBy || 'Owner' 
     };
@@ -73,11 +86,13 @@ export async function logSale(user, saleData) {
 
     // --- STEP 3: Update Inventory & Alert ---
     for (const item of processedItems) {
+        // [LOGIC] Only deduct if we successfully identified a Product ID and it's NOT a service
         if (item.productId && !item.isService) {
              const updatedProduct = await updateStock(item.productId, -item.quantity, 'SALE', transaction._id);
              
              // Low Stock Alert
              const threshold = updatedProduct.reorderLevel || 5; 
+             // Logic: If stock WAS above threshold and is NOW below/equal
              if (updatedProduct.quantity <= threshold) {
                  await sendTextMessage(user.whatsappId, 
                      `⚠️ *Low Stock Alert:*\n"${updatedProduct.productName}" is down to *${updatedProduct.quantity} units*.\n\nReply with 'Restock ${updatedProduct.productName} ...' to add more.`
@@ -87,7 +102,6 @@ export async function logSale(user, saleData) {
     }
    
     // --- STEP 4: Financial Updates ---
-    // [FIX] Safe check using finalSaleType
     if (finalSaleType.toLowerCase() === 'credit') {
         await updateBalanceOwed(customer._id, totalAmount);
     } else if (linkedBankId) {

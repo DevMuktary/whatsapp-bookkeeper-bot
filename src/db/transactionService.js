@@ -24,7 +24,7 @@ function validateTransactionData(data, type) {
     if (errors.length > 0) throw new Error(`Validation Failed: ${errors.join(', ')}`);
 }
 
-export async function createSaleTransaction(saleData) {
+export async function createSaleTransaction(saleData, options = {}) {
     try {
         const sanitizedItems = saleData.items.map(item => ({
             productId: item.productId ? new ObjectId(item.productId) : null,
@@ -52,15 +52,15 @@ export async function createSaleTransaction(saleData) {
 
         validateTransactionData(transactionDoc, 'SALE');
 
-        const result = await transactionsCollection().insertOne(transactionDoc);
-        return await transactionsCollection().findOne({ _id: result.insertedId });
+        const result = await transactionsCollection().insertOne(transactionDoc, options);
+        return await transactionsCollection().findOne({ _id: result.insertedId }, options);
     } catch (error) {
         logger.error('Error creating sale transaction:', error);
         throw error;
     }
 }
 
-export async function createExpenseTransaction(expenseData) {
+export async function createExpenseTransaction(expenseData, options = {}) {
     try {
         const doc = {
             userId: new ObjectId(expenseData.userId),
@@ -76,15 +76,15 @@ export async function createExpenseTransaction(expenseData) {
 
         validateTransactionData(doc, 'EXPENSE');
 
-        const result = await transactionsCollection().insertOne(doc);
-        return await transactionsCollection().findOne({ _id: result.insertedId });
+        const result = await transactionsCollection().insertOne(doc, options);
+        return await transactionsCollection().findOne({ _id: result.insertedId }, options);
     } catch (error) {
         logger.error('Error creating expense transaction:', error);
         throw error;
     }
 }
 
-export async function createCustomerPaymentTransaction(paymentData) {
+export async function createCustomerPaymentTransaction(paymentData, options = {}) {
     try {
         if (!paymentData.amount || isNaN(paymentData.amount)) throw new Error("Invalid Payment Amount");
 
@@ -99,8 +99,8 @@ export async function createCustomerPaymentTransaction(paymentData) {
             loggedBy: paymentData.loggedBy || 'Owner',
             createdAt: new Date()
         };
-        const result = await transactionsCollection().insertOne(doc);
-        return await transactionsCollection().findOne({ _id: result.insertedId });
+        const result = await transactionsCollection().insertOne(doc, options);
+        return await transactionsCollection().findOne({ _id: result.insertedId }, options);
     } catch (error) {
         logger.error('Error creating customer payment transaction:', error);
         throw error;
@@ -147,6 +147,25 @@ export async function getTransactionsByDateRange(userId, type, startDate, endDat
     } catch (error) {
         logger.error(`Error getting transactions for user ${userId}:`, error);
         throw new Error('Could not retrieve transactions.');
+    }
+}
+
+// [NEW] Efficient counting for PDF/Excel Limits
+export async function countTransactionsByDateRange(userId, type, startDate, endDate) {
+    try {
+        const validUserId = typeof userId === 'string' ? new ObjectId(userId) : userId;
+        
+        // If 'type' is 'ALL', remove it from query
+        const query = {
+            userId: validUserId,
+            date: { $gte: startDate, $lte: endDate }
+        };
+        if (type && type !== 'ALL') query.type = type;
+
+        return await transactionsCollection().countDocuments(query);
+    } catch (error) {
+        logger.error(`Error counting transactions for ${userId}:`, error);
+        return 0;
     }
 }
 

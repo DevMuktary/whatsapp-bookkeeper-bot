@@ -81,8 +81,6 @@ export async function getReportTransactions(userId, type, startDate, endDate) {
         date: { $gte: startDate, $lte: endDate }
     };
 
-    // [CRITICAL FIX] Check Limits before fetching
-    // Limit set to 3,000 to prevent PDF generation timeouts/crashes
     const count = await transactionsCollection().countDocuments(query);
     if (count > 3000) {
         throw new Error('REPORT_TOO_LARGE');
@@ -108,6 +106,41 @@ export async function getReportTransactions(userId, type, startDate, endDate) {
                 category: 1,
                 items: 1,
                 customerName: { $ifNull: ['$customerDetails.customerName', 'Walk-in'] }
+            }
+        },
+        { $sort: { date: 1 } }
+    ]).toArray();
+}
+
+// [NEW] Get COGS specific data
+export async function getCOGSBreakdown(userId, startDate, endDate) {
+    const validUserId = typeof userId === 'string' ? new ObjectId(userId) : userId;
+
+    const query = {
+        userId: validUserId,
+        type: 'SALE',
+        date: { $gte: startDate, $lte: endDate }
+    };
+
+    // Check count first
+    const count = await transactionsCollection().countDocuments(query);
+    if (count > 3000) {
+        throw new Error('REPORT_TOO_LARGE');
+    }
+
+    // Pipeline to extract every sold item and its cost
+    return await transactionsCollection().aggregate([
+        { $match: query },
+        { $unwind: "$items" },
+        // Filter out services which have no cost
+        { $match: { "items.isService": { $ne: true } } }, 
+        {
+            $project: {
+                date: 1,
+                productName: "$items.productName",
+                quantity: "$items.quantity",
+                costPerUnit: "$items.costPrice",
+                totalCost: { $multiply: ["$items.quantity", "$items.costPrice"] }
             }
         },
         { $sort: { date: 1 } }

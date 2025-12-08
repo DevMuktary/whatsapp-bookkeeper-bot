@@ -43,6 +43,11 @@ function getFallbackIntent(text) {
     if (t.includes('owe') || t.includes('debt') || t.includes('debtor')) return { intent: INTENTS.GET_CUSTOMER_BALANCES, context: {} };
     if (t.includes('report') || t.includes('pdf') || t.includes('p&l') || t.includes('statement')) return { intent: INTENTS.GENERATE_REPORT, context: {} };
     if (t.includes('join')) return { intent: INTENTS.GENERAL_CONVERSATION, context: { generatedReply: "To join a team, please type 'Join [Code]'." } };
+
+    // [FIX] Add Fallback for Edit/Delete
+    if (t.includes('edit') || t.includes('delete') || t.includes('correct') || t.includes('change') || t.includes('modify')) {
+        return { intent: INTENTS.RECONCILE_TRANSACTION, context: {} };
+    }
     
     return { 
         intent: INTENTS.GENERAL_CONVERSATION, 
@@ -56,6 +61,7 @@ export async function getIntent(text) {
     const t = text.toLowerCase().trim();
 
     // 1. FAST PATH (Priority Over AI)
+    // Checks for simple commands to save AI cost and time
     if (t.includes('add bank') || t.includes('add new bank') || t === 'add account') {
         return { intent: INTENTS.ADD_BANK_ACCOUNT, context: {} };
     }
@@ -87,13 +93,20 @@ export async function getIntent(text) {
     if (t.includes('inventory report')) return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'INVENTORY' } };
     if (t.includes('cogs') || t.includes('cost of sales')) return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'PNL' } };
 
-    // [FIX] Fast path for "Edit/Delete" and "Add Product"
-    if (t.includes('edit') && t.includes('transaction')) return { intent: INTENTS.RECONCILE_TRANSACTION, context: {} };
+    // [FIX] Expanded Fast Path for Edits
+    // Now catches "Edit my last transaction", "Delete sale", "Correct mistake", "Change amount"
+    const editKeywords = ['edit', 'delete', 'correct', 'change', 'remove', 'mistake', 'undo'];
+    if (editKeywords.some(keyword => t.includes(keyword))) {
+        return { intent: INTENTS.RECONCILE_TRANSACTION, context: {} };
+    }
+
     if (t.includes('add product') || t.includes('restock')) return { intent: INTENTS.ADD_PRODUCT, context: {} };
 
     // 2. AI PATH
     try {
         const today = new Date().toISOString().split('T')[0];
+        
+        // [FIX] Added RECONCILE_TRANSACTION to the System Prompt list
         const systemPrompt = `You are an intent classifier. Respond ONLY with JSON.
         TODAY: ${today}
 
@@ -109,12 +122,14 @@ export async function getIntent(text) {
         - ${INTENTS.GENERAL_CONVERSATION}: "Hello", "Thanks", "Hi".
         - ${INTENTS.CHECK_SUBSCRIPTION}: "My plan", "When do I expire?", "Subscription status".
         - ${INTENTS.UPGRADE_SUBSCRIPTION}: "Renew Fynax", "Upgrade to premium", "Extend plan".
-        
+        - ${INTENTS.RECONCILE_TRANSACTION}: "Edit last sale", "Delete transaction", "I made a mistake", "Correct the amount", "Change price".
+
         CRITICAL RULES:
         1. "Add Bank" or "Add New Bank" = ${INTENTS.ADD_BANK_ACCOUNT}. NEVER map this to ADD_PRODUCT.
         2. "Pay for Subscription" = ${INTENTS.UPGRADE_SUBSCRIPTION}.
         3. "Financial Insight" = ${INTENTS.GET_FINANCIAL_INSIGHT}.
         4. "Generate Report" = ${INTENTS.GENERATE_REPORT}. Context MUST include "reportType" (SALES, EXPENSES, PNL, INVENTORY) if specified.
+        5. "Edit" or "Delete" or "Correction" = ${INTENTS.RECONCILE_TRANSACTION}.
         
         Return JSON format: {"intent": "...", "context": {...}}
         `;

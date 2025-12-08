@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { getTransactionsByDateRange } from '../db/transactionService.js';
+import { getTransactionsByDateRange, countTransactionsByDateRange } from '../db/transactionService.js'; // [FIX] Import Count
 import { getAllProducts } from '../db/productService.js';
 import { getCustomersWithBalance } from '../db/customerService.js';
 import logger from '../utils/logger.js';
@@ -10,6 +10,15 @@ import logger from '../utils/logger.js';
  */
 export async function generateDataExport(userId, startDate, endDate) {
     try {
+        // [CRITICAL FIX] Excel Limit Check
+        // Limit: 10,000 transactions. Excel files larger than this in-memory can cause crashes.
+        const txCount = await countTransactionsByDateRange(userId, 'ALL', startDate, endDate);
+        
+        if (txCount > 10000) {
+            // We throw a specific error that the caller (messageHandler) can catch and display the Dashboard link
+            throw new Error('EXPORT_TOO_LARGE');
+        }
+
         const workbook = XLSX.utils.book_new();
 
         // --- SHEET 1: TRANSACTIONS ---
@@ -63,6 +72,7 @@ export async function generateDataExport(userId, startDate, endDate) {
         return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
 
     } catch (error) {
+        if (error.message === 'EXPORT_TOO_LARGE') throw error; // Pass through to handler
         logger.error(`Error generating export for user ${userId}:`, error);
         throw new Error('Could not generate Excel file.');
     }

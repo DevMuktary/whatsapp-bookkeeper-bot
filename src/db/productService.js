@@ -1,56 +1,45 @@
 import { getDB } from './connection.js';
 import logger from '../utils/logger.js';
 import { ObjectId } from 'mongodb';
+import { escapeRegex } from '../utils/helpers.js'; // [FIX] Import Helper
 
 const productsCollection = () => getDB().collection('products');
 const inventoryLogsCollection = () => getDB().collection('inventory_logs');
 
-export async function findProductByName(userId, productName) {
+export async function findProductByName(userId, productName, options = {}) {
     const validUserId = typeof userId === 'string' ? new ObjectId(userId) : userId;
-    // Exact match (case insensitive)
-    const query = { userId: validUserId, productName: { $regex: new RegExp(`^${productName}$`, 'i') } };
-    return await productsCollection().findOne(query);
+    // [FIX] Escape regex to prevent crash
+    const safeName = escapeRegex(productName.trim());
+    const query = { userId: validUserId, productName: { $regex: new RegExp(`^${safeName}$`, 'i') } };
+    return await productsCollection().findOne(query, options);
 }
 
 // [NEW] Fuzzy Search for "Did you mean...?"
 export async function findProductFuzzy(userId, searchText) {
     const validUserId = typeof userId === 'string' ? new ObjectId(userId) : userId;
-    // content match
+    // [FIX] Escape regex here too
+    const safeText = escapeRegex(searchText.trim());
+    
     const query = { 
         userId: validUserId, 
-        productName: { $regex: new RegExp(searchText, 'i') } 
+        productName: { $regex: new RegExp(safeText, 'i') } 
     };
     return await productsCollection().find(query).limit(5).toArray();
 }
 
 export async function upsertProduct(userId, productName, quantityAdded, newCostPrice, sellingPrice, reorderLevel = 5) {
     const validUserId = typeof userId === 'string' ? new ObjectId(userId) : userId;
-    const query = { userId: validUserId, productName: { $regex: new RegExp(`^${productName}$`, 'i') } };
+    const safeName = escapeRegex(productName.trim());
+    const query = { userId: validUserId, productName: { $regex: new RegExp(`^${safeName}$`, 'i') } };
     
-    const existingProduct = await productsCollection().findOne(query);
+    // [FIX] Division by Zero Protection in Aggregation
+    // Logic: If (CurrentQty + AddedQty) == 0, we cannot divide. Just use newCostPrice.
     
-    let finalCostPrice = newCostPrice;
-
-    // Atomic AVCO Calculation
-    if (existingProduct) {
-        const oldQty = existingProduct.quantity || 0;
-        const oldCost = existingProduct.costPrice || 0;
-        const totalQty = oldQty + quantityAdded;
-
-        if (totalQty > 0 && quantityAdded > 0) {
-            const totalValue = (oldQty * oldCost) + (quantityAdded * newCostPrice);
-            finalCostPrice = totalValue / totalQty;
-            finalCostPrice = Math.round(finalCostPrice * 100) / 100;
-        } else if (quantityAdded === 0) {
-             finalCostPrice = newCostPrice;
-        }
-    }
-
     const update = [
         {
             $set: {
                 userId: validUserId,
-                productName: productName, 
+                productName: productName.trim(), // Ensure clean name stored
                 sellingPrice: sellingPrice,
                 reorderLevel: reorderLevel,
                 updatedAt: new Date(),
@@ -60,8 +49,9 @@ export async function upsertProduct(userId, productName, quantityAdded, newCostP
                         then: newCostPrice,
                         else: {
                             $cond: {
-                                if: { $eq: [quantityAdded, 0] },
-                                then: newCostPrice, 
+                                // Check if denominator will be zero (e.g. -5 + 5 = 0)
+                                if: { $eq: [{ $add: [{ $ifNull: ["$quantity", 0] }, quantityAdded] }, 0] },
+                                then: newCostPrice, // Fallback to avoid crash
                                 else: {
                                     $divide: [
                                         { $add: [ { $multiply: [{ $ifNull: ["$quantity", 0] }, { $ifNull: ["$costPrice", 0] }] }, { $multiply: [quantityAdded, newCostPrice] } ] },
@@ -98,13 +88,10 @@ export async function upsertProduct(userId, productName, quantityAdded, newCostP
     return result;
 }
 
-export async function updateStock(productId, quantityChange, reason, linkedTransactionId) {
+export async function updateStock(productId, quantityChange, reason, linkedTransactionId, options = {}) {
     const validProdId = typeof productId === 'string' ? new ObjectId(productId) : productId;
     
     const filter = { _id: validProdId };
-    
-    // [FIX] REMOVED the Negative Stock Check ($gte). 
-    // Now allows stock to go negative (e.g. -5) if they sell more than they have.
     
     const updatedProduct = await productsCollection().findOneAndUpdate(
         filter,
@@ -112,22 +99,23 @@ export async function updateStock(productId, quantityChange, reason, linkedTrans
             $inc: { quantity: quantityChange },
             $set: { updatedAt: new Date() }
         },
-        { returnDocument: 'after' }
+        { returnDocument: 'after', ...options }
     );
 
     if (!updatedProduct) {
-        // Only error if product DOES NOT EXIST at all
         throw new Error('Product not found for stock update.');
     }
 
+    // [FIX] Added costAtTime to ensure historical profit accuracy
     await inventoryLogsCollection().insertOne({
         userId: updatedProduct.userId,
         productId: validProdId,
         quantityChange,
         reason,
+        costAtTime: updatedProduct.costPrice || 0, // Critical for Blind Audit fix
         linkedTransactionId: typeof linkedTransactionId === 'string' ? new ObjectId(linkedTransactionId) : linkedTransactionId,
         createdAt: new Date()
-    });
+    }, options);
 
     return updatedProduct;
 }

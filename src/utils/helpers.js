@@ -20,6 +20,14 @@ export const parsePrice = (priceInput) => {
     return isNaN(value) ? NaN : value * multiplier;
 };
 
+// [NEW] Critical Security Helper
+// Escapes special characters for RegExp to prevent server crashes
+// e.g. "Rice (50kg)" -> "Rice \(50kg\)"
+export const escapeRegex = (string) => {
+    if (typeof string !== 'string') return '';
+    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+};
+
 export const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 export const toObjectId = (id) => {

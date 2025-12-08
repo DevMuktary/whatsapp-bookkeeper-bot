@@ -1,28 +1,32 @@
 import { getDB } from './connection.js';
 import logger from '../utils/logger.js';
 import { ObjectId } from 'mongodb';
+import { escapeRegex } from '../utils/helpers.js'; // [FIX] Import Helper
 
 const customersCollection = () => getDB().collection('customers');
 
-export async function findOrCreateCustomer(userId, customerName) {
+export async function findOrCreateCustomer(userId, customerName, options = {}) {
     try {
         const validUserId = typeof userId === 'string' ? new ObjectId(userId) : userId;
-        const query = { userId: validUserId, customerName: { $regex: new RegExp(`^${customerName}$`, 'i') } };
         
-        let customer = await customersCollection().findOne(query);
+        // [FIX] Use escapeRegex to prevent crashes if name contains '(', '+', etc.
+        const safeName = escapeRegex(customerName.trim());
+        const query = { userId: validUserId, customerName: { $regex: new RegExp(`^${safeName}$`, 'i') } };
+        
+        let customer = await customersCollection().findOne(query, options);
 
         if (!customer) {
             logger.info(`Customer "${customerName}" not found for user ${validUserId}. Creating them.`);
             const newCustomer = {
                 userId: validUserId,
-                customerName,
+                customerName: customerName.trim(), // Store original clean name
                 contactInfo: null,
                 balanceOwed: 0,
                 createdAt: new Date(),
                 updatedAt: new Date(),
             };
-            const result = await customersCollection().insertOne(newCustomer);
-            customer = await customersCollection().findOne({ _id: result.insertedId });
+            const result = await customersCollection().insertOne(newCustomer, options);
+            customer = await customersCollection().findOne({ _id: result.insertedId }, options);
         }
         return customer;
     } catch (error) {
@@ -31,7 +35,7 @@ export async function findOrCreateCustomer(userId, customerName) {
     }
 }
 
-export async function updateBalanceOwed(customerId, amountChange) {
+export async function updateBalanceOwed(customerId, amountChange, options = {}) {
     try {
         const validCustId = typeof customerId === 'string' ? new ObjectId(customerId) : customerId;
         const result = await customersCollection().findOneAndUpdate(
@@ -40,7 +44,7 @@ export async function updateBalanceOwed(customerId, amountChange) {
                 $inc: { balanceOwed: amountChange },
                 $set: { updatedAt: new Date() }
             },
-            { returnDocument: 'after' }
+            { returnDocument: 'after', ...options }
         );
         logger.info(`Balance updated for customer ${validCustId}. Change: ${amountChange}.`);
         return result;
@@ -50,11 +54,10 @@ export async function updateBalanceOwed(customerId, amountChange) {
     }
 }
 
-export async function findCustomerById(customerId) {
+export async function findCustomerById(customerId, options = {}) {
     try {
         const validCustId = typeof customerId === 'string' ? new ObjectId(customerId) : customerId;
-        const customer = await customersCollection().findOne({ _id: validCustId });
-        return customer;
+        return await customersCollection().findOne({ _id: validCustId }, options);
     } catch (error) {
         logger.error(`Error finding customer by ID ${customerId}:`, error);
         throw new Error('Could not find customer.');

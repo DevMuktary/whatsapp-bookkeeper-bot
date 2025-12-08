@@ -61,7 +61,6 @@ export async function getIntent(text) {
     const t = text.toLowerCase().trim();
 
     // 1. FAST PATH (Priority Over AI)
-    // Checks for simple commands to save AI cost and time
     if (t.includes('add bank') || t.includes('add new bank') || t === 'add account') {
         return { intent: INTENTS.ADD_BANK_ACCOUNT, context: {} };
     }
@@ -91,22 +90,23 @@ export async function getIntent(text) {
     if (t.includes('expense report')) return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'EXPENSES' } };
     if (t.includes('p&l') || t.includes('profit') || t.includes('loss')) return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'PNL' } };
     if (t.includes('inventory report')) return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'INVENTORY' } };
-    if (t.includes('cogs') || t.includes('cost of sales')) return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'PNL' } };
+    
+    // [CRITICAL UPDATE] Separate COGS Report Intent
+    if (t.includes('cogs') || t.includes('cost of sales') || t.includes('cos report')) {
+        return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'COGS' } };
+    }
 
-    // [FIX] Expanded Fast Path for Edits
-    // Now catches "Edit my last transaction", "Delete sale", "Correct mistake", "Change amount"
+    // Fast path for "Edit/Delete" and "Add Product"
     const editKeywords = ['edit', 'delete', 'correct', 'change', 'remove', 'mistake', 'undo'];
     if (editKeywords.some(keyword => t.includes(keyword))) {
         return { intent: INTENTS.RECONCILE_TRANSACTION, context: {} };
     }
-
     if (t.includes('add product') || t.includes('restock')) return { intent: INTENTS.ADD_PRODUCT, context: {} };
 
     // 2. AI PATH
     try {
         const today = new Date().toISOString().split('T')[0];
         
-        // [FIX] Added RECONCILE_TRANSACTION to the System Prompt list
         const systemPrompt = `You are an intent classifier. Respond ONLY with JSON.
         TODAY: ${today}
 
@@ -115,7 +115,7 @@ export async function getIntent(text) {
         - ${INTENTS.LOG_EXPENSE}: "Bought fuel 500", "Paid shop rent"
         - ${INTENTS.ADD_PRODUCT}: "Restock rice", "New item indomie"
         - ${INTENTS.ADD_BANK_ACCOUNT}: "Add bank", "Add new bank", "New account".
-        - ${INTENTS.GENERATE_REPORT}: "Send me a PDF", "Sales report", "P&L", "Profit and Loss".
+        - ${INTENTS.GENERATE_REPORT}: "Send me a PDF", "Sales report", "P&L", "Profit and Loss", "Cost of Sales Report".
         - ${INTENTS.GET_FINANCIAL_INSIGHT}: "Get financial insight", "Give me a business tip", "Analyze my profit".
         - ${INTENTS.GET_FINANCIAL_SUMMARY}: "Total sales today", "How much did I spend?"
         - ${INTENTS.CHECK_BANK_BALANCE}: "Check my balance", "How much in Opay?"
@@ -128,7 +128,7 @@ export async function getIntent(text) {
         1. "Add Bank" or "Add New Bank" = ${INTENTS.ADD_BANK_ACCOUNT}. NEVER map this to ADD_PRODUCT.
         2. "Pay for Subscription" = ${INTENTS.UPGRADE_SUBSCRIPTION}.
         3. "Financial Insight" = ${INTENTS.GET_FINANCIAL_INSIGHT}.
-        4. "Generate Report" = ${INTENTS.GENERATE_REPORT}. Context MUST include "reportType" (SALES, EXPENSES, PNL, INVENTORY) if specified.
+        4. "Generate Report" = ${INTENTS.GENERATE_REPORT}. Context MUST include "reportType" (SALES, EXPENSES, PNL, INVENTORY, COGS) if specified.
         5. "Edit" or "Delete" or "Correction" = ${INTENTS.RECONCILE_TRANSACTION}.
         
         Return JSON format: {"intent": "...", "context": {...}}
@@ -217,7 +217,6 @@ export async function gatherSaleDetails(conversationHistory, existingProduct = n
             ? "The user confirmed this is a service." 
             : (existingProduct ? `Existing product: "${existingProduct.productName}", Price: ${existingProduct.sellingPrice}.` : 'New product/service.');
 
-        // [FIX] STRICT RULES ADDED
         const systemPrompt = `You are a bookkeeping assistant logging a sale. TODAY: ${today}.
         CONTEXT: ${productInfo}
         GOAL: Collect 'items' (array of {productName, quantity, pricePerUnit}), 'customerName', and 'saleType' (Cash/Credit/Bank).
@@ -248,7 +247,6 @@ export async function gatherSaleDetails(conversationHistory, existingProduct = n
 
 export async function gatherExpenseDetails(conversationHistory) {
     try {
-        // [FIX] STRICT RULES ADDED
         const systemPrompt = `You are a smart bookkeeping assistant. Goal: Log expense(s).
         INPUT: "Paid 5000 for fuel and 10000 for rent"
         
@@ -287,7 +285,6 @@ export async function gatherProductDetails(conversationHistory, existingProduct 
             ? `Existing product: Cost ${existingProduct.costPrice}, Sell ${existingProduct.sellingPrice}.`
             : 'New product.';
 
-        // [FIX] STRICT RULES ADDED
         const systemPrompt = `Inventory Manager. Add/Update product.
         FIELDS: productName, quantityAdded, costPrice, sellingPrice, reorderLevel.
         CONTEXT: ${existingDataInfo}
@@ -316,7 +313,6 @@ export async function gatherProductDetails(conversationHistory, existingProduct 
 
 export async function gatherPaymentDetails(conversationHistory, userCurrency) {
     try {
-        // [FIX] STRICT RULES ADDED
         const systemPrompt = `Log Customer Payment. Need: "customerName", "amount". Currency: ${userCurrency}.
         CRITICAL RULES:
         1. If 'customerName' is missing, ask "Who made the payment?".
@@ -337,7 +333,6 @@ export async function gatherPaymentDetails(conversationHistory, userCurrency) {
 
 export async function gatherBankAccountDetails(conversationHistory, userCurrency) {
     try {
-        // [FIX] STRICT RULES ADDED
         const systemPrompt = `Add Bank Account. Need: "bankName", "openingBalance". Currency: ${userCurrency}.
         CRITICAL RULES:
         1. If 'bankName' is missing, ask "What is the bank name?".

@@ -107,6 +107,7 @@ export async function getIntent(text) {
     try {
         const today = new Date().toISOString().split('T')[0];
         
+        // [CRITICAL FIX] Added specific instructions for Date Calculation (Rule #6)
         const systemPrompt = `You are an intent classifier. Respond ONLY with JSON.
         TODAY: ${today}
 
@@ -115,7 +116,7 @@ export async function getIntent(text) {
         - ${INTENTS.LOG_EXPENSE}: "Bought fuel 500", "Paid shop rent"
         - ${INTENTS.ADD_PRODUCT}: "Restock rice", "New item indomie"
         - ${INTENTS.ADD_BANK_ACCOUNT}: "Add bank", "Add new bank", "New account".
-        - ${INTENTS.GENERATE_REPORT}: "Send me a PDF", "Sales report", "P&L", "Profit and Loss", "Cost of Sales Report".
+        - ${INTENTS.GENERATE_REPORT}: "Send me a PDF", "Sales report", "P&L", "Profit and Loss", "Cost of Sales Report", "Report for last month".
         - ${INTENTS.GET_FINANCIAL_INSIGHT}: "Get financial insight", "Give me a business tip", "Analyze my profit".
         - ${INTENTS.GET_FINANCIAL_SUMMARY}: "Total sales today", "How much did I spend?"
         - ${INTENTS.CHECK_BANK_BALANCE}: "Check my balance", "How much in Opay?"
@@ -130,6 +131,10 @@ export async function getIntent(text) {
         3. "Financial Insight" = ${INTENTS.GET_FINANCIAL_INSIGHT}.
         4. "Generate Report" = ${INTENTS.GENERATE_REPORT}. Context MUST include "reportType" (SALES, EXPENSES, PNL, INVENTORY, COGS) if specified.
         5. "Edit" or "Delete" or "Correction" = ${INTENTS.RECONCILE_TRANSACTION}.
+        6. DATE CALCULATION: If the user mentions a time period (e.g., "last month", "upper last month", "Jan to March"), you MUST calculate the exact "startDate" and "endDate" (YYYY-MM-DD) relative to TODAY. 
+           - Example: If Today is 2024-05-15, "last month" -> startDate: "2024-04-01", endDate: "2024-04-30".
+           - Example: "Upper last month" means the month BEFORE last month.
+           - Do NOT return vague strings like "last_month" in the context. Always return specific dates.
         
         Return JSON format: {"intent": "...", "context": {...}}
         `;

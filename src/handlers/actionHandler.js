@@ -7,10 +7,12 @@ import { gatherSaleDetails, gatherExpenseDetails, gatherProductDetails, gatherPa
 import { parseExcelImport } from '../services/FileImportService.js';
 import * as TransactionManager from '../services/TransactionManager.js';
 import * as InventoryManager from '../services/InventoryManager.js';
-import { findProductByName, findProductFuzzy } from '../db/productService.js'; // [NEW]
+import { findProductByName, findProductFuzzy } from '../db/productService.js'; 
 import { executeTask } from './taskHandler.js';
 import logger from '../utils/logger.js';
 import { ObjectId } from 'mongodb';
+// [FIX] Import helper to handle number parsing
+import { parsePrice } from '../utils/helpers.js';
 
 // Helper to limit memory for AI context
 const limitMemory = (memory, maxDepth = 12) => {
@@ -75,7 +77,6 @@ export async function handleDocumentImport(user, document) {
 
 // --- SMART SALE PROCESSING ---
 
-// This function checks items one by one for ambiguity or missing inventory
 export async function processSaleItems(user, saleData, startIndex = 0) {
     const items = saleData.items;
 
@@ -168,7 +169,6 @@ export async function handleLoggingSale(user, text) {
         await updateUserState(user.whatsappId, USER_STATES.LOGGING_SALE, { ...user.stateContext, memory: limitMemory(aiResponse.memory) });
         await sendTextMessage(user.whatsappId, aiResponse.reply);
     } else {
-        // [FIX] Instead of logging immediately, start the checking process
         const finalData = { ...saleData, ...aiResponse.data };
         await processSaleItems(user, finalData);
     }
@@ -264,8 +264,28 @@ export async function handleLoggingCustomerPayment(user, text) {
     }
 }
 
+// [CRITICAL FIX] Ensure edited values are stored as Numbers, not Strings
 export async function handleEditValue(user, text) {
     const { transaction, fieldToEdit } = user.stateContext;
-    const changes = { [fieldToEdit]: text };
-    await executeTask(INTENTS.RECONCILE_TRANSACTION, user, { transactionId: transaction._id, action: 'edit', changes });
+    let newValue = text;
+
+    // List of fields that MUST be numbers for the database math to work
+    const numericFields = ['amount', 'quantity', 'costPrice', 'sellingPrice', 'unitsSold', 'amountPerUnit', 'pricePerUnit'];
+
+    if (numericFields.includes(fieldToEdit) || fieldToEdit.toLowerCase().includes('amount') || fieldToEdit.toLowerCase().includes('price')) {
+        const parsed = parsePrice(text);
+        if (isNaN(parsed)) {
+            await sendTextMessage(user.whatsappId, "⚠️ That doesn't look like a valid number. Please try again.");
+            return; // Don't save invalid data
+        }
+        newValue = parsed;
+    }
+
+    const changes = { [fieldToEdit]: newValue };
+    
+    await executeTask(INTENTS.RECONCILE_TRANSACTION, user, { 
+        transactionId: transaction._id, 
+        action: 'edit', 
+        changes 
+    });
 }

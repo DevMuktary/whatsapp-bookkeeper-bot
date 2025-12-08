@@ -1,23 +1,30 @@
 import { getDB } from './connection.js';
 import logger from '../utils/logger.js';
 import { ObjectId } from 'mongodb';
-import { escapeRegex } from '../utils/helpers.js'; // [FIX] Import Helper
+import { escapeRegex } from '../utils/helpers.js';
 
 const productsCollection = () => getDB().collection('products');
 const inventoryLogsCollection = () => getDB().collection('inventory_logs');
 
 export async function findProductByName(userId, productName, options = {}) {
     const validUserId = typeof userId === 'string' ? new ObjectId(userId) : userId;
-    // [FIX] Escape regex to prevent crash
     const safeName = escapeRegex(productName.trim());
     const query = { userId: validUserId, productName: { $regex: new RegExp(`^${safeName}$`, 'i') } };
     return await productsCollection().findOne(query, options);
 }
 
-// [NEW] Fuzzy Search for "Did you mean...?"
+export async function findProductById(productId, options = {}) {
+    try {
+        const validProdId = typeof productId === 'string' ? new ObjectId(productId) : productId;
+        return await productsCollection().findOne({ _id: validProdId }, options);
+    } catch (error) {
+        logger.error(`Error finding product by ID ${productId}:`, error);
+        throw new Error('Could not find product.');
+    }
+}
+
 export async function findProductFuzzy(userId, searchText) {
     const validUserId = typeof userId === 'string' ? new ObjectId(userId) : userId;
-    // [FIX] Escape regex here too
     const safeText = escapeRegex(searchText.trim());
     
     const query = { 
@@ -32,14 +39,11 @@ export async function upsertProduct(userId, productName, quantityAdded, newCostP
     const safeName = escapeRegex(productName.trim());
     const query = { userId: validUserId, productName: { $regex: new RegExp(`^${safeName}$`, 'i') } };
     
-    // [FIX] Division by Zero Protection in Aggregation
-    // Logic: If (CurrentQty + AddedQty) == 0, we cannot divide. Just use newCostPrice.
-    
     const update = [
         {
             $set: {
                 userId: validUserId,
-                productName: productName.trim(), // Ensure clean name stored
+                productName: productName.trim(),
                 sellingPrice: sellingPrice,
                 reorderLevel: reorderLevel,
                 updatedAt: new Date(),
@@ -49,9 +53,8 @@ export async function upsertProduct(userId, productName, quantityAdded, newCostP
                         then: newCostPrice,
                         else: {
                             $cond: {
-                                // Check if denominator will be zero (e.g. -5 + 5 = 0)
                                 if: { $eq: [{ $add: [{ $ifNull: ["$quantity", 0] }, quantityAdded] }, 0] },
-                                then: newCostPrice, // Fallback to avoid crash
+                                then: newCostPrice, 
                                 else: {
                                     $divide: [
                                         { $add: [ { $multiply: [{ $ifNull: ["$quantity", 0] }, { $ifNull: ["$costPrice", 0] }] }, { $multiply: [quantityAdded, newCostPrice] } ] },
@@ -106,13 +109,12 @@ export async function updateStock(productId, quantityChange, reason, linkedTrans
         throw new Error('Product not found for stock update.');
     }
 
-    // [FIX] Added costAtTime to ensure historical profit accuracy
     await inventoryLogsCollection().insertOne({
         userId: updatedProduct.userId,
         productId: validProdId,
         quantityChange,
         reason,
-        costAtTime: updatedProduct.costPrice || 0, // Critical for Blind Audit fix
+        costAtTime: updatedProduct.costPrice || 0,
         linkedTransactionId: typeof linkedTransactionId === 'string' ? new ObjectId(linkedTransactionId) : linkedTransactionId,
         createdAt: new Date()
     }, options);

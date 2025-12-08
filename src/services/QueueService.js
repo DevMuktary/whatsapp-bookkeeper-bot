@@ -13,7 +13,7 @@ import { findUserById } from '../db/userService.js';
 import { getAllProducts } from '../db/productService.js';
 import { getTransactionsByDateRange, getDueTransactions } from '../db/transactionService.js';
 import { findCustomerById } from '../db/customerService.js';
-import redis from '../db/redisClient.js'; // [FIX] Use Singleton
+import redis from '../db/redisClient.js'; 
 
 const connection = redis; 
 
@@ -31,6 +31,15 @@ const reportWorker = new Worker('report-generation', async (job) => {
         await generateAndSend(user, reportType, dateRange, whatsappId);
         logger.info(`Report Job ${job.id} completed.`);
     } catch (error) {
+        // [CRITICAL FIX] Handle Large Report Error Gracefully
+        if (error.message === 'REPORT_TOO_LARGE') {
+             logger.warn(`Report too large for ${whatsappId}. Redirecting to dashboard.`);
+             await sendTextMessage(whatsappId, 
+                 `⚠️ *Report Too Large*\n\nThis report contains over 3,000 transactions! Generating it here would be too slow.\n\n🚀 Please visit *dashboard.fynaxtech.com* to download it instantly.`
+             );
+             return; // Stop here, don't throw error to retry
+        }
+
         logger.error(`Report Job ${job.id} failed:`, error);
         await sendTextMessage(whatsappId, "Sorry, I encountered an error generating your report.");
         throw error; 
@@ -164,7 +173,7 @@ async function processDueDebts(user) {
             
             await sendTextMessage(user.whatsappId, 
                 `🔔 *Payment Due Today:*\n\n` +
-                `**${customer.customerName}** owes you **${currency} ${amount}** from a sale on ${new Date(tx.date).toLocaleDateString()}.\n\n` +
+                `*${customer.customerName}* owes you *${currency} ${amount}* from a sale on ${new Date(tx.date).toLocaleDateString()}.\n\n` +
                 `Their total outstanding balance is ${currency} ${customer.balanceOwed.toLocaleString()}.`
             );
         }

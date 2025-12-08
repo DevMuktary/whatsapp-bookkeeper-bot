@@ -1,20 +1,25 @@
 import { getDB } from './connection.js';
 import logger from '../utils/logger.js';
 import { ObjectId } from 'mongodb';
+import { escapeRegex } from '../utils/helpers.js'; // [FIX] Import Helper
 
 const banksCollection = () => getDB().collection('banks');
 
 export async function createBankAccount(userId, bankName, openingBalance) {
     try {
         const validUserId = typeof userId === 'string' ? new ObjectId(userId) : userId;
-        const existingBank = await banksCollection().findOne({ userId: validUserId, bankName: { $regex: new RegExp(`^${bankName}$`, 'i') } });
+        
+        // [FIX] Escape Regex
+        const safeName = escapeRegex(bankName.trim());
+        const existingBank = await banksCollection().findOne({ userId: validUserId, bankName: { $regex: new RegExp(`^${safeName}$`, 'i') } });
+        
         if (existingBank) {
             throw new Error(`A bank account named "${bankName}" already exists.`);
         }
 
         const newBank = {
             userId: validUserId,
-            bankName,
+            bankName: bankName.trim(),
             balance: openingBalance,
             createdAt: new Date(),
             updatedAt: new Date(),
@@ -43,7 +48,10 @@ export async function getAllBankAccounts(userId) {
 export async function findBankAccountByName(userId, bankName) {
     try {
         const validUserId = typeof userId === 'string' ? new ObjectId(userId) : userId;
-        const bank = await banksCollection().findOne({ userId: validUserId, bankName: { $regex: new RegExp(`^${bankName}$`, 'i') } });
+        
+        // [FIX] Escape Regex
+        const safeName = escapeRegex(bankName.trim());
+        const bank = await banksCollection().findOne({ userId: validUserId, bankName: { $regex: new RegExp(`^${safeName}$`, 'i') } });
         return bank;
     } catch (error) {
         logger.error(`Error finding bank account by name for user ${userId}:`, error);
@@ -51,7 +59,7 @@ export async function findBankAccountByName(userId, bankName) {
     }
 }
 
-export async function updateBankBalance(bankId, amountChange) {
+export async function updateBankBalance(bankId, amountChange, options = {}) {
     try {
         const validBankId = typeof bankId === 'string' ? new ObjectId(bankId) : bankId;
         const result = await banksCollection().findOneAndUpdate(
@@ -60,7 +68,7 @@ export async function updateBankBalance(bankId, amountChange) {
                 $inc: { balance: amountChange },
                 $set: { updatedAt: new Date() }
             },
-            { returnDocument: 'after' }
+            { returnDocument: 'after', ...options }
         );
         logger.info(`Balance updated for bank ${validBankId}. Change: ${amountChange}. New balance: ${result.balance}`);
         return result;

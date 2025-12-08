@@ -1,10 +1,9 @@
-import { findProductByName, updateStock } from '../db/productService.js';
+import { findProductByName, updateStock, findProductById } from '../db/productService.js'; // [FIX] Added findProductById
 import { getSummaryByDateRange, getRecentTransactions, findTransactionById, deleteTransactionById, updateTransactionById } from '../db/transactionService.js';
 import { getAllBankAccounts, findBankAccountByName, updateBankBalance } from '../db/bankService.js';
 import { getCustomersWithBalance, updateBalanceOwed, findCustomerById } from '../db/customerService.js';
 import { updateUserState } from '../db/userService.js';
 import { sendTextMessage, sendMainMenu, sendInteractiveList } from '../api/whatsappService.js';
-// [UPDATED IMPORT]
 import { getFinancialInsight } from '../ai/prompts.js';
 
 import { INTENTS, USER_STATES } from '../utils/constants.js';
@@ -12,6 +11,8 @@ import { getDateRange } from '../utils/dateUtils.js';
 import { getPnLData } from '../services/ReportManager.js';
 import logger from '../utils/logger.js';
 import { ObjectId } from 'mongodb';
+
+// ... [Existing executeTask function remains unchanged] ...
 
 export async function executeTask(intent, user, data) {
     try {
@@ -45,6 +46,8 @@ export async function executeTask(intent, user, data) {
         await sendTextMessage(user.whatsappId, `Error: ${error.message}`);
     } 
 }
+
+// ... [Existing helper functions like executeCheckStock remain unchanged] ...
 
 async function executeCheckStock(user, data) {
     const { productName } = data;
@@ -173,6 +176,17 @@ async function executeUpdateTransaction(user, data) {
     const originalTx = await findTransactionById(transactionId);
     if (!originalTx) return;
 
+    // [CRITICAL FIX] Multi-item Edit Block
+    // Editing 'quantity' blindly on index 0 for a multi-item sale corrupts data.
+    if (originalTx.type === 'SALE' && originalTx.items.length > 1) {
+        if (changes.unitsSold || changes.amountPerUnit) {
+            await sendTextMessage(user.whatsappId, "⛔ This sale has multiple items. To edit it, please Delete it and Log it again to ensure accuracy.");
+            await sendMainMenu(user.whatsappId);
+            return;
+        }
+    }
+
+    // 1. REVERSE EFFECTS OF ORIGINAL TRANSACTION
     if (originalTx.type === 'SALE') {
         if (originalTx.items) {
             for (const item of originalTx.items) {
@@ -184,14 +198,39 @@ async function executeUpdateTransaction(user, data) {
     }
 
     let updatedTxData = { ...originalTx, ...changes };
+
+    // 2. VALIDATE & APPLY CHANGES
     if (changes.unitsSold || changes.amountPerUnit) {
         const qty = parseFloat(changes.unitsSold || originalTx.items[0].quantity);
         const price = parseFloat(changes.amountPerUnit || originalTx.items[0].pricePerUnit);
+        
+        // [CRITICAL FIX] Stock Check for Quantity Increase
+        if (updatedTxData.type === 'SALE' && !updatedTxData.items[0].isService) {
+             const productId = updatedTxData.items[0].productId;
+             // We rolled back stock above, so we have the full original amount + current stock available.
+             // But we need to check if the NEW quantity is available.
+             
+             // Actually, since we rolled back, the product.quantity is now (Current + OriginalSold).
+             // We need to check if (Current + OriginalSold) >= NewQty.
+             const product = await getDB().collection('products').findOne({ _id: new ObjectId(productId) });
+             
+             if (product && product.quantity < qty) {
+                 // Re-Apply Rollback (Re-deduct the original amount we just added back) because we are aborting
+                 if (originalTx.items[0].productId && !originalTx.items[0].isService) {
+                      await updateStock(originalTx.items[0].productId, -originalTx.items[0].quantity, 'EDIT_ABORT_ROLLBACK');
+                 }
+                 
+                 await sendTextMessage(user.whatsappId, `⛔ **Insufficient Stock!**\n\nYou only have ${product.quantity} units available (including the ones from this sale).\nCannot increase quantity to ${qty}.`);
+                 return;
+             }
+        }
+
         updatedTxData.amount = qty * price;
         updatedTxData.items[0].quantity = qty;
         updatedTxData.items[0].pricePerUnit = price;
     }
 
+    // 3. SAVE AND RE-APPLY EFFECTS
     await updateTransactionById(transactionId, updatedTxData);
     
     if (updatedTxData.type === 'SALE') {

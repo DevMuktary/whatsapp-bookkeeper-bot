@@ -11,14 +11,25 @@ export async function logSale(user, saleData) {
     const { items, customerName, saleType, linkedBankId, loggedBy } = saleData;
     if (!items || items.length === 0) throw new Error("No items found in the sale data.");
 
-    // [CRASH FIX] Handle missing saleType safely. Default to CASH.
+    // Handle missing saleType safely. Default to CASH.
     const finalSaleType = saleType ? saleType : 'CASH';
 
-    // [FIX] Robust Credit Detection
-    // Check if "credit" appears anywhere in the string (e.g. "Credit Sale", "On Credit")
+    // Robust Credit Detection (Checks for "Credit" anywhere in the string)
     const isCredit = finalSaleType.toLowerCase().includes('credit');
 
-    // Start a MongoDB Session for Atomicity
+    // [FIX] Safely handle Linked Bank ID
+    // If it's already an ObjectId, don't try to create a new one (prevents crash)
+    let safeBankId = null;
+    if (linkedBankId) {
+        try {
+            safeBankId = (typeof linkedBankId === 'string') ? new ObjectId(linkedBankId) : linkedBankId;
+        } catch (e) {
+            logger.error(`Invalid Bank ID provided: ${linkedBankId}`);
+            // Fallback: Don't crash, just log without bank link
+            safeBankId = null;
+        }
+    }
+
     const client = getDB().client;
     const session = client.startSession();
 
@@ -26,7 +37,6 @@ export async function logSale(user, saleData) {
         let transactionResult;
 
         await session.withTransaction(async () => {
-            // Pass 'session' to all DB calls to ensure they are part of the transaction
             const customer = await findOrCreateCustomer(user._id, customerName, { session });
             let totalAmount = 0;
             let descriptionParts = [];
@@ -47,17 +57,15 @@ export async function logSale(user, saleData) {
                 let costPriceSnapshot = 0;
                 let productId = null;
 
-                // [INVENTORY FIX] Priority 1: Use the ID if the Smart Handler passed it
                 if (item.productId) {
-                    productId = new ObjectId(item.productId);
-                    
-                    // Fetch Cost Price (Read op can be outside transaction or inside, inside is safer for consistency)
-                    const product = await getDB().collection('products').findOne({ _id: productId }, { session });
-                    if (product) {
-                        costPriceSnapshot = product.costPrice || 0;
+                    try {
+                        productId = (typeof item.productId === 'string') ? new ObjectId(item.productId) : item.productId;
+                        const product = await getDB().collection('products').findOne({ _id: productId }, { session });
+                        if (product) costPriceSnapshot = product.costPrice || 0;
+                    } catch (e) {
+                        logger.warn(`Invalid Product ID ignored: ${item.productId}`);
                     }
                 } 
-                // Priority 2: Lookup by Name (Legacy/Fallback)
                 else if (!item.isService) {
                     const cleanName = item.productName.trim(); 
                     const product = await findProductByName(user._id, cleanName, { session });
@@ -89,8 +97,7 @@ export async function logSale(user, saleData) {
                 date: new Date(), 
                 description, 
                 linkedCustomerId: customer._id, 
-                linkedBankId: linkedBankId ? new ObjectId(linkedBankId) : null, 
-                // [FIX] Force 'CREDIT' if detected, otherwise use provided type
+                linkedBankId: safeBankId, 
                 paymentMethod: isCredit ? 'CREDIT' : finalSaleType.toUpperCase(), 
                 dueDate: saleData.dueDate ? new Date(saleData.dueDate) : null,
                 loggedBy: loggedBy || 'Owner' 
@@ -104,10 +111,7 @@ export async function logSale(user, saleData) {
                 if (item.productId && !item.isService) {
                      const updatedProduct = await updateStock(item.productId, -item.quantity, 'SALE', transaction._id, { session });
                      
-                     // Alert logic can happen after transaction commits (it's a side effect)
-                     // But we capture the data here.
                      if (updatedProduct.quantity <= (updatedProduct.reorderLevel || 5)) {
-                         // We'll send the alert AFTER the transaction block to avoid holding the lock
                          transactionResult.lowStockAlert = updatedProduct;
                      }
                 }
@@ -115,15 +119,13 @@ export async function logSale(user, saleData) {
            
             // --- STEP 4: Financial Updates ---
             if (isCredit) {
-                // [FIX] This now executes for any sale type containing "credit"
                 await updateBalanceOwed(customer._id, totalAmount, { session });
-            } else if (linkedBankId) {
-                // Only deduct from bank if it's NOT credit (i.e., we received money)
-                await updateBankBalance(new ObjectId(linkedBankId), totalAmount, { session });
+            } else if (safeBankId && !isNaN(totalAmount) && totalAmount > 0) {
+                // [FIX] Only attempt bank update if ID is valid and amount is valid
+                await updateBankBalance(safeBankId, totalAmount, { session });
             }
         });
 
-        // --- STEP 5: Post-Transaction Side Effects (Notifications) ---
         if (transactionResult?.lowStockAlert) {
             const p = transactionResult.lowStockAlert;
             await sendTextMessage(user.whatsappId, 
@@ -135,7 +137,7 @@ export async function logSale(user, saleData) {
 
     } catch (error) {
         logger.error('Transaction Failed (Rolled Back):', error);
-        throw error; // Re-throw to handler
+        throw error;
     } finally {
         await session.endSession();
     }
@@ -144,6 +146,14 @@ export async function logSale(user, saleData) {
 export async function logExpense(user, expenseData) {
     const { category, amount, description, linkedBankId, loggedBy } = expenseData;
     
+    // [FIX] Safe ID conversion for Expense as well
+    let safeBankId = null;
+    if (linkedBankId) {
+        try {
+            safeBankId = (typeof linkedBankId === 'string') ? new ObjectId(linkedBankId) : linkedBankId;
+        } catch(e) { safeBankId = null; }
+    }
+
     const client = getDB().client;
     const session = client.startSession();
 
@@ -157,12 +167,12 @@ export async function logExpense(user, expenseData) {
                 date: new Date(),
                 description,
                 category,
-                linkedBankId: linkedBankId ? new ObjectId(linkedBankId) : null,
+                linkedBankId: safeBankId,
                 loggedBy: loggedBy || 'Owner'
             }, { session });
 
-            if (linkedBankId) {
-                await updateBankBalance(new ObjectId(linkedBankId), -parseFloat(amount), { session });
+            if (safeBankId) {
+                await updateBankBalance(safeBankId, -parseFloat(amount), { session });
             }
             
             transactionResult = transaction;
@@ -180,6 +190,13 @@ export async function logExpense(user, expenseData) {
 export async function logCustomerPayment(user, paymentData) {
     const { customerName, amount, linkedBankId, loggedBy } = paymentData;
     const paymentAmount = parseFloat(amount);
+    
+    let safeBankId = null;
+    if (linkedBankId) {
+        try {
+            safeBankId = (typeof linkedBankId === 'string') ? new ObjectId(linkedBankId) : linkedBankId;
+        } catch(e) { safeBankId = null; }
+    }
 
     const client = getDB().client;
     const session = client.startSession();
@@ -196,14 +213,14 @@ export async function logCustomerPayment(user, paymentData) {
                 amount: paymentAmount,
                 date: new Date(),
                 description: `Payment received from ${customer.customerName}`,
-                linkedBankId: linkedBankId ? new ObjectId(linkedBankId) : null,
+                linkedBankId: safeBankId,
                 loggedBy: loggedBy || 'Owner'
             }, { session });
 
             const updatedCustomer = await updateBalanceOwed(customer._id, -paymentAmount, { session });
             
-            if (linkedBankId) {
-                await updateBankBalance(new ObjectId(linkedBankId), paymentAmount, { session });
+            if (safeBankId) {
+                await updateBankBalance(safeBankId, paymentAmount, { session });
             }
 
             resultData = { transaction, updatedCustomer };

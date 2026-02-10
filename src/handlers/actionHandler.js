@@ -11,10 +11,8 @@ import { findProductByName, findProductFuzzy } from '../db/productService.js';
 import { executeTask } from './taskHandler.js';
 import logger from '../utils/logger.js';
 import { ObjectId } from 'mongodb';
-// [FIX] Import helper to handle number parsing
 import { parsePrice } from '../utils/helpers.js';
 
-// Helper to limit memory for AI context
 const limitMemory = (memory, maxDepth = 12) => {
     if (memory.length > maxDepth) return memory.slice(-maxDepth);
     return memory;
@@ -46,9 +44,7 @@ export async function handleManageBanks(user) {
         await sendTextMessage(user.whatsappId, "⛔ Access Denied. Only the Business Owner can manage bank accounts.");
         return;
     }
-    
     await updateUserState(user.whatsappId, USER_STATES.AWAITING_BANK_MENU_SELECTION);
-    
     await sendInteractiveButtons(user.whatsappId, "Manage Bank Accounts 🏦\nWhat would you like to do?", [
         { id: 'bank_action:add', title: 'Add New Bank ➕' },
         { id: 'bank_action:check', title: 'Check Balance 💰' }
@@ -82,32 +78,26 @@ export async function processSaleItems(user, saleData, startIndex = 0) {
 
     for (let i = startIndex; i < items.length; i++) {
         const item = items[i];
-
-        // 1. Skip if already marked as service or resolved
         if (item.isService || item.productId) continue;
 
-        // 2. Exact Match Check
         const exactProduct = await findProductByName(user._id, item.productName);
         if (exactProduct) {
             item.productId = exactProduct._id;
-            item.productName = exactProduct.productName; // Normalize name casing
-            continue; // Move to next item
+            item.productName = exactProduct.productName; 
+            continue; 
         }
 
-        // 3. Fuzzy Match Check ("Did you mean X?")
         const fuzzyMatches = await findProductFuzzy(user._id, item.productName);
         if (fuzzyMatches.length > 0) {
-            // STOP! Ask User.
             await updateUserState(user.whatsappId, USER_STATES.AWAITING_PRODUCT_CONFIRMATION, {
                 saleData,
                 currentItemIndex: i,
                 potentialMatches: fuzzyMatches
             });
 
-            // Create buttons for top 3 matches
             const buttons = fuzzyMatches.slice(0, 3).map(p => ({
                 id: `confirm_prod:${p._id}`,
-                title: p.productName.substring(0, 20) // Button title limit
+                title: p.productName.substring(0, 20) 
             }));
             buttons.push({ id: 'confirm_prod:none', title: 'None of these' });
 
@@ -115,10 +105,9 @@ export async function processSaleItems(user, saleData, startIndex = 0) {
                 `🤔 I couldn't find exactly "${item.productName}". Did you mean one of these?`, 
                 buttons
             );
-            return; // Exit loop, wait for user
+            return; 
         }
 
-        // 4. No Match - Ask "Product or Service?"
         await updateUserState(user.whatsappId, USER_STATES.AWAITING_ITEM_TYPE_CONFIRMATION, {
             saleData,
             currentItemIndex: i
@@ -131,16 +120,26 @@ export async function processSaleItems(user, saleData, startIndex = 0) {
                 { id: 'type_choice:product', title: 'It is a Product 📦' }
             ]
         );
-        return; // Exit loop, wait for user
+        return; 
     }
 
     // --- ALL ITEMS CHECKED & RESOLVED ---
     
-    // Check if staff, add name
+    // [FIX] CHECK FOR CUSTOMER NAME BEFORE PROCEEDING
+    // If the AI missed the name, ask the user explicitly.
+    if (!saleData.customerName) {
+        await updateUserState(user.whatsappId, 'AWAITING_CUSTOMER_NAME', { saleData });
+        await sendTextMessage(user.whatsappId, "Who is this sale for? 👤\n\nType the **Customer Name** (or type 'Walk-in').");
+        return;
+    }
+
     if (user.isStaff) saleData.loggedBy = user.staffName;
 
     const banks = await getAllBankAccounts(user._id);
-    if (banks.length > 0 && !saleData.linkedBankId && saleData.saleType !== 'credit') {
+    // [FIX] Added saleData.saleType check to skip bank for credit sales early
+    const isCredit = saleData.saleType && saleData.saleType.toLowerCase().includes('credit');
+    
+    if (banks.length > 0 && !saleData.linkedBankId && !isCredit) {
          await askForBankSelection(user, saleData, USER_STATES.AWAITING_BANK_SELECTION_SALE, 'Received payment into which account?');
          return;
     }
@@ -156,7 +155,17 @@ export async function processSaleItems(user, saleData, startIndex = 0) {
     }
 }
 
-// --- TRANSACTION HANDLERS ---
+// [FIX] NEW HANDLER FOR CUSTOMER NAME INPUT
+export async function handleCustomerNameInput(user, text) {
+    const { saleData } = user.stateContext;
+    
+    // Update name
+    saleData.customerName = text.trim();
+    
+    // Resume processing
+    await sendTextMessage(user.whatsappId, `Got it, selling to "${saleData.customerName}"...`);
+    await processSaleItems(user, saleData);
+}
 
 export async function handleLoggingSale(user, text) {
     let { memory, existingProduct, saleData } = user.stateContext;
@@ -264,19 +273,17 @@ export async function handleLoggingCustomerPayment(user, text) {
     }
 }
 
-// [CRITICAL FIX] Ensure edited values are stored as Numbers, not Strings
 export async function handleEditValue(user, text) {
     const { transaction, fieldToEdit } = user.stateContext;
     let newValue = text;
 
-    // List of fields that MUST be numbers for the database math to work
     const numericFields = ['amount', 'quantity', 'costPrice', 'sellingPrice', 'unitsSold', 'amountPerUnit', 'pricePerUnit'];
 
     if (numericFields.includes(fieldToEdit) || fieldToEdit.toLowerCase().includes('amount') || fieldToEdit.toLowerCase().includes('price')) {
         const parsed = parsePrice(text);
         if (isNaN(parsed)) {
             await sendTextMessage(user.whatsappId, "⚠️ That doesn't look like a valid number. Please try again.");
-            return; // Don't save invalid data
+            return; 
         }
         newValue = parsed;
     }

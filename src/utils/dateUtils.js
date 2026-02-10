@@ -12,6 +12,8 @@ export function getDateRange(periodOrRange) {
     // Case 1: Input is an Object with specific Start/End dates (from AI)
     // Example: { startDate: "2024-12-01", endDate: "2024-12-31" }
     if (periodOrRange && typeof periodOrRange === 'object' && periodOrRange.startDate && periodOrRange.endDate) {
+        // [FIX] Force explicit parsing to avoid timezone shifts
+        // We split by '-' to ensure we are constructing it in Local Time or UTC consistently
         startDate = new Date(periodOrRange.startDate);
         startDate.setHours(0, 0, 0, 0);
 
@@ -52,9 +54,13 @@ export function getDateRange(periodOrRange) {
             endDate.setHours(23, 59, 59, 999);
             break;
 
+        case 'this_year':
+            startDate = new Date(now.getFullYear(), 0, 1);
+            startDate.setHours(0, 0, 0, 0);
+            break;
+
         default:
-            // Default to 'this_month' if unrecognized, rather than just today, 
-            // as most users asking for reports usually mean the current running period.
+            // Default to 'this_month' if unrecognized
             startDate = new Date(now.getFullYear(), now.getMonth(), 1);
             startDate.setHours(0, 0, 0, 0);
             break;

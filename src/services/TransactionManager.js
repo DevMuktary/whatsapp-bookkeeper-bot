@@ -14,6 +14,10 @@ export async function logSale(user, saleData) {
     // [CRASH FIX] Handle missing saleType safely. Default to CASH.
     const finalSaleType = saleType ? saleType : 'CASH';
 
+    // [FIX] Robust Credit Detection
+    // Check if "credit" appears anywhere in the string (e.g. "Credit Sale", "On Credit")
+    const isCredit = finalSaleType.toLowerCase().includes('credit');
+
     // Start a MongoDB Session for Atomicity
     const client = getDB().client;
     const session = client.startSession();
@@ -86,7 +90,8 @@ export async function logSale(user, saleData) {
                 description, 
                 linkedCustomerId: customer._id, 
                 linkedBankId: linkedBankId ? new ObjectId(linkedBankId) : null, 
-                paymentMethod: finalSaleType.toUpperCase(), 
+                // [FIX] Force 'CREDIT' if detected, otherwise use provided type
+                paymentMethod: isCredit ? 'CREDIT' : finalSaleType.toUpperCase(), 
                 dueDate: saleData.dueDate ? new Date(saleData.dueDate) : null,
                 loggedBy: loggedBy || 'Owner' 
             };
@@ -109,9 +114,11 @@ export async function logSale(user, saleData) {
             }
            
             // --- STEP 4: Financial Updates ---
-            if (finalSaleType.toLowerCase() === 'credit') {
+            if (isCredit) {
+                // [FIX] This now executes for any sale type containing "credit"
                 await updateBalanceOwed(customer._id, totalAmount, { session });
             } else if (linkedBankId) {
+                // Only deduct from bank if it's NOT credit (i.e., we received money)
                 await updateBankBalance(new ObjectId(linkedBankId), totalAmount, { session });
             }
         });

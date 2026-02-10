@@ -2,7 +2,7 @@ import { findOrCreateUser, updateUserState, createJoinCode, findOwnerByJoinCode,
 import { findProductByName } from '../db/productService.js';
 import { getAllBankAccounts } from '../db/bankService.js';
 import { getIntent, parseBulkProductList } from '../ai/prompts.js';
-import { transcribeAudio, analyzeImage } from '../ai/media.js'; //
+import { transcribeAudio, analyzeImage } from '../ai/media.js'; 
 import config from '../config/index.js'; 
 
 import { 
@@ -20,19 +20,26 @@ import { handleFlowResponse, handleOtpVerification } from './flowHandler.js';
 import { 
     handleLoggingSale, handleLoggingExpense, handleAddingProduct, handleLoggingCustomerPayment, 
     handleEditValue, handleDocumentImport, handleManageBanks 
-} from './actionHandler.js'; //
+} from './actionHandler.js'; 
 import { handleAdminCommand, handleBroadcast } from './adminHandler.js'; 
 
 const CANCEL_KEYWORDS = ['cancel', 'stop', 'exit', 'abort', 'quit'];
 
+// [FIX] Priority logic flipped: Check for explicit dates FIRST.
+// Previously, if AI returned { dateRange: 'custom', startDate: '...' }, it prioritized 'custom' which defaulted to this_month.
 const extractDateRange = (context, defaultPeriod = 'this_month') => {
-    let dateInput = defaultPeriod;
-    if (context.dateRange) {
-        dateInput = context.dateRange;
-    } else if (context.startDate && context.endDate) {
-        dateInput = { startDate: context.startDate, endDate: context.endDate };
+    // 1. Priority: Specific Start/End dates (e.g., from "May 2025")
+    if (context.startDate && context.endDate) {
+        return getDateRange({ startDate: context.startDate, endDate: context.endDate });
     }
-    return getDateRange(dateInput);
+    
+    // 2. Fallback: Named range (e.g., "today", "last_month")
+    if (context.dateRange) {
+        return getDateRange(context.dateRange);
+    }
+    
+    // 3. Default
+    return getDateRange(defaultPeriod);
 };
 
 // Helper: If user is Staff, switch context to Owner's account
@@ -68,12 +75,12 @@ export async function handleMessage(message) {
     }
     // B. Handle Audio (Voice Notes)
     else if (message.type === 'audio') {
-        userInputText = await transcribeAudio(message.audio.id) || ""; //
+        userInputText = await transcribeAudio(message.audio.id) || ""; 
     }
     // C. Handle Images (Receipts/Invoices)
     else if (message.type === 'image') {
         // AI analyzes image and returns text description (e.g. "Receipt for 5k fuel")
-        userInputText = await analyzeImage(message.image.id, message.image.caption) || ""; //
+        userInputText = await analyzeImage(message.image.id, message.image.caption) || ""; 
     }
     // D. Handle Documents (CSV, Excel) - "CSV and Co"
     else if (message.type === 'document') {
@@ -93,7 +100,7 @@ export async function handleMessage(message) {
         
         if (isSpreadsheet) {
             // Route to ActionHandler for Bulk Import
-            await handleDocumentImport(user, message.document); //
+            await handleDocumentImport(user, message.document); 
             return;
         } else {
             await sendTextMessage(whatsappId, "I can only read Excel (.xlsx) or CSV files for inventory imports. 📁");
@@ -373,6 +380,7 @@ async function handleIdleState(user, text) {
     } else if (intent === INTENTS.GENERATE_REPORT) {
         if (context.reportType) {
             await sendTextMessage(user.whatsappId, "I've added your report to the generation queue. You'll receive it shortly! ⏳");
+            // [FIX] Now calls our corrected extractDateRange which prioritizes context.startDate/endDate
             const { startDate, endDate } = extractDateRange(context, 'this_month');
             await queueReportGeneration(
                 user._id, 

@@ -6,7 +6,7 @@ import { uploadMedia, sendDocument, sendTextMessage, sendInteractiveButtons, sen
 import { USER_STATES, INTENTS } from '../utils/constants.js';
 import logger from '../utils/logger.js';
 import { handleMessage } from './messageHandler.js';
-import { askForBankSelection, processSaleItems, handleLoggingSale, handleLoggingExpense, handleAddingProduct } from './actionHandler.js'; // [FIX] Added imports
+import { askForBankSelection, processSaleItems, handleLoggingSale, handleLoggingExpense, handleAddingProduct } from './actionHandler.js'; 
 import { getAllBankAccounts } from '../db/bankService.js'; 
 import { createDedicatedAccount, initializePayment } from '../services/paymentService.js'; 
 import { ObjectId } from 'mongodb';
@@ -14,6 +14,10 @@ import { ObjectId } from 'mongodb';
 import * as TransactionManager from '../services/TransactionManager.js';
 import * as InventoryManager from '../services/InventoryManager.js';
 import { executeTask } from './taskHandler.js'; 
+
+// [FIX] Imports needed for direct report generation
+import { getDateRange } from '../utils/dateUtils.js';
+import { queueReportGeneration } from '../services/QueueService.js';
 
 export async function handleInteractiveMessage(message) {
     const whatsappId = message.from;
@@ -36,14 +40,7 @@ export async function handleInteractiveMessage(message) {
     }
 }
 
-// ... [handleButtonReply remains mostly the same, skipping to save space unless you need changes there] ...
-// (I will include the full handleButtonReply if you haven't modified it, but the critical fix is in handleListReply below)
-
 async function handleButtonReply(user, buttonId, originalMessage) {
-    // ... [Same code as before for button replies] ...
-    // To ensure I don't break your existing button logic, I'm keeping the previous logic.
-    // The issue was specifically MENU items which are usually Lists.
-    
     if (buttonId.startsWith('payment_method:')) {
         const type = buttonId.split(':')[1];
         if (type === 'ngn') {
@@ -189,7 +186,6 @@ async function handleButtonReply(user, buttonId, originalMessage) {
     }
 }
 
-// [CRITICAL FIX] Handle List IDs explicitly to prevent AI confusion
 async function handleListReply(user, listId, originalMessage) {
     
     // --- MAIN MENU ROUTING ---
@@ -224,7 +220,6 @@ async function handleListReply(user, listId, originalMessage) {
             return;
 
         case 'manage bank accounts':
-            // Logic handled in actionHandler, but we can trigger it directly
             await sendInteractiveButtons(user.whatsappId, "Manage Bank Accounts 🏦\nWhat would you like to do?", [
                 { id: 'bank_action:add', title: 'Add New Bank ➕' },
                 { id: 'bank_action:check', title: 'Check Balance 💰' }
@@ -233,8 +228,7 @@ async function handleListReply(user, listId, originalMessage) {
             return;
 
         case 'check subscription':
-            await executeTask(INTENTS.CHECK_SUBSCRIPTION, user, {}); // Assuming taskHandler handles this, if not, logic is in handleIdle
-            // If check subscription logic is in handleIdleState, we route via handleMessage logic
+            await executeTask(INTENTS.CHECK_SUBSCRIPTION, user, {}); 
              await handleMessage({
                 from: originalMessage.from,
                 id: originalMessage.id,
@@ -280,21 +274,43 @@ async function handleListReply(user, listId, originalMessage) {
         return;
     } 
     
-    // --- REPORT SELECTION ---
+    // --- [FIX] REPORT SELECTION ---
     if (user.state === USER_STATES.AWAITING_REPORT_TYPE_SELECTION) {
-        // IDs: 'generate sales report', 'generate expense report', etc.
-        // We can pass this text to handleMessage to let the Intent Router pick it up 
-        // OR handle it explicitly here for speed.
+        let reportType = 'SALES';
+        if (listId === 'generate expense report') reportType = 'EXPENSES';
+        if (listId === 'generate p&l report') reportType = 'PNL';
+        if (listId === 'generate cogs report') reportType = 'COGS';
+        if (listId === 'generate inventory report') reportType = 'INVENTORY';
+
+        // Retrieve the dates we saved when the user first asked
+        const extractedDates = user.stateContext?.extractedDates || {};
         
-        // Reset state so handleMessage processes it cleanly
+        let startDate, endDate;
+        if (extractedDates.startDate && extractedDates.endDate) {
+            const range = getDateRange({ startDate: extractedDates.startDate, endDate: extractedDates.endDate });
+            startDate = range.startDate;
+            endDate = range.endDate;
+        } else if (extractedDates.dateRange) {
+            const range = getDateRange(extractedDates.dateRange);
+            startDate = range.startDate;
+            endDate = range.endDate;
+        } else {
+            const range = getDateRange('this_month');
+            startDate = range.startDate;
+            endDate = range.endDate;
+        }
+
         await updateUserState(user.whatsappId, USER_STATES.IDLE);
+        await sendTextMessage(user.whatsappId, "I've added your report to the generation queue. You'll receive it shortly! ⏳");
         
-        await handleMessage({
-            from: originalMessage.from,
-            id: originalMessage.id,
-            text: { body: listId },
-            type: 'text'
-        });
+        await queueReportGeneration(
+            user._id, 
+            user.currency, 
+            reportType, 
+            { startDate, endDate }, 
+            user.whatsappId
+        );
+        await sendMainMenu(user.whatsappId);
         return;
     }
 
@@ -307,7 +323,6 @@ async function handleListReply(user, listId, originalMessage) {
     });
 }
 
-// ... [Rest of the file: handleBankSelection, handleBulkProductConfirmation, etc. unchanged] ...
 async function handleBankSelection(user, buttonId, intent) {
     const [action, bankIdStr] = buttonId.split(':');
     if (action !== 'select_bank') return;

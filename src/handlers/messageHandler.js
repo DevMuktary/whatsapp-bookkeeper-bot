@@ -391,7 +391,8 @@ async function handleIdleState(user, text) {
             );
             await sendMainMenu(user.whatsappId);
         } else {
-            await updateUserState(user.whatsappId, USER_STATES.AWAITING_REPORT_TYPE_SELECTION);
+            // [FIX] Save the extracted dates in the state context so they aren't lost!
+            await updateUserState(user.whatsappId, USER_STATES.AWAITING_REPORT_TYPE_SELECTION, { extractedDates: context });
             await sendReportMenu(user.whatsappId);
         }
 

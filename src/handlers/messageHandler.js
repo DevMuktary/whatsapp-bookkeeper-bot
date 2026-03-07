@@ -19,30 +19,22 @@ import logger from '../utils/logger.js';
 import { handleFlowResponse, handleOtpVerification } from './flowHandler.js';
 import { 
     handleLoggingSale, handleLoggingExpense, handleAddingProduct, handleLoggingCustomerPayment, 
-    handleEditValue, handleDocumentImport, handleManageBanks 
+    handleEditValue, handleDocumentImport, handleManageBanks, handleCustomerNameInput
 } from './actionHandler.js'; 
 import { handleAdminCommand, handleBroadcast } from './adminHandler.js'; 
 
 const CANCEL_KEYWORDS = ['cancel', 'stop', 'exit', 'abort', 'quit'];
 
-// [FIX] Priority logic flipped: Check for explicit dates FIRST.
-// Previously, if AI returned { dateRange: 'custom', startDate: '...' }, it prioritized 'custom' which defaulted to this_month.
 const extractDateRange = (context, defaultPeriod = 'this_month') => {
-    // 1. Priority: Specific Start/End dates (e.g., from "May 2025")
     if (context.startDate && context.endDate) {
         return getDateRange({ startDate: context.startDate, endDate: context.endDate });
     }
-    
-    // 2. Fallback: Named range (e.g., "today", "last_month")
     if (context.dateRange) {
         return getDateRange(context.dateRange);
     }
-    
-    // 3. Default
     return getDateRange(defaultPeriod);
 };
 
-// Helper: If user is Staff, switch context to Owner's account
 async function getEffectiveUser(user) {
     if (user.role === 'STAFF' && user.linkedAccountId) {
         return {
@@ -67,30 +59,19 @@ export async function handleMessage(message) {
     
     let userInputText = "";
 
-    // --- [1] MEDIA HANDLING (Images, Audio, Documents) ---
-
-    // A. Handle Text
     if (message.type === 'text') {
         userInputText = message.text.body;
-    }
-    // B. Handle Audio (Voice Notes)
-    else if (message.type === 'audio') {
+    } else if (message.type === 'audio') {
         userInputText = await transcribeAudio(message.audio.id) || ""; 
-    }
-    // C. Handle Images (Receipts/Invoices)
-    else if (message.type === 'image') {
-        // AI analyzes image and returns text description (e.g. "Receipt for 5k fuel")
+    } else if (message.type === 'image') {
         userInputText = await analyzeImage(message.image.id, message.image.caption) || ""; 
-    }
-    // D. Handle Documents (CSV, Excel) - "CSV and Co"
-    else if (message.type === 'document') {
+    } else if (message.type === 'document') {
         const rawUser = await findOrCreateUser(whatsappId);
         const user = await getEffectiveUser(rawUser); 
         
         const mime = (message.document.mime_type || '').toLowerCase();
         const filename = (message.document.filename || '').toLowerCase();
 
-        // Robust Check: Look at both MIME type AND File Extension
         const isSpreadsheet = mime.includes('spreadsheet') || 
                               mime.includes('excel') || 
                               mime.includes('csv') ||
@@ -99,20 +80,16 @@ export async function handleMessage(message) {
                               filename.endsWith('.xls');
         
         if (isSpreadsheet) {
-            // Route to ActionHandler for Bulk Import
             await handleDocumentImport(user, message.document); 
             return;
         } else {
             await sendTextMessage(whatsappId, "I can only read Excel (.xlsx) or CSV files for inventory imports. 📁");
             return;
         }
-    }
-    else {
-        // Unsupported message type
+    } else {
         return; 
     }
 
-    // If AI (or user) didn't provide text, stop here.
     if (!userInputText) {
         await sendTextMessage(whatsappId, "I couldn't understand that content. Please try again.");
         return;
@@ -122,9 +99,6 @@ export async function handleMessage(message) {
     const user = await getEffectiveUser(rawUser);
     const lowerCaseText = userInputText.trim().toLowerCase();
 
-    // --- [2] ADMIN & SYSTEM COMMANDS ---
-
-    // 0. ADMIN COMMANDS CHECK
     if (config.adminPhones && config.adminPhones.includes(whatsappId)) {
         if (lowerCaseText === '!stats') {
             await handleAdminCommand(user, '!admin stats');
@@ -140,7 +114,6 @@ export async function handleMessage(message) {
         }
     }
 
-    // 1. JOIN TEAM COMMAND
     if (lowerCaseText.startsWith('join ')) {
         const parts = lowerCaseText.split(' ');
         if (parts.length > 1 && parts[1]) {
@@ -159,7 +132,6 @@ export async function handleMessage(message) {
         return;
     }
 
-    // 2. ONBOARDING
     if (user.state === USER_STATES.NEW_USER && user.role !== 'STAFF') {
         if (CANCEL_KEYWORDS.includes(lowerCaseText)) {
              await sendTextMessage(whatsappId, "Okay, message me whenever you are ready to start!");
@@ -174,7 +146,6 @@ export async function handleMessage(message) {
         return;
     }
 
-    // 3. CANCELLATION
     if (CANCEL_KEYWORDS.includes(lowerCaseText)) {
         if (user.state !== USER_STATES.IDLE) {
             await updateUserState(whatsappId, USER_STATES.IDLE, {});
@@ -184,7 +155,6 @@ export async function handleMessage(message) {
         }
     }
 
-    // --- [3] STATE ROUTING ---
     switch (user.state) {
       case USER_STATES.IDLE: 
           await handleIdleState(user, userInputText); 
@@ -203,6 +173,9 @@ export async function handleMessage(message) {
           break;
       case USER_STATES.AWAITING_EDIT_VALUE:
           await handleEditValue(user, userInputText);
+          break;
+      case 'AWAITING_CUSTOMER_NAME': 
+          await handleCustomerNameInput(user, userInputText);
           break;
       case USER_STATES.AWAITING_BANK_MENU_SELECTION:
           if (lowerCaseText.includes('add')) {
@@ -224,10 +197,8 @@ export async function handleMessage(message) {
           break;
 
       default:
-        // Handle unexpected text input during interactive states
         if (user.state.startsWith('AWAITING_')) {
             if (userInputText.length > 2) { 
-                // Treat as a new command if user types something substantive
                 await updateUserState(whatsappId, USER_STATES.IDLE);
                 await handleIdleState(user, userInputText);
             } else {
@@ -248,7 +219,6 @@ export async function handleMessage(message) {
 async function handleIdleState(user, text) {
     const { intent, context } = await getIntent(text);
 
-    // GATEKEEPER CHECK (Subscriptions)
     const PAID_INTENTS = [
         INTENTS.LOG_SALE, 
         INTENTS.LOG_EXPENSE, 
@@ -279,7 +249,6 @@ async function handleIdleState(user, text) {
         }
     }
 
-    // --- Intent Handling ---
     if (intent === INTENTS.CHECK_SUBSCRIPTION) {
         const access = checkSubscriptionAccess(user);
         let msg = `📅 *Subscription Status*\n\nPlan: ${access.type}`;
@@ -339,7 +308,6 @@ async function handleIdleState(user, text) {
         return;
     }
 
-    // State Transitions
     if (intent === INTENTS.LOG_SALE) {
         const initialMemory = [{ role: 'user', content: text }];
         const existingProduct = context.productName ? await findProductByName(user._id, context.productName) : null;
@@ -380,7 +348,6 @@ async function handleIdleState(user, text) {
     } else if (intent === INTENTS.GENERATE_REPORT) {
         if (context.reportType) {
             await sendTextMessage(user.whatsappId, "I've added your report to the generation queue. You'll receive it shortly! ⏳");
-            // [FIX] Now calls our corrected extractDateRange which prioritizes context.startDate/endDate
             const { startDate, endDate } = extractDateRange(context, 'this_month');
             await queueReportGeneration(
                 user._id, 
@@ -391,7 +358,6 @@ async function handleIdleState(user, text) {
             );
             await sendMainMenu(user.whatsappId);
         } else {
-            // [FIX] Save the extracted dates in the state context so they aren't lost!
             await updateUserState(user.whatsappId, USER_STATES.AWAITING_REPORT_TYPE_SELECTION, { extractedDates: context });
             await sendReportMenu(user.whatsappId);
         }

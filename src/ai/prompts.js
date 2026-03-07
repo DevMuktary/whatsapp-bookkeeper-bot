@@ -84,15 +84,12 @@ export async function getIntent(text) {
         return { intent: INTENTS.CHECK_SUBSCRIPTION, context: {} };
     }
 
-    // Explicit Report Routing
-    if (t.includes('sales report')) return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'SALES' } };
-    if (t.includes('expense report')) return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'EXPENSES' } };
-    if (t.includes('p&l') || t.includes('profit') || t.includes('loss')) return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'PNL' } };
-    if (t.includes('inventory report')) return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'INVENTORY' } };
-    
-    if (t.includes('cogs') || t.includes('cost of sales') || t.includes('cos report')) {
-        return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'COGS' } };
-    }
+    // [FIXED] Exact Report Menu Clicks (Fast Path) - We removed .includes() to let the AI handle natural language with dates
+    if (t === 'generate sales report') return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'SALES' } };
+    if (t === 'generate expense report') return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'EXPENSES' } };
+    if (t === 'generate p&l report') return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'PNL' } };
+    if (t === 'generate cogs report') return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'COGS' } };
+    if (t === 'generate inventory report') return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'INVENTORY' } };
 
     const editKeywords = ['edit', 'delete', 'correct', 'change', 'remove', 'mistake', 'undo'];
     if (editKeywords.some(keyword => t.includes(keyword))) {

@@ -84,7 +84,14 @@ export async function createDedicatedAccount(user) {
 
             if (msg.includes('Customer not found') || codeError === 'customer_not_found') {
                 logger.warn(`Stale Customer Code for ${user.whatsappId}. Regenerating...`);
+                
+                // 1. Get the new customer code
                 const newCode = await createPaystackCustomer(user);
+                
+                // 2. [FIX] Explicitly update the customer profile to ensure first/last name are set
+                await updatePaystackCustomer(newCode, user);
+                
+                // 3. Retry creating the dedicated account
                 const retryData = await createAccountReq(newCode);
                 await updateUser(user.whatsappId, { dedicatedAccount: retryData });
                 return retryData;

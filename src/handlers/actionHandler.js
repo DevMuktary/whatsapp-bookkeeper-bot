@@ -123,10 +123,6 @@ export async function processSaleItems(user, saleData, startIndex = 0) {
         return; 
     }
 
-    // --- ALL ITEMS CHECKED & RESOLVED ---
-    
-    // [FIX] CHECK FOR CUSTOMER NAME BEFORE PROCEEDING
-    // If the AI missed the name, ask the user explicitly.
     if (!saleData.customerName) {
         await updateUserState(user.whatsappId, 'AWAITING_CUSTOMER_NAME', { saleData });
         await sendTextMessage(user.whatsappId, "Who is this sale for? 👤\n\nType the **Customer Name** (or type 'Walk-in').");
@@ -136,8 +132,10 @@ export async function processSaleItems(user, saleData, startIndex = 0) {
     if (user.isStaff) saleData.loggedBy = user.staffName;
 
     const banks = await getAllBankAccounts(user._id);
-    // [FIX] Added saleData.saleType check to skip bank for credit sales early
-    const isCredit = saleData.saleType && saleData.saleType.toLowerCase().includes('credit');
+    
+    // [FIX] Improved Credit check with more keywords
+    const creditKeywords = ['credit', 'debt', 'owe', 'unpaid', 'later'];
+    const isCredit = saleData.saleType && creditKeywords.some(k => saleData.saleType.toLowerCase().includes(k));
     
     if (banks.length > 0 && !saleData.linkedBankId && !isCredit) {
          await askForBankSelection(user, saleData, USER_STATES.AWAITING_BANK_SELECTION_SALE, 'Received payment into which account?');
@@ -155,14 +153,9 @@ export async function processSaleItems(user, saleData, startIndex = 0) {
     }
 }
 
-// [FIX] NEW HANDLER FOR CUSTOMER NAME INPUT
 export async function handleCustomerNameInput(user, text) {
     const { saleData } = user.stateContext;
-    
-    // Update name
     saleData.customerName = text.trim();
-    
-    // Resume processing
     await sendTextMessage(user.whatsappId, `Got it, selling to "${saleData.customerName}"...`);
     await processSaleItems(user, saleData);
 }

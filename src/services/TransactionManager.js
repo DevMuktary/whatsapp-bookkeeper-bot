@@ -11,21 +11,18 @@ export async function logSale(user, saleData) {
     const { items, customerName, saleType, linkedBankId, loggedBy } = saleData;
     if (!items || items.length === 0) throw new Error("No items found in the sale data.");
 
-    // Handle missing saleType safely. Default to CASH.
     const finalSaleType = saleType ? saleType : 'CASH';
 
-    // Robust Credit Detection (Checks for "Credit" anywhere in the string)
-    const isCredit = finalSaleType.toLowerCase().includes('credit');
+    // [FIX] Improved Credit Detection for actual saving
+    const creditKeywords = ['credit', 'debt', 'owe', 'unpaid', 'later'];
+    const isCredit = creditKeywords.some(k => finalSaleType.toLowerCase().includes(k));
 
-    // [FIX] Safely handle Linked Bank ID
-    // If it's already an ObjectId, don't try to create a new one (prevents crash)
     let safeBankId = null;
     if (linkedBankId) {
         try {
             safeBankId = (typeof linkedBankId === 'string') ? new ObjectId(linkedBankId) : linkedBankId;
         } catch (e) {
             logger.error(`Invalid Bank ID provided: ${linkedBankId}`);
-            // Fallback: Don't crash, just log without bank link
             safeBankId = null;
         }
     }
@@ -42,7 +39,6 @@ export async function logSale(user, saleData) {
             let descriptionParts = [];
             const processedItems = [];
 
-            // --- STEP 1: Process Items & Calculate Totals ---
             for (let i = 0; i < items.length; i++) {
                 const item = items[i];
                 
@@ -89,7 +85,6 @@ export async function logSale(user, saleData) {
 
             const description = `${descriptionParts.join(', ')} sold to ${customerName}`;
 
-            // --- STEP 2: Create Transaction ---
             const transactionData = { 
                 userId: user._id, 
                 totalAmount, 
@@ -106,7 +101,6 @@ export async function logSale(user, saleData) {
             const transaction = await createSaleTransaction(transactionData, { session });
             transactionResult = transaction;
 
-            // --- STEP 3: Update Inventory ---
             for (const item of processedItems) {
                 if (item.productId && !item.isService) {
                      const updatedProduct = await updateStock(item.productId, -item.quantity, 'SALE', transaction._id, { session });
@@ -117,11 +111,9 @@ export async function logSale(user, saleData) {
                 }
             }
            
-            // --- STEP 4: Financial Updates ---
             if (isCredit) {
                 await updateBalanceOwed(customer._id, totalAmount, { session });
             } else if (safeBankId && !isNaN(totalAmount) && totalAmount > 0) {
-                // [FIX] Only attempt bank update if ID is valid and amount is valid
                 await updateBankBalance(safeBankId, totalAmount, { session });
             }
         });
@@ -146,7 +138,6 @@ export async function logSale(user, saleData) {
 export async function logExpense(user, expenseData) {
     const { category, amount, description, linkedBankId, loggedBy } = expenseData;
     
-    // [FIX] Safe ID conversion for Expense as well
     let safeBankId = null;
     if (linkedBankId) {
         try {

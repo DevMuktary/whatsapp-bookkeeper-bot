@@ -28,14 +28,17 @@ function getFallbackIntent(text) {
     
     // Strict Keywords to prevent Hallucinations
     if (t.includes('add bank') || t.includes('new bank')) return { intent: INTENTS.ADD_BANK_ACCOUNT, context: {} };
-    
     if (t.includes('pay') && t.includes('subscription')) return { intent: INTENTS.UPGRADE_SUBSCRIPTION, context: {} };
     if (t.includes('renew') || t.includes('upgrade plan') || t.includes('buy premium')) return { intent: INTENTS.UPGRADE_SUBSCRIPTION, context: {} };
-
     if (t.includes('subscription') || t.includes('my plan')) return { intent: INTENTS.CHECK_SUBSCRIPTION, context: {} };
-
     if (t.includes('insight') || t.includes('tip') || t.includes('advice')) return { intent: INTENTS.GET_FINANCIAL_INSIGHT, context: {} };
     if (t.includes('sold') || t.includes('sale') || t.includes('sell')) return { intent: INTENTS.LOG_SALE, context: {} };
+    
+    // [FIX] Priority Customer Payment Check
+    if (t.includes('paid debt') || t.includes('paid credit') || (t.includes('paid') && t.includes('owe')) || t.includes('customer payment')) {
+        return { intent: INTENTS.LOG_CUSTOMER_PAYMENT, context: {} };
+    }
+
     if (t.includes('bought') || t.includes('expense') || t.includes('spent') || t.includes('paid')) return { intent: INTENTS.LOG_EXPENSE, context: {} };
     if (t.includes('stock') || t.includes('inventory') || t.includes('count')) return { intent: INTENTS.CHECK_STOCK, context: {} };
     if (t.includes('menu') || t.includes('start') || t.includes('hi') || t.includes('options')) return { intent: INTENTS.SHOW_MAIN_MENU, context: {} };
@@ -84,7 +87,6 @@ export async function getIntent(text) {
         return { intent: INTENTS.CHECK_SUBSCRIPTION, context: {} };
     }
 
-    // [FIXED] Exact Report Menu Clicks (Fast Path) - We removed .includes() to let the AI handle natural language with dates
     if (t === 'generate sales report') return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'SALES' } };
     if (t === 'generate expense report') return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'EXPENSES' } };
     if (t === 'generate p&l report') return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'PNL' } };
@@ -101,13 +103,14 @@ export async function getIntent(text) {
     try {
         const today = new Date().toISOString().split('T')[0];
         
-        // [FIX] Reinforced Date Calculation Rules
+        // [FIX] Added LOG_CUSTOMER_PAYMENT to the AI prompt
         const systemPrompt = `You are an intent classifier. Respond ONLY with JSON.
         TODAY: ${today}
 
         INTENTS:
         - ${INTENTS.LOG_SALE}: "Sold 5 rice", "Credit sale to John"
         - ${INTENTS.LOG_EXPENSE}: "Bought fuel 500", "Paid shop rent"
+        - ${INTENTS.LOG_CUSTOMER_PAYMENT}: "John paid his debt", "Received 5000 from Mary for her balance", "Customer payment".
         - ${INTENTS.ADD_PRODUCT}: "Restock rice", "New item indomie"
         - ${INTENTS.ADD_BANK_ACCOUNT}: "Add bank", "Add new bank", "New account".
         - ${INTENTS.GENERATE_REPORT}: "Send me a PDF", "Sales report", "P&L", "Profit and Loss", "Cost of Sales Report", "Report for last month", "December sales report", "Report from 1/1/2025 to 5/1/2025".
@@ -126,12 +129,11 @@ export async function getIntent(text) {
         4. "Generate Report" = ${INTENTS.GENERATE_REPORT}. Context MUST include "reportType" (SALES, EXPENSES, PNL, INVENTORY, COGS) if specified.
         5. "Edit" or "Delete" or "Correction" = ${INTENTS.RECONCILE_TRANSACTION}.
         
-        6. **DATE INTELLIGENCE (VERY IMPORTANT)**:
+        6. **DATE INTELLIGENCE**:
            - User: "December report" (and Today is Feb 2026) -> You MUST calculate for Dec 2025.
            - User: "1/10/2025 to 1/10/2027" -> Parse as DD/MM/YYYY. Start: 2025-10-01, End: 2027-10-01.
            - User: "Last 3 months" -> Calculate Start Date and End Date.
-           - **ALWAYS** return specific "startDate" and "endDate" in "YYYY-MM-DD" format for ANY time-related query.
-           - Do NOT return vague strings like "last_month" or "custom". CALCULATE THE DATES.
+           - **ALWAYS** return specific "startDate" and "endDate" in "YYYY-MM-DD" format.
            - If no date is specified, do NOT add startDate/endDate keys.
         
         Return JSON format: {"intent": "...", "context": {"reportType": "...", "startDate": "YYYY-MM-DD", "endDate": "YYYY-MM-DD"}}
@@ -140,7 +142,6 @@ export async function getIntent(text) {
         const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: text }];
         let result = await callDeepSeek(messages);
         
-        // Helper to parse numbers in context if they exist
         if (result.context) {
             if (result.context.amount) result.context.amount = parsePrice(result.context.amount);
             if (result.context.totalAmount) result.context.totalAmount = parsePrice(result.context.totalAmount);

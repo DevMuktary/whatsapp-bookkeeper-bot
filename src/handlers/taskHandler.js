@@ -1,7 +1,7 @@
 import { findProductByName, updateStock, findProductById } from '../db/productService.js'; 
 import { getSummaryByDateRange, getRecentTransactions, findTransactionById, deleteTransactionById, updateTransactionById } from '../db/transactionService.js';
 import { getAllBankAccounts, findBankAccountByName, updateBankBalance } from '../db/bankService.js';
-import { getCustomersWithBalance, updateBalanceOwed, findCustomerById } from '../db/customerService.js';
+import { getCustomersWithBalance, updateBalanceOwed, findCustomerById, findCustomerByName } from '../db/customerService.js';
 import { updateUserState } from '../db/userService.js';
 import { sendTextMessage, sendMainMenu, sendInteractiveList } from '../api/whatsappService.js';
 import { getFinancialInsight } from '../ai/prompts.js';
@@ -28,7 +28,8 @@ export async function executeTask(intent, user, data) {
                 await executeGetFinancialInsight(user, data);
                 break;
             case INTENTS.GET_CUSTOMER_BALANCES:
-                await executeGetCustomerBalances(user);
+                // [FIX] Passes the data containing the potential customerName
+                await executeGetCustomerBalances(user, data);
                 break;
             case INTENTS.RECONCILE_TRANSACTION:
                 if (data.action === 'delete') await executeDeleteTransaction(user, data);
@@ -99,14 +100,34 @@ async function executeGetFinancialInsight(user, data) {
     await sendMainMenu(user.whatsappId);
 }
 
-async function executeGetCustomerBalances(user) {
-    const customers = await getCustomersWithBalance(user._id);
-    if (customers.length === 0) {
-        await sendTextMessage(user.whatsappId, "No customers owe you money right now. 🎉");
-    } else {
-        const list = customers.map(c => `*${c.customerName}*: ${user.currency} ${c.balanceOwed.toLocaleString()}`).join('\n');
-        await sendTextMessage(user.whatsappId, `Outstanding Balances:\n${list}`);
+// [FIX] Updated to handle Specific Customer lookups
+async function executeGetCustomerBalances(user, data) {
+    const { customerName } = data || {};
+    
+    // Check if the user asked about a SPECIFIC person
+    if (customerName) {
+        const customer = await findCustomerByName(user._id, customerName);
+        if (customer && customer.balanceOwed > 0) {
+            await sendTextMessage(user.whatsappId, `*${customer.customerName}* currently owes you: ${user.currency} ${customer.balanceOwed.toLocaleString()}`);
+        } else if (customer && customer.balanceOwed < 0) {
+            await sendTextMessage(user.whatsappId, `*${customer.customerName}* has overpaid and you owe them: ${user.currency} ${Math.abs(customer.balanceOwed).toLocaleString()}`);
+        } else if (customer && customer.balanceOwed === 0) {
+            await sendTextMessage(user.whatsappId, `*${customer.customerName}* does not owe you any money. (Balance is 0)`);
+        } else {
+            await sendTextMessage(user.whatsappId, `I don't have any debt records for "${customerName}".`);
+        }
+    } 
+    // Otherwise, show EVERYONE who owes money
+    else {
+        const customers = await getCustomersWithBalance(user._id);
+        if (customers.length === 0) {
+            await sendTextMessage(user.whatsappId, "No customers owe you money right now. 🎉");
+        } else {
+            const list = customers.map(c => `*${c.customerName}*: ${user.currency} ${c.balanceOwed.toLocaleString()}`).join('\n');
+            await sendTextMessage(user.whatsappId, `Outstanding Balances:\n${list}`);
+        }
     }
+    
     await sendMainMenu(user.whatsappId);
 }
 
@@ -186,7 +207,7 @@ async function executeUpdateTransaction(user, data) {
                 if (item.productId && !item.isService) await updateStock(item.productId, item.quantity, 'EDIT_ROLLBACK');
             }
         }
-        if (originalTx.paymentMethod === 'CREDIT' && tx.linkedCustomerId) await updateBalanceOwed(originalTx.linkedCustomerId, -originalTx.amount);
+        if (originalTx.paymentMethod === 'CREDIT' && originalTx.linkedCustomerId) await updateBalanceOwed(originalTx.linkedCustomerId, -originalTx.amount);
         else if (originalTx.linkedBankId) await updateBankBalance(originalTx.linkedBankId, -originalTx.amount);
     }
 
@@ -199,7 +220,6 @@ async function executeUpdateTransaction(user, data) {
         if (updatedTxData.type === 'SALE' && !updatedTxData.items[0].isService) {
              const productId = updatedTxData.items[0].productId;
              
-             // [FIX] Use the proper helper instead of direct DB Access
              const product = await findProductById(productId);
              
              if (product && product.quantity < qty) {
@@ -225,7 +245,7 @@ async function executeUpdateTransaction(user, data) {
                 if (item.productId && !item.isService) await updateStock(item.productId, -item.quantity, 'EDIT_APPLY');
             }
         }
-        if (updatedTxData.paymentMethod === 'CREDIT' && tx.linkedCustomerId) await updateBalanceOwed(updatedTxData.linkedCustomerId, updatedTxData.amount);
+        if (updatedTxData.paymentMethod === 'CREDIT' && updatedTxData.linkedCustomerId) await updateBalanceOwed(updatedTxData.linkedCustomerId, updatedTxData.amount);
         else if (updatedTxData.linkedBankId) await updateBankBalance(updatedTxData.linkedBankId, updatedTxData.amount);
     }
 

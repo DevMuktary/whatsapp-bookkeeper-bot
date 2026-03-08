@@ -19,7 +19,7 @@ import logger from '../utils/logger.js';
 import { handleFlowResponse, handleOtpVerification } from './flowHandler.js';
 import { 
     handleLoggingSale, handleLoggingExpense, handleAddingProduct, handleLoggingCustomerPayment, 
-    handleEditValue, handleDocumentImport, handleManageBanks, handleCustomerNameInput
+    handleEditValue, handleDocumentImport, handleManageBanks, handleCustomerNameInput 
 } from './actionHandler.js'; 
 import { handleAdminCommand, handleBroadcast } from './adminHandler.js'; 
 
@@ -35,6 +35,7 @@ const extractDateRange = (context, defaultPeriod = 'this_month') => {
     return getDateRange(defaultPeriod);
 };
 
+// Helper: If user is Staff, switch context to Owner's account
 async function getEffectiveUser(user) {
     if (user.role === 'STAFF' && user.linkedAccountId) {
         return {
@@ -59,16 +60,29 @@ export async function handleMessage(message) {
     
     let userInputText = "";
 
+    // A. Handle Text
     if (message.type === 'text') {
         userInputText = message.text.body;
-    } else if (message.type === 'audio') {
+    }
+    // B. Handle Audio (Voice Notes)
+    else if (message.type === 'audio') {
         userInputText = await transcribeAudio(message.audio.id) || ""; 
-    } else if (message.type === 'image') {
+    }
+    // C. Handle Images (Receipts/Invoices)
+    else if (message.type === 'image') {
         userInputText = await analyzeImage(message.image.id, message.image.caption) || ""; 
-    } else if (message.type === 'document') {
+    }
+    // D. Handle Documents (CSV, Excel)
+    else if (message.type === 'document') {
         const rawUser = await findOrCreateUser(whatsappId);
         const user = await getEffectiveUser(rawUser); 
         
+        // [FIX #4] FILE SIZE LIMITER (5MB) - Prevents Server Memory Crash
+        if (message.document.file_size && message.document.file_size > 5000000) {
+            await sendTextMessage(whatsappId, "⚠️ File is too large. Please keep imports under 5MB to prevent system overload.");
+            return;
+        }
+
         const mime = (message.document.mime_type || '').toLowerCase();
         const filename = (message.document.filename || '').toLowerCase();
 
@@ -86,7 +100,8 @@ export async function handleMessage(message) {
             await sendTextMessage(whatsappId, "I can only read Excel (.xlsx) or CSV files for inventory imports. 📁");
             return;
         }
-    } else {
+    }
+    else {
         return; 
     }
 
@@ -99,6 +114,7 @@ export async function handleMessage(message) {
     const user = await getEffectiveUser(rawUser);
     const lowerCaseText = userInputText.trim().toLowerCase();
 
+    // 0. ADMIN COMMANDS CHECK
     if (config.adminPhones && config.adminPhones.includes(whatsappId)) {
         if (lowerCaseText === '!stats') {
             await handleAdminCommand(user, '!admin stats');
@@ -114,6 +130,7 @@ export async function handleMessage(message) {
         }
     }
 
+    // 1. JOIN TEAM COMMAND
     if (lowerCaseText.startsWith('join ')) {
         const parts = lowerCaseText.split(' ');
         if (parts.length > 1 && parts[1]) {
@@ -132,6 +149,7 @@ export async function handleMessage(message) {
         return;
     }
 
+    // 2. ONBOARDING
     if (user.state === USER_STATES.NEW_USER && user.role !== 'STAFF') {
         if (CANCEL_KEYWORDS.includes(lowerCaseText)) {
              await sendTextMessage(whatsappId, "Okay, message me whenever you are ready to start!");
@@ -146,6 +164,7 @@ export async function handleMessage(message) {
         return;
     }
 
+    // 3. CANCELLATION
     if (CANCEL_KEYWORDS.includes(lowerCaseText)) {
         if (user.state !== USER_STATES.IDLE) {
             await updateUserState(whatsappId, USER_STATES.IDLE, {});
@@ -155,6 +174,7 @@ export async function handleMessage(message) {
         }
     }
 
+    // --- [3] STATE ROUTING ---
     switch (user.state) {
       case USER_STATES.IDLE: 
           await handleIdleState(user, userInputText); 
@@ -219,6 +239,7 @@ export async function handleMessage(message) {
 async function handleIdleState(user, text) {
     const { intent, context } = await getIntent(text);
 
+    // GATEKEEPER CHECK (Subscriptions)
     const PAID_INTENTS = [
         INTENTS.LOG_SALE, 
         INTENTS.LOG_EXPENSE, 
@@ -237,8 +258,16 @@ async function handleIdleState(user, text) {
         }
     }
 
+    // [FIX #3] STAFF PRIVILEGE LEAK 
     if (user.isStaff) {
-        const RESTRICTED = [INTENTS.RECONCILE_TRANSACTION, INTENTS.ADD_BANK_ACCOUNT, 'EXPORT_DATA'];
+        const RESTRICTED = [
+            INTENTS.RECONCILE_TRANSACTION, 
+            INTENTS.ADD_BANK_ACCOUNT, 
+            'EXPORT_DATA',
+            INTENTS.CHECK_BANK_BALANCE,    // Prevents staff from checking bank balance
+            INTENTS.GET_CUSTOMER_BALANCES  // Prevents staff from seeing all business debtors
+        ];
+
         if (RESTRICTED.includes(intent) || (intent === 'EXPORT_DATA')) {
             await sendTextMessage(user.whatsappId, "⛔ Access Denied. Only the Business Owner can do that.");
             return;
@@ -249,6 +278,7 @@ async function handleIdleState(user, text) {
         }
     }
 
+    // --- Intent Handling ---
     if (intent === INTENTS.CHECK_SUBSCRIPTION) {
         const access = checkSubscriptionAccess(user);
         let msg = `📅 *Subscription Status*\n\nPlan: ${access.type}`;
@@ -308,6 +338,7 @@ async function handleIdleState(user, text) {
         return;
     }
 
+    // State Transitions
     if (intent === INTENTS.LOG_SALE) {
         const initialMemory = [{ role: 'user', content: text }];
         const existingProduct = context.productName ? await findProductByName(user._id, context.productName) : null;

@@ -34,7 +34,6 @@ function getFallbackIntent(text) {
     if (t.includes('insight') || t.includes('tip') || t.includes('advice')) return { intent: INTENTS.GET_FINANCIAL_INSIGHT, context: {} };
     if (t.includes('sold') || t.includes('sale') || t.includes('sell')) return { intent: INTENTS.LOG_SALE, context: {} };
     
-    // [FIX] Priority Customer Payment Check
     if (t.includes('paid debt') || t.includes('paid credit') || (t.includes('paid') && t.includes('owe')) || t.includes('customer payment')) {
         return { intent: INTENTS.LOG_CUSTOMER_PAYMENT, context: {} };
     }
@@ -43,7 +42,10 @@ function getFallbackIntent(text) {
     if (t.includes('stock') || t.includes('inventory') || t.includes('count')) return { intent: INTENTS.CHECK_STOCK, context: {} };
     if (t.includes('menu') || t.includes('start') || t.includes('hi') || t.includes('options')) return { intent: INTENTS.SHOW_MAIN_MENU, context: {} };
     if (t.includes('balance') || t.includes('how much in')) return { intent: INTENTS.CHECK_BANK_BALANCE, context: {} };
-    if (t.includes('owe') || t.includes('debt') || t.includes('debtor')) return { intent: INTENTS.GET_CUSTOMER_BALANCES, context: {} };
+    
+    // [FIX] Broader fallback for debt checking
+    if (t.includes('owe') || t.includes('debt') || t.includes('customer balance') || t.includes('who is owing')) return { intent: INTENTS.GET_CUSTOMER_BALANCES, context: {} };
+    
     if (t.includes('report') || t.includes('pdf') || t.includes('p&l') || t.includes('statement')) return { intent: INTENTS.GENERATE_REPORT, context: {} };
     if (t.includes('join')) return { intent: INTENTS.GENERAL_CONVERSATION, context: { generatedReply: "To join a team, please type 'Join [Code]'." } };
 
@@ -103,7 +105,7 @@ export async function getIntent(text) {
     try {
         const today = new Date().toISOString().split('T')[0];
         
-        // [FIX] Added LOG_CUSTOMER_PAYMENT to the AI prompt
+        // [FIX] Updated Prompt for specific customer balances
         const systemPrompt = `You are an intent classifier. Respond ONLY with JSON.
         TODAY: ${today}
 
@@ -113,30 +115,30 @@ export async function getIntent(text) {
         - ${INTENTS.LOG_CUSTOMER_PAYMENT}: "John paid his debt", "Received 5000 from Mary for her balance", "Customer payment".
         - ${INTENTS.ADD_PRODUCT}: "Restock rice", "New item indomie"
         - ${INTENTS.ADD_BANK_ACCOUNT}: "Add bank", "Add new bank", "New account".
-        - ${INTENTS.GENERATE_REPORT}: "Send me a PDF", "Sales report", "P&L", "Profit and Loss", "Cost of Sales Report", "Report for last month", "December sales report", "Report from 1/1/2025 to 5/1/2025".
-        - ${INTENTS.GET_FINANCIAL_INSIGHT}: "Get financial insight", "Give me a business tip", "Analyze my profit".
+        - ${INTENTS.GENERATE_REPORT}: "Send me a PDF", "Sales report", "P&L", "Profit and Loss".
+        - ${INTENTS.GET_FINANCIAL_INSIGHT}: "Get financial insight", "Give me a business tip".
         - ${INTENTS.GET_FINANCIAL_SUMMARY}: "Total sales today", "How much did I spend?"
         - ${INTENTS.CHECK_BANK_BALANCE}: "Check my balance", "How much in Opay?"
+        - ${INTENTS.GET_CUSTOMER_BALANCES}: "Who owes me?", "How much does John owe me?", "Customer balances", "Are people owing me?".
         - ${INTENTS.GENERAL_CONVERSATION}: "Hello", "Thanks", "Hi".
-        - ${INTENTS.CHECK_SUBSCRIPTION}: "My plan", "When do I expire?", "Subscription status".
-        - ${INTENTS.UPGRADE_SUBSCRIPTION}: "Renew Fynax", "Upgrade to premium", "Extend plan".
-        - ${INTENTS.RECONCILE_TRANSACTION}: "Edit last sale", "Delete transaction", "I made a mistake", "Correct the amount", "Change price".
+        - ${INTENTS.CHECK_SUBSCRIPTION}: "My plan", "When do I expire?".
+        - ${INTENTS.UPGRADE_SUBSCRIPTION}: "Renew Fynax", "Upgrade to premium".
+        - ${INTENTS.RECONCILE_TRANSACTION}: "Edit last sale", "Delete transaction".
 
         CRITICAL RULES:
-        1. "Add Bank" or "Add New Bank" = ${INTENTS.ADD_BANK_ACCOUNT}. NEVER map this to ADD_PRODUCT.
+        1. "Add Bank" or "Add New Bank" = ${INTENTS.ADD_BANK_ACCOUNT}.
         2. "Pay for Subscription" = ${INTENTS.UPGRADE_SUBSCRIPTION}.
-        3. "Financial Insight" = ${INTENTS.GET_FINANCIAL_INSIGHT}.
-        4. "Generate Report" = ${INTENTS.GENERATE_REPORT}. Context MUST include "reportType" (SALES, EXPENSES, PNL, INVENTORY, COGS) if specified.
-        5. "Edit" or "Delete" or "Correction" = ${INTENTS.RECONCILE_TRANSACTION}.
+        3. "Generate Report" = ${INTENTS.GENERATE_REPORT}. Context MUST include "reportType" (SALES, EXPENSES, PNL, INVENTORY, COGS) if specified.
+        4. "Edit" or "Delete" or "Correction" = ${INTENTS.RECONCILE_TRANSACTION}.
+        
+        5. **CUSTOMER DEBTS**: If the user asks about a SPECIFIC person's debt (e.g., "How much does Mary owe"), you MUST include "customerName": "Mary" in the context. If asking generally, don't include customerName.
         
         6. **DATE INTELLIGENCE**:
-           - User: "December report" (and Today is Feb 2026) -> You MUST calculate for Dec 2025.
-           - User: "1/10/2025 to 1/10/2027" -> Parse as DD/MM/YYYY. Start: 2025-10-01, End: 2027-10-01.
-           - User: "Last 3 months" -> Calculate Start Date and End Date.
+           - Calculate Start Date and End Date.
            - **ALWAYS** return specific "startDate" and "endDate" in "YYYY-MM-DD" format.
            - If no date is specified, do NOT add startDate/endDate keys.
         
-        Return JSON format: {"intent": "...", "context": {"reportType": "...", "startDate": "YYYY-MM-DD", "endDate": "YYYY-MM-DD"}}
+        Return JSON format: {"intent": "...", "context": {"customerName": "...", "reportType": "...", "startDate": "YYYY-MM-DD", "endDate": "YYYY-MM-DD"}}
         `;
 
         const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: text }];
@@ -222,6 +224,7 @@ export async function gatherSaleDetails(conversationHistory, existingProduct = n
             ? "The user confirmed this is a service." 
             : (existingProduct ? `Existing product: "${existingProduct.productName}", Price: ${existingProduct.sellingPrice}.` : 'New product/service.');
 
+        // [FIX] Removed dueDate from the prompt and rules
         const systemPrompt = `You are a bookkeeping assistant logging a sale. TODAY: ${today}.
         CONTEXT: ${productInfo}
         GOAL: Collect 'items' (array of {productName, quantity, pricePerUnit}), 'customerName', and 'saleType' (Cash/Credit/Bank).
@@ -232,7 +235,7 @@ export async function gatherSaleDetails(conversationHistory, existingProduct = n
         3. If 'saleType' (Cash/Credit/Bank) is missing, return status 'incomplete' and ask "Was this Cash, Bank Transfer, or Credit?".
         4. If 'customerName' is missing for a credit sale, ask for it.
         5. Return JSON format:
-        {"status": "complete"/"incomplete", "data": {"items": [], "customerName": "...", "saleType": "...", "dueDate": "YYYY-MM-DD"}, "reply": "Question to user..."}`;
+        {"status": "complete"/"incomplete", "data": {"items": [], "customerName": "...", "saleType": "..."}, "reply": "Question to user..."}`;
 
         const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
         let response = await callDeepSeek(messages, 0.5);

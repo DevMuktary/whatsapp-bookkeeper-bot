@@ -32,7 +32,6 @@ export async function askForBankSelection(user, transactionData, nextState, prom
     if (options.length <= 3) {
         await sendInteractiveButtons(user.whatsappId, promptText, options);
     } else {
-        // [FIX] Sliced to 10 to ensure WhatsApp doesn't crash if they have too many banks
         const safeOptions = options.slice(0, 10);
         const sections = [{
             title: "Select Account",
@@ -135,7 +134,7 @@ export async function processSaleItems(user, saleData, startIndex = 0) {
         return;
     }
 
-    // 2. [FIX] EXPLICIT PAYMENT METHOD BUTTONS!
+    // 2. EXPLICIT PAYMENT METHOD BUTTONS
     if (!saleData.saleType) {
         await updateUserState(user.whatsappId, 'AWAITING_PAYMENT_METHOD', { saleData });
         await sendInteractiveButtons(user.whatsappId, "How is the customer paying for this?", [
@@ -150,10 +149,9 @@ export async function processSaleItems(user, saleData, startIndex = 0) {
 
     const banks = await getAllBankAccounts(user._id);
     const isCredit = saleData.saleType && saleData.saleType.toLowerCase().includes('credit');
-    const isBank = saleData.saleType && saleData.saleType.toLowerCase().includes('bank');
     
-    // Only ask for specific bank if they chose Bank Transfer OR if Cash but they have banks to select from.
-    if (banks.length > 0 && !saleData.linkedBankId && !isCredit && isBank) {
+    // [FIX] Show bank list for BOTH Cash and Bank Transfer (so users can select a "Cash Drawer" bank)
+    if (banks.length > 0 && !saleData.linkedBankId && !isCredit) {
          await askForBankSelection(user, saleData, USER_STATES.AWAITING_BANK_SELECTION_SALE, 'Received payment into which account?');
          return;
     }
@@ -169,14 +167,9 @@ export async function processSaleItems(user, saleData, startIndex = 0) {
     }
 }
 
-// HANDLER FOR CUSTOMER NAME INPUT
 export async function handleCustomerNameInput(user, text) {
     const { saleData } = user.stateContext;
-    
-    // Update name
     saleData.customerName = text.trim();
-    
-    // Resume processing
     await sendTextMessage(user.whatsappId, `Got it, selling to "${saleData.customerName}"...`);
     await processSaleItems(user, saleData);
 }

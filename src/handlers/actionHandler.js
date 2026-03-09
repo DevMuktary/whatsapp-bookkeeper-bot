@@ -28,12 +28,15 @@ export async function askForBankSelection(user, transactionData, nextState, prom
 
     await updateUserState(user.whatsappId, nextState, { transactionData });
 
+    // WhatsApp Buttons allow max 3. WhatsApp Lists allow max 10.
     if (options.length <= 3) {
         await sendInteractiveButtons(user.whatsappId, promptText, options);
     } else {
+        // [FIX] Sliced to 10 to ensure WhatsApp doesn't crash if they have too many banks
+        const safeOptions = options.slice(0, 10);
         const sections = [{
             title: "Select Account",
-            rows: options.map(opt => ({ id: opt.id, title: opt.title }))
+            rows: safeOptions.map(opt => ({ id: opt.id, title: opt.title }))
         }];
         await sendInteractiveList(user.whatsappId, "Payment Method", promptText, "Choose Bank", sections);
     }
@@ -123,21 +126,34 @@ export async function processSaleItems(user, saleData, startIndex = 0) {
         return; 
     }
 
+    // --- ALL ITEMS CHECKED & RESOLVED ---
+    
+    // 1. Check for Customer Name before proceeding
     if (!saleData.customerName) {
         await updateUserState(user.whatsappId, 'AWAITING_CUSTOMER_NAME', { saleData });
         await sendTextMessage(user.whatsappId, "Who is this sale for? 👤\n\nType the **Customer Name** (or type 'Walk-in').");
         return;
     }
 
+    // 2. [FIX] EXPLICIT PAYMENT METHOD BUTTONS!
+    if (!saleData.saleType) {
+        await updateUserState(user.whatsappId, 'AWAITING_PAYMENT_METHOD', { saleData });
+        await sendInteractiveButtons(user.whatsappId, "How is the customer paying for this?", [
+            { id: 'payment_method_sel:cash', title: '💵 Cash' },
+            { id: 'payment_method_sel:bank', title: '🏦 Bank Transfer' },
+            { id: 'payment_method_sel:credit', title: '📝 Credit (Unpaid)' }
+        ]);
+        return;
+    }
+
     if (user.isStaff) saleData.loggedBy = user.staffName;
 
     const banks = await getAllBankAccounts(user._id);
+    const isCredit = saleData.saleType && saleData.saleType.toLowerCase().includes('credit');
+    const isBank = saleData.saleType && saleData.saleType.toLowerCase().includes('bank');
     
-    // [FIX] Improved Credit check with more keywords
-    const creditKeywords = ['credit', 'debt', 'owe', 'unpaid', 'later'];
-    const isCredit = saleData.saleType && creditKeywords.some(k => saleData.saleType.toLowerCase().includes(k));
-    
-    if (banks.length > 0 && !saleData.linkedBankId && !isCredit) {
+    // Only ask for specific bank if they chose Bank Transfer OR if Cash but they have banks to select from.
+    if (banks.length > 0 && !saleData.linkedBankId && !isCredit && isBank) {
          await askForBankSelection(user, saleData, USER_STATES.AWAITING_BANK_SELECTION_SALE, 'Received payment into which account?');
          return;
     }
@@ -153,9 +169,14 @@ export async function processSaleItems(user, saleData, startIndex = 0) {
     }
 }
 
+// HANDLER FOR CUSTOMER NAME INPUT
 export async function handleCustomerNameInput(user, text) {
     const { saleData } = user.stateContext;
+    
+    // Update name
     saleData.customerName = text.trim();
+    
+    // Resume processing
     await sendTextMessage(user.whatsappId, `Got it, selling to "${saleData.customerName}"...`);
     await processSaleItems(user, saleData);
 }

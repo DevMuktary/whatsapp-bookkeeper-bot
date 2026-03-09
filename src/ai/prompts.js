@@ -223,17 +223,19 @@ export async function gatherSaleDetails(conversationHistory, existingProduct = n
             ? "The user confirmed this is a service." 
             : (existingProduct ? `Existing product: "${existingProduct.productName}", Price: ${existingProduct.sellingPrice}.` : 'New product/service.');
 
+        // [FIX] Strictly forbid the AI from asking for Customer Name or Payment Method
         const systemPrompt = `You are a bookkeeping assistant logging a sale. TODAY: ${today}.
         CONTEXT: ${productInfo}
-        GOAL: Collect 'items' (array of {productName, quantity, pricePerUnit}) and 'customerName'.
+        GOAL: Collect 'items' (array of {productName, quantity, pricePerUnit}). Also extract 'customerName' and 'saleType' ONLY IF the user explicitly mentioned them.
         
         CRITICAL RULES (NO GUESSING):
-        1. Extract details. Default quantity is 1.
-        2. If product exists, use its price. If NOT, and user didn't specify price, return status 'incomplete' and ask for price.
+        1. Extract items and prices. Default quantity is 1.
+        2. If product exists, use its price. If NOT, and user didn't specify price, return status 'incomplete' and ask for price ONLY.
         3. AMBIGUOUS PRICE: If the user provides a quantity > 1 and a price (e.g., "3 bread for 600"), and it is unclear if 600 is the total or per unit, you MUST return status 'incomplete' and ask: "Did you mean 600 per unit, or 600 in total?".
-        4. If 'customerName' is missing for a credit sale, ask for it.
-        5. DO NOT GUESS PAYMENT METHOD. If the user didn't explicitly type "cash", "bank", or "credit", you MUST leave "saleType" empty or null. Do not default to Cash.
-        6. Return JSON format:
+        4. NEVER ask for the customer name. If the user didn't mention it, just leave "customerName" empty.
+        5. NEVER ask for the payment method (Cash/Bank/Credit). If it is missing, just leave "saleType" empty.
+        6. If items and prices are successfully resolved, return status "complete" even if customerName or saleType are empty. The system will handle asking for them later.
+        7. Return JSON format:
         {"status": "complete"/"incomplete", "data": {"items": [], "customerName": "...", "saleType": "..."}, "reply": "Question to user..."}`;
 
         const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];

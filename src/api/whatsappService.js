@@ -230,10 +230,9 @@ export async function sendMainMenu(to) {
                 { id: 'generate report', title: '📊 Generate a Report', description: 'Get a PDF report for your business.' },
                 { id: 'get financial insight', title: '💡 Get Financial Insight', description: 'Receive an AI-powered tip.' },
                 { id: 'edit a transaction', title: '✏️ Edit/Delete a Record', description: 'Correct a previous entry.' },
-                // [RESTORED] Bank Button
                 { id: 'manage bank accounts', title: '🏦 Manage Bank Accounts', description: 'Add or check bank balances.' },
-                // Subscription Button
                 { id: 'check subscription', title: '💳 My Subscription', description: 'Check status or renew.' },
+                { id: 'help menu', title: '🆘 Help & Support', description: 'Get guidance or contact sales.' }
             ]
         }
     ];

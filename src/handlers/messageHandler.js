@@ -19,7 +19,7 @@ import logger from '../utils/logger.js';
 import { handleFlowResponse, handleOtpVerification } from './flowHandler.js';
 import { 
     handleLoggingSale, handleLoggingExpense, handleAddingProduct, handleLoggingCustomerPayment, 
-    handleEditValue, handleDocumentImport, handleManageBanks, handleCustomerNameInput 
+    handleEditValue, handleDocumentImport, handleManageBanks, handleCustomerNameInput, processSaleItems 
 } from './actionHandler.js'; 
 import { handleAdminCommand, handleBroadcast } from './adminHandler.js'; 
 
@@ -77,7 +77,7 @@ export async function handleMessage(message) {
         const rawUser = await findOrCreateUser(whatsappId);
         const user = await getEffectiveUser(rawUser); 
         
-        // [FIX #4] FILE SIZE LIMITER (5MB) - Prevents Server Memory Crash
+        // [FIX] FILE SIZE LIMITER (5MB) - Prevents Server Memory Crash
         if (message.document.file_size && message.document.file_size > 5000000) {
             await sendTextMessage(whatsappId, "⚠️ File is too large. Please keep imports under 5MB to prevent system overload.");
             return;
@@ -197,6 +197,22 @@ export async function handleMessage(message) {
       case 'AWAITING_CUSTOMER_NAME': 
           await handleCustomerNameInput(user, userInputText);
           break;
+
+      // [FIX] Handle manual text input for Payment Method
+      case 'AWAITING_PAYMENT_METHOD':
+          const textLower = userInputText.toLowerCase();
+          const validTypes = ['cash', 'bank', 'credit', 'transfer'];
+          let matchedType = validTypes.find(t => textLower.includes(t));
+          
+          if (matchedType) {
+              if (matchedType === 'transfer') matchedType = 'bank';
+              user.stateContext.saleData.saleType = matchedType;
+              await processSaleItems(user, user.stateContext.saleData);
+          } else {
+              await sendTextMessage(whatsappId, "Please select a payment method using the buttons, or type Cash, Bank, or Credit.");
+          }
+          break;
+
       case USER_STATES.AWAITING_BANK_MENU_SELECTION:
           if (lowerCaseText.includes('add')) {
               await sendAddBankFlow(user.whatsappId);
@@ -258,7 +274,7 @@ async function handleIdleState(user, text) {
         }
     }
 
-    // [FIX #3] STAFF PRIVILEGE LEAK 
+    // [FIX] STAFF PRIVILEGE LEAK 
     if (user.isStaff) {
         const RESTRICTED = [
             INTENTS.RECONCILE_TRANSACTION, 

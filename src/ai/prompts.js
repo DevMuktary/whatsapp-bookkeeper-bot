@@ -26,6 +26,7 @@ const parsePrice = (priceInput) => {
 function getFallbackIntent(text) {
     const t = text.toLowerCase();
     
+    // Strict Keywords to prevent Hallucinations
     if (t.includes('add bank') || t.includes('new bank')) return { intent: INTENTS.ADD_BANK_ACCOUNT, context: {} };
     if (t.includes('pay') && t.includes('subscription')) return { intent: INTENTS.UPGRADE_SUBSCRIPTION, context: {} };
     if (t.includes('renew') || t.includes('upgrade plan') || t.includes('buy premium')) return { intent: INTENTS.UPGRADE_SUBSCRIPTION, context: {} };
@@ -42,6 +43,7 @@ function getFallbackIntent(text) {
     if (t.includes('menu') || t.includes('start') || t.includes('hi') || t.includes('options')) return { intent: INTENTS.SHOW_MAIN_MENU, context: {} };
     if (t.includes('balance') || t.includes('how much in')) return { intent: INTENTS.CHECK_BANK_BALANCE, context: {} };
     
+    // Broader fallback for debt checking
     if (t.includes('owe') || t.includes('debt') || t.includes('customer balance') || t.includes('who is owing')) return { intent: INTENTS.GET_CUSTOMER_BALANCES, context: {} };
     
     if (t.includes('report') || t.includes('pdf') || t.includes('p&l') || t.includes('statement')) return { intent: INTENTS.GENERATE_REPORT, context: {} };
@@ -62,13 +64,30 @@ function getFallbackIntent(text) {
 export async function getIntent(text) {
     const t = text.toLowerCase().trim();
 
-    if (t.includes('add bank') || t.includes('add new bank') || t === 'add account') return { intent: INTENTS.ADD_BANK_ACCOUNT, context: {} };
-    if (t.startsWith('!') || t.startsWith('/')) return { intent: INTENTS.GENERAL_CONVERSATION, context: { generatedReply: "If that was a command, I didn't recognize it. Try checking the menu." } };
-    if (['menu', 'options', 'home', 'start', 'cancel', 'stop', 'exit'].includes(t)) return { intent: INTENTS.SHOW_MAIN_MENU, context: {} };
-    if (t === 'hi' || t === 'hello' || t === 'hey') return { intent: INTENTS.GENERAL_CONVERSATION, context: { generatedReply: "Hello! How can I help you today?" } };
-    if ((t.includes('pay') || t.includes('renew')) && (t.includes('subscription') || t.includes('fynax'))) return { intent: INTENTS.UPGRADE_SUBSCRIPTION, context: {} };
-    if (t.includes('balance') && t.length < 20) return { intent: INTENTS.CHECK_BANK_BALANCE, context: {} };
-    if (t.includes('subscription') || t === 'my plan' || t === 'check status') return { intent: INTENTS.CHECK_SUBSCRIPTION, context: {} };
+    // 1. FAST PATH (Priority Over AI)
+    if (t.includes('add bank') || t.includes('add new bank') || t === 'add account') {
+        return { intent: INTENTS.ADD_BANK_ACCOUNT, context: {} };
+    }
+
+    if (t.startsWith('!') || t.startsWith('/')) {
+        return { intent: INTENTS.GENERAL_CONVERSATION, context: { generatedReply: "If that was a command, I didn't recognize it. Try checking the menu." } };
+    }
+
+    if (['menu', 'options', 'home', 'start', 'cancel', 'stop', 'exit'].includes(t)) {
+        return { intent: INTENTS.SHOW_MAIN_MENU, context: {} };
+    }
+    if (t === 'hi' || t === 'hello' || t === 'hey') {
+         return { intent: INTENTS.GENERAL_CONVERSATION, context: { generatedReply: "Hello! How can I help you today?" } };
+    }
+    if ((t.includes('pay') || t.includes('renew')) && (t.includes('subscription') || t.includes('fynax'))) {
+        return { intent: INTENTS.UPGRADE_SUBSCRIPTION, context: {} };
+    }
+    if (t.includes('balance') && t.length < 20) {
+        return { intent: INTENTS.CHECK_BANK_BALANCE, context: {} };
+    }
+    if (t.includes('subscription') || t === 'my plan' || t === 'check status') {
+        return { intent: INTENTS.CHECK_SUBSCRIPTION, context: {} };
+    }
 
     if (t === 'generate sales report') return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'SALES' } };
     if (t === 'generate expense report') return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'EXPENSES' } };
@@ -77,9 +96,12 @@ export async function getIntent(text) {
     if (t === 'generate inventory report') return { intent: INTENTS.GENERATE_REPORT, context: { reportType: 'INVENTORY' } };
 
     const editKeywords = ['edit', 'delete', 'correct', 'change', 'remove', 'mistake', 'undo'];
-    if (editKeywords.some(keyword => t.includes(keyword))) return { intent: INTENTS.RECONCILE_TRANSACTION, context: {} };
+    if (editKeywords.some(keyword => t.includes(keyword))) {
+        return { intent: INTENTS.RECONCILE_TRANSACTION, context: {} };
+    }
     if (t.includes('add product') || t.includes('restock')) return { intent: INTENTS.ADD_PRODUCT, context: {} };
 
+    // 2. AI PATH
     try {
         const today = new Date().toISOString().split('T')[0];
         
@@ -108,7 +130,7 @@ export async function getIntent(text) {
         3. "Generate Report" = ${INTENTS.GENERATE_REPORT}. Context MUST include "reportType" (SALES, EXPENSES, PNL, INVENTORY, COGS) if specified.
         4. "Edit" or "Delete" or "Correction" = ${INTENTS.RECONCILE_TRANSACTION}.
         
-        5. **CUSTOMER DEBTS**: If the user asks about a SPECIFIC person's debt, you MUST include "customerName" in the context.
+        5. **CUSTOMER DEBTS**: If the user asks about a SPECIFIC person's debt (e.g., "How much does Mary owe"), you MUST include "customerName": "Mary" in the context. If asking generally, don't include customerName.
         
         6. **DATE INTELLIGENCE**:
            - Calculate Start Date and End Date.
@@ -174,6 +196,7 @@ export async function parseBulkProductList(text) {
         INPUT FORMAT EXAMPLES:
         - "5 rice 2000 2500" (Qty, Name, Cost, Sell)
         - "10 bags of cement, cost 5k, sell 6k"
+        - "Milk: 20 pcs, cp=500, sp=600"
 
         OUTPUT FORMAT:
         Return ONLY a JSON object: { "products": [ { "productName": "...", "quantityAdded": 10, "costPrice": 5000, "sellingPrice": 6000 } ] }
@@ -200,7 +223,6 @@ export async function gatherSaleDetails(conversationHistory, existingProduct = n
             ? "The user confirmed this is a service." 
             : (existingProduct ? `Existing product: "${existingProduct.productName}", Price: ${existingProduct.sellingPrice}.` : 'New product/service.');
 
-        // [FIX] Removed saleType from the expected JSON so the AI is forced to leave it blank!
         const systemPrompt = `You are a bookkeeping assistant logging a sale. TODAY: ${today}.
         CONTEXT: ${productInfo}
         GOAL: Collect 'items' (array of {productName, quantity, pricePerUnit}) and 'customerName'.
@@ -208,10 +230,11 @@ export async function gatherSaleDetails(conversationHistory, existingProduct = n
         CRITICAL RULES (NO GUESSING):
         1. Extract details. Default quantity is 1.
         2. If product exists, use its price. If NOT, and user didn't specify price, return status 'incomplete' and ask for price.
-        3. If 'customerName' is missing for a credit sale, ask for it.
-        4. NEVER guess or include 'saleType' or payment method.
-        5. Return JSON format:
-        {"status": "complete"/"incomplete", "data": {"items": [], "customerName": "..."}, "reply": "Question to user..."}`;
+        3. AMBIGUOUS PRICE: If the user provides a quantity > 1 and a price (e.g., "3 bread for 600"), and it is unclear if 600 is the total or per unit, you MUST return status 'incomplete' and ask: "Did you mean 600 per unit, or 600 in total?".
+        4. If 'customerName' is missing for a credit sale, ask for it.
+        5. DO NOT GUESS PAYMENT METHOD. If the user didn't explicitly type "cash", "bank", or "credit", you MUST leave "saleType" empty or null. Do not default to Cash.
+        6. Return JSON format:
+        {"status": "complete"/"incomplete", "data": {"items": [], "customerName": "...", "saleType": "..."}, "reply": "Question to user..."}`;
 
         const messages = [{ role: 'system', content: systemPrompt }, ...conversationHistory];
         let response = await callDeepSeek(messages, 0.5);

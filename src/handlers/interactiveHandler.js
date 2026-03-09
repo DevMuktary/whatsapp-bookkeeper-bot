@@ -10,12 +10,12 @@ import { askForBankSelection, processSaleItems, handleLoggingSale, handleLogging
 import { getAllBankAccounts } from '../db/bankService.js'; 
 import { createDedicatedAccount, initializePayment } from '../services/paymentService.js'; 
 import { ObjectId } from 'mongodb';
+import config from '../config/index.js';
 
 import * as TransactionManager from '../services/TransactionManager.js';
 import * as InventoryManager from '../services/InventoryManager.js';
 import { executeTask } from './taskHandler.js'; 
 
-// [FIX] Imports needed for direct report generation
 import { getDateRange } from '../utils/dateUtils.js';
 import { queueReportGeneration } from '../services/QueueService.js';
 
@@ -41,6 +41,30 @@ export async function handleInteractiveMessage(message) {
 }
 
 async function handleButtonReply(user, buttonId, originalMessage) {
+    // [NEW] Handle the Help Menu Actions
+    if (buttonId.startsWith('help_action:')) {
+        const action = buttonId.split(':')[1];
+        if (action === 'usage') {
+            await sendTextMessage(user.whatsappId, `📖 *Product Usage & Guides*\n\nJoin our WhatsApp Channel for tutorials, tips, and updates:\n${config.support.channelLink}`);
+        } else if (action === 'contact') {
+            await sendTextMessage(user.whatsappId, `💬 *Contact Sales & Support*\n\nYou can chat with our representative directly by clicking the link below or saving the number:\n\nwa.me/${config.support.salesPhone.replace('+', '')}\nPhone: ${config.support.salesPhone}`);
+        }
+        await updateUserState(user.whatsappId, USER_STATES.IDLE);
+        await sendMainMenu(user.whatsappId);
+        return;
+    }
+
+    // [NEW] Handle Explicit Payment Method Selection
+    if (buttonId.startsWith('payment_method_sel:')) {
+        const type = buttonId.split(':')[1];
+        const { saleData } = user.stateContext;
+        saleData.saleType = type;
+        
+        // Resume the sale flow now that we have the payment method
+        await processSaleItems(user, saleData);
+        return;
+    }
+
     if (buttonId.startsWith('payment_method:')) {
         const type = buttonId.split(':')[1];
         if (type === 'ngn') {
@@ -189,7 +213,6 @@ async function handleButtonReply(user, buttonId, originalMessage) {
 async function handleListReply(user, listId, originalMessage) {
     
     // --- MAIN MENU ROUTING ---
-    // These IDs must match exactly what is in sendMainMenu()
     switch (listId) {
         case 'log a sale':
             await updateUserState(user.whatsappId, USER_STATES.LOGGING_SALE, { memory: [], saleData: { items: [] } });
@@ -236,6 +259,14 @@ async function handleListReply(user, listId, originalMessage) {
                 type: 'text'
             });
             return;
+
+        // [NEW] Help Menu Link
+        case 'help menu':
+            await sendInteractiveButtons(user.whatsappId, "Support & Guidance 🆘\n\nHow can we assist you today?", [
+                { id: 'help_action:usage', title: '📖 Product Usage' },
+                { id: 'help_action:contact', title: '💬 Contact Sales' }
+            ]);
+            return;
     }
 
     // --- OTHER LIST ACTIONS ---
@@ -274,7 +305,7 @@ async function handleListReply(user, listId, originalMessage) {
         return;
     } 
     
-    // --- [FIX] REPORT SELECTION ---
+    // --- REPORT SELECTION ---
     if (user.state === USER_STATES.AWAITING_REPORT_TYPE_SELECTION) {
         let reportType = 'SALES';
         if (listId === 'generate expense report') reportType = 'EXPENSES';
@@ -282,7 +313,6 @@ async function handleListReply(user, listId, originalMessage) {
         if (listId === 'generate cogs report') reportType = 'COGS';
         if (listId === 'generate inventory report') reportType = 'INVENTORY';
 
-        // Retrieve the dates we saved when the user first asked
         const extractedDates = user.stateContext?.extractedDates || {};
         
         let startDate, endDate;

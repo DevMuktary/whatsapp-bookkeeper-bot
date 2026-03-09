@@ -8,7 +8,7 @@ const config = {
     token: process.env.WHATSAPP_TOKEN,
     phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID,
     verifyToken: process.env.WHATSAPP_VERIFY_TOKEN,
-    appSecret: process.env.WHATSAPP_APP_SECRET, // [NEW] Required for Webhook Security
+    appSecret: process.env.WHATSAPP_APP_SECRET, 
     onboardingFlowId: process.env.WHATSAPP_ONBOARDING_FLOW_ID || process.env.WHATSAPP_FLOW_ID, 
     bankFlowId: process.env.WHATSAPP_BANK_FLOW_ID 
   },
@@ -38,6 +38,11 @@ const config = {
              ? { rejectUnauthorized: false } 
              : undefined
     }
+  },
+  // [NEW] Added Support Configuration for Help Menu
+  support: {
+    channelLink: process.env.SUPPORT_CHANNEL_LINK || 'https://whatsapp.com/channel/your_channel_id',
+    salesPhone: process.env.SALES_PHONE_NUMBER || '+2348000000000'
   },
   logLevel: process.env.LOG_LEVEL || 'info',
 };

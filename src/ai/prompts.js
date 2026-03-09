@@ -43,7 +43,7 @@ function getFallbackIntent(text) {
     if (t.includes('menu') || t.includes('start') || t.includes('hi') || t.includes('options')) return { intent: INTENTS.SHOW_MAIN_MENU, context: {} };
     if (t.includes('balance') || t.includes('how much in')) return { intent: INTENTS.CHECK_BANK_BALANCE, context: {} };
     
-    // [FIX] Broader fallback for debt checking
+    // Broader fallback for debt checking
     if (t.includes('owe') || t.includes('debt') || t.includes('customer balance') || t.includes('who is owing')) return { intent: INTENTS.GET_CUSTOMER_BALANCES, context: {} };
     
     if (t.includes('report') || t.includes('pdf') || t.includes('p&l') || t.includes('statement')) return { intent: INTENTS.GENERATE_REPORT, context: {} };
@@ -105,7 +105,6 @@ export async function getIntent(text) {
     try {
         const today = new Date().toISOString().split('T')[0];
         
-        // [FIX] Updated Prompt for specific customer balances
         const systemPrompt = `You are an intent classifier. Respond ONLY with JSON.
         TODAY: ${today}
 
@@ -224,16 +223,16 @@ export async function gatherSaleDetails(conversationHistory, existingProduct = n
             ? "The user confirmed this is a service." 
             : (existingProduct ? `Existing product: "${existingProduct.productName}", Price: ${existingProduct.sellingPrice}.` : 'New product/service.');
 
-        // [FIX] Removed dueDate from the prompt and rules
+        // [FIX] Removed the strict AI requirement for saleType, so our Interactive Buttons can handle it!
         const systemPrompt = `You are a bookkeeping assistant logging a sale. TODAY: ${today}.
         CONTEXT: ${productInfo}
-        GOAL: Collect 'items' (array of {productName, quantity, pricePerUnit}), 'customerName', and 'saleType' (Cash/Credit/Bank).
+        GOAL: Collect 'items' (array of {productName, quantity, pricePerUnit}) and 'customerName'.
         
         CRITICAL RULES (NO GUESSING):
         1. Extract details. Default quantity is 1.
         2. If product exists, use its price. If NOT, and user didn't specify price, return status 'incomplete' and ask for price.
-        3. If 'saleType' (Cash/Credit/Bank) is missing, return status 'incomplete' and ask "Was this Cash, Bank Transfer, or Credit?".
-        4. If 'customerName' is missing for a credit sale, ask for it.
+        3. If 'customerName' is missing for a credit sale, ask for it.
+        4. Do NOT ask for Payment Method (Cash/Bank). The system will ask via buttons later.
         5. Return JSON format:
         {"status": "complete"/"incomplete", "data": {"items": [], "customerName": "...", "saleType": "..."}, "reply": "Question to user..."}`;
 

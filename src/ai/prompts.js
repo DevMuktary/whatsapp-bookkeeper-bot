@@ -43,9 +43,7 @@ function getFallbackIntent(text) {
     if (t.includes('menu') || t.includes('start') || t.includes('hi') || t.includes('options')) return { intent: INTENTS.SHOW_MAIN_MENU, context: {} };
     if (t.includes('balance') || t.includes('how much in')) return { intent: INTENTS.CHECK_BANK_BALANCE, context: {} };
     
-    // Broader fallback for debt checking
     if (t.includes('owe') || t.includes('debt') || t.includes('customer balance') || t.includes('who is owing')) return { intent: INTENTS.GET_CUSTOMER_BALANCES, context: {} };
-    
     if (t.includes('report') || t.includes('pdf') || t.includes('p&l') || t.includes('statement')) return { intent: INTENTS.GENERATE_REPORT, context: {} };
     if (t.includes('join')) return { intent: INTENTS.GENERAL_CONVERSATION, context: { generatedReply: "To join a team, please type 'Join [Code]'." } };
 
@@ -99,7 +97,11 @@ export async function getIntent(text) {
     if (editKeywords.some(keyword => t.includes(keyword))) {
         return { intent: INTENTS.RECONCILE_TRANSACTION, context: {} };
     }
-    if (t.includes('add product') || t.includes('restock')) return { intent: INTENTS.ADD_PRODUCT, context: {} };
+    
+    // [FIX] Changed from loose .includes() to strict exact matches so it doesn't intercept bulk texts!
+    if (t === 'add a product' || t === 'add product' || t === 'restock') {
+        return { intent: INTENTS.ADD_PRODUCT, context: {} };
+    }
 
     // 2. AI PATH
     try {
@@ -111,31 +113,28 @@ export async function getIntent(text) {
         INTENTS:
         - ${INTENTS.LOG_SALE}: "Sold 5 rice", "Credit sale to John"
         - ${INTENTS.LOG_EXPENSE}: "Bought fuel 500", "Paid shop rent"
-        - ${INTENTS.LOG_CUSTOMER_PAYMENT}: "John paid his debt", "Received 5000 from Mary for her balance", "Customer payment".
-        - ${INTENTS.ADD_PRODUCT}: "Restock rice", "New item indomie"
-        - ${INTENTS.ADD_BANK_ACCOUNT}: "Add bank", "Add new bank", "New account".
-        - ${INTENTS.GENERATE_REPORT}: "Send me a PDF", "Sales report", "P&L", "Profit and Loss".
-        - ${INTENTS.GET_FINANCIAL_INSIGHT}: "Get financial insight", "Give me a business tip".
+        - ${INTENTS.LOG_CUSTOMER_PAYMENT}: "John paid his debt", "Received 5000 from Mary"
+        - ${INTENTS.ADD_PRODUCT}: "Restock rice", "New item indomie" (Use ONLY for a SINGLE product addition).
+        - ADD_PRODUCTS_FROM_LIST: "Samsung 10 units 220k, Infinix 6 units", "5 rice 2000, 10 beans 500" (Use ONLY when the user provides a list of MULTIPLE products at once).
+        - ${INTENTS.ADD_BANK_ACCOUNT}: "Add bank", "Add new bank"
+        - ${INTENTS.GENERATE_REPORT}: "Send me a PDF", "Sales report"
+        - ${INTENTS.GET_FINANCIAL_INSIGHT}: "Get financial insight", "Give me a business tip"
         - ${INTENTS.GET_FINANCIAL_SUMMARY}: "Total sales today", "How much did I spend?"
         - ${INTENTS.CHECK_BANK_BALANCE}: "Check my balance", "How much in Opay?"
-        - ${INTENTS.GET_CUSTOMER_BALANCES}: "Who owes me?", "How much does John owe me?", "Customer balances", "Are people owing me?".
-        - ${INTENTS.GENERAL_CONVERSATION}: "Hello", "Thanks", "Hi".
-        - ${INTENTS.CHECK_SUBSCRIPTION}: "My plan", "When do I expire?".
-        - ${INTENTS.UPGRADE_SUBSCRIPTION}: "Renew Fynax", "Upgrade to premium".
-        - ${INTENTS.RECONCILE_TRANSACTION}: "Edit last sale", "Delete transaction".
+        - ${INTENTS.GET_CUSTOMER_BALANCES}: "Who owes me?", "How much does John owe me?"
+        - ${INTENTS.GENERAL_CONVERSATION}: "Hello", "Thanks", "Hi"
+        - ${INTENTS.CHECK_SUBSCRIPTION}: "My plan", "When do I expire?"
+        - ${INTENTS.UPGRADE_SUBSCRIPTION}: "Renew Fynax", "Upgrade to premium"
+        - ${INTENTS.RECONCILE_TRANSACTION}: "Edit last sale", "Delete transaction"
 
         CRITICAL RULES:
         1. "Add Bank" or "Add New Bank" = ${INTENTS.ADD_BANK_ACCOUNT}.
         2. "Pay for Subscription" = ${INTENTS.UPGRADE_SUBSCRIPTION}.
-        3. "Generate Report" = ${INTENTS.GENERATE_REPORT}. Context MUST include "reportType" (SALES, EXPENSES, PNL, INVENTORY, COGS) if specified.
-        4. "Edit" or "Delete" or "Correction" = ${INTENTS.RECONCILE_TRANSACTION}.
-        
-        5. **CUSTOMER DEBTS**: If the user asks about a SPECIFIC person's debt (e.g., "How much does Mary owe"), you MUST include "customerName": "Mary" in the context. If asking generally, don't include customerName.
-        
-        6. **DATE INTELLIGENCE**:
-           - Calculate Start Date and End Date.
-           - **ALWAYS** return specific "startDate" and "endDate" in "YYYY-MM-DD" format.
-           - If no date is specified, do NOT add startDate/endDate keys.
+        3. "Generate Report" = ${INTENTS.GENERATE_REPORT}. Context MUST include "reportType".
+        4. "Edit" or "Delete" = ${INTENTS.RECONCILE_TRANSACTION}.
+        5. **SINGLE vs MULTIPLE PRODUCTS**: If the user sends a text block containing 2 or more distinct products with quantities and prices, you MUST classify it as "ADD_PRODUCTS_FROM_LIST", NOT "ADD_PRODUCT".
+        6. **CUSTOMER DEBTS**: If the user asks about a SPECIFIC person's debt, include "customerName".
+        7. **DATE INTELLIGENCE**: Calculate Start Date and End Date.
         
         Return JSON format: {"intent": "...", "context": {"customerName": "...", "reportType": "...", "startDate": "YYYY-MM-DD", "endDate": "YYYY-MM-DD"}}
         `;
@@ -197,14 +196,17 @@ export async function parseBulkProductList(text) {
         - "5 rice 2000 2500" (Qty, Name, Cost, Sell)
         - "10 bags of cement, cost 5k, sell 6k"
         - "Milk: 20 pcs, cp=500, sp=600"
+        - "Samsung Galaxy S22, 10 units, 220k cost price, 280k selling price"
 
         OUTPUT FORMAT:
         Return ONLY a JSON object: { "products": [ { "productName": "...", "quantityAdded": 10, "costPrice": 5000, "sellingPrice": 6000 } ] }
         
         RULES:
-        1. If price is missing, set to 0.
-        2. If quantity is missing, set to 1.
-        3. Clean up product names (remove emoji, capitalize).
+        1. Parse ALL items mentioned in the text.
+        2. Convert multipliers like 'k' to thousands (e.g., 220k = 220000).
+        3. If price is missing, set to 0.
+        4. If quantity is missing, set to 1.
+        5. Clean up product names (remove emoji, capitalize).
         `;
 
         const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: text }];
@@ -223,7 +225,6 @@ export async function gatherSaleDetails(conversationHistory, existingProduct = n
             ? "The user confirmed this is a service." 
             : (existingProduct ? `Existing product: "${existingProduct.productName}", Price: ${existingProduct.sellingPrice}.` : 'New product/service.');
 
-        // [FIX] Strictly forbid the AI from asking for Customer Name or Payment Method
         const systemPrompt = `You are a bookkeeping assistant logging a sale. TODAY: ${today}.
         CONTEXT: ${productInfo}
         GOAL: Collect 'items' (array of {productName, quantity, pricePerUnit}). Also extract 'customerName' and 'saleType' ONLY IF the user explicitly mentioned them.
